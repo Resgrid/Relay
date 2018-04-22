@@ -1,0 +1,112 @@
+#OS junk files
+[Tt]humbs.db
+*.DS_Store
+
+#Visual Studio files
+*.[Oo]bj
+#*.exe
+*.xap
+*.pdb
+*.user
+*.aps
+*.pch
+*.vspscc
+*.vssscc
+*_i.c
+*_p.c
+*.ncb
+*.suo
+*.tlb
+*.tlh
+#*.bak
+*.[Cc]ache
+*.ilk
+*.log
+*.lib
+*.sbr
+*.sdf
+ipch/
+obj/
+[Bb]in
+#[Dd]ebug*/
+#[Rr]elease*/
+Ankh.NoLoad
+UpgradeLog*
+_UpgradeReport_Files/
+csx/
+rcf/
+.vs/
+
+#Tooling
+_ReSharper*/
+*.resharper
+[Tt]est[Rr]esult*
+*.Tests.VisualState.xml
+*.vs10x
+
+#Project and build files
+[Bb]uild/Packages/
+Temp/
+Build/WebsiteRelease/
+Build/build
+Challenges/Build/build
+
+#Subversion files
+.svn
+
+# Office Temp Files
+~$*
+
+# WCF diagnostic files
+*.svclog
+
+# DB Professional files
+*.dbmdl
+
+# Include the DebugReleaseImplementations folder which would be ignored by the above
+!*DebugReleaseImplementations/
+
+# Files added by the Visual Studio Productivity Power Tools extension
+*.docstates
+
+# Files created by the git mergetool
+*.orig
+
+# Project Ignores
+Website.zip
+stage/
+Build/sites
+*.zip
+Tests/Resgrid.Intergration.Tests/Website
+Web/Resgrid.Web/App_Data/Log.txt
+Azure/ResgridAzure/csx
+Azure/ResgridApiAzure/csx
+Azure/ResgridWorkersAzure/csx
+Azure/BizSpark/ResgridApi/csx
+Azure/BizSpark/ResgridWebsite/csx
+Azure/BizSpark/ResgridWorkers/csx
+Azure/BizSpark/ResgridBackend/csx
+InstallAware/Release
+#Resgrid.Web.Services.XML
+_NCrunch_Resgrid
+nCrunchTemp*
+
+# vim backup files
+*~
+*.swp
+
+
+*.received.txt
+
+# xml documentation (generated one each build)
+Web/Resgrid.Services/App_Data/Resgrid.Web.Services.XML
+
+/packages/
+!packages/repositories.config
+
+#Web/Resgrid.Web/Configs/connectionStrings.config
+#Web/Resgrid.Services/Configs/connectionStrings.config
+#Common/Configs/connectionStrings.config
+#Common/AssemblyInfo.cs
+/node_modules
+.vs/
