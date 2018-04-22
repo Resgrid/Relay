@@ -58,6 +58,11 @@
     <Compile Include="AudioRecorder.cs" />
     <Compile Include="Functions.cs" />
     <Compile Include="IAudioRecorder.cs" />
+    <Compile Include="Model\EvalTypes.cs" />
+    <Compile Include="Model\Settings.cs" />
+    <Compile Include="Model\Trigger.cs" />
+    <Compile Include="Model\Watcher.cs" />
+    <Compile Include="Model\WatcherTypes.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="RecordingState.cs" />
     <Compile Include="SampleAggregator.cs" />

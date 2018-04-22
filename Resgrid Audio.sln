@@ -1,11 +1,13 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
-VisualStudioVersion = 15.0.27428.2002
+VisualStudioVersion = 15.0.27130.2027
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Audio.Core", "Resgrid.Audio.Core\Resgrid.Audio.Core.csproj", "{64D892BF-42A5-40B6-93A4-E9ADE0774ABF}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Audio.Relay", "Resgrid.Audio.Relay\Resgrid.Audio.Relay.csproj", "{B521F5CB-3C81-4E6F-8327-758CDA0C4D77}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Audio.Relay.Console", "Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj", "{17987428-A954-4A78-A286-BF91E76BBCF8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -21,6 +23,10 @@ Global
 		{B521F5CB-3C81-4E6F-8327-758CDA0C4D77}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B521F5CB-3C81-4E6F-8327-758CDA0C4D77}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B521F5CB-3C81-4E6F-8327-758CDA0C4D77}.Release|Any CPU.Build.0 = Release|Any CPU
+		{17987428-A954-4A78-A286-BF91E76BBCF8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{17987428-A954-4A78-A286-BF91E76BBCF8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{17987428-A954-4A78-A286-BF91E76BBCF8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{17987428-A954-4A78-A286-BF91E76BBCF8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
