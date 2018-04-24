@@ -10,8 +10,7 @@ namespace Resgrid.Audio.Core
 	public class AudioRecorder : IAudioRecorder
 	{
 		WaveIn waveIn;
-		readonly SampleAggregator sampleAggregator;
-		UnsignedMixerControl volumeControl;
+		private readonly SampleAggregator sampleAggregator;
 		double desiredVolume = 100;
 		RecordingState recordingState;
 		WaveFileWriter writer;
@@ -63,7 +62,6 @@ namespace Resgrid.Audio.Core
 			bwp.DiscardOnBufferOverflow = true;
 
 			waveIn.StartRecording();
-			TryGetVolumeControl();
 			recordingState = RecordingState.Monitoring;
 		}
 
@@ -93,58 +91,9 @@ namespace Resgrid.Audio.Core
 			}
 		}
 
-		private void TryGetVolumeControl()
-		{
-			int waveInDeviceNumber = waveIn.DeviceNumber;
-			if (Environment.OSVersion.Version.Major >= 6) // Vista and over
-			{
-				var mixerLine = waveIn.GetMixerLine();
-				//new MixerLine((IntPtr)waveInDeviceNumber, 0, MixerFlags.WaveIn);
-				foreach (var control in mixerLine.Controls)
-				{
-					if (control.ControlType == MixerControlType.Volume)
-					{
-						this.volumeControl = control as UnsignedMixerControl;
-						break;
-					}
-				}
-			}
-			else
-			{
-				var mixer = new Mixer(waveInDeviceNumber);
-				foreach (var destination in mixer.Destinations
-						.Where(d => d.ComponentType == MixerLineComponentType.DestinationWaveIn))
-				{
-					foreach (var source in destination.Sources
-							.Where(source => source.ComponentType == MixerLineComponentType.SourceMicrophone))
-					{
-						foreach (var control in source.Controls
-								.Where(control => control.ControlType == MixerControlType.Volume))
-						{
-							volumeControl = control as UnsignedMixerControl;
-							break;
-						}
-					}
-				}
-			}
+		public SampleAggregator SampleAggregator => sampleAggregator;
 
-		}
-
-		public SampleAggregator SampleAggregator
-		{
-			get
-			{
-				return sampleAggregator;
-			}
-		}
-
-		public RecordingState RecordingState
-		{
-			get
-			{
-				return recordingState;
-			}
-		}
+		public RecordingState RecordingState => recordingState;
 
 		public TimeSpan RecordedTime
 		{
@@ -165,6 +114,8 @@ namespace Resgrid.Audio.Core
 			byte[] buffer = e.Buffer;
 			int bytesRecorded = e.BytesRecorded;
 			//WriteToFile(buffer, bytesRecorded);
+
+			sampleAggregator.OnDataAvailable(buffer, bytesRecorded);
 
 			for (int index = 0; index < e.BytesRecorded; index += 2)
 			{

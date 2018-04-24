@@ -7,32 +7,40 @@ namespace Resgrid.Audio.Core
 {
 	public class AudioEvaluator: IAudioEvaluator
 	{
-		public bool EvaluateAudioTrigger(Trigger trigger, byte[] audio)
+		private const int SEC_ARRAY_COUNT = 80000;
+
+		public bool EvaluateAudioTrigger(Trigger trigger, double[] audio)
 		{
 			List<bool> validation1 = new List<bool>();
 			List<bool> validation2 = new List<bool>();
-			double tolerance1 = (double)(trigger.Frequency1 * 100) / trigger.Tolerance;
-			double tolerance2 = (double)(trigger.Frequency2 * 100) / trigger.Tolerance;
+			double tolerance1 = 0;
+			double tolerance2 = 0;
 
+			if (trigger.Tolerance != 0)
+			{
+				tolerance1 = (double) (trigger.Frequency1 * trigger.Tolerance) / 100;
+				tolerance2 = (double) (trigger.Frequency2 * trigger.Tolerance) / 100;
+			}
+			
 			foreach (var a in audio)
 			{
 				if (trigger.Count >= 1)
 				{
-					if (a >= (a - tolerance1) && a <= (a + tolerance1))
+					if (a >= (trigger.Frequency1 - tolerance1) && a <= (trigger.Frequency1 + tolerance1))
 						validation1.Add(true);
 					else
 						validation1.Add(false);
 				}
 				else if (trigger.Count == 2)
 				{
-					if (a >= (a - tolerance2) && a <= (a + tolerance2))
+					if (a >= (trigger.Frequency2 - tolerance2) && a <= (trigger.Frequency2 + tolerance2))
 						validation2.Add(true);
 					else
 						validation2.Add(false);
 				}
 			}
 
-			double arrayCount = Math.Round(80000 * trigger.Time, 0, MidpointRounding.AwayFromZero);
+			double arrayCount = Math.Round(SEC_ARRAY_COUNT * trigger.Time, 0, MidpointRounding.AwayFromZero);
 
 			switch (trigger.Count)
 			{

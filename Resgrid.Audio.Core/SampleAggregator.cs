@@ -12,6 +12,7 @@ namespace Resgrid.Audio.Core
 		private int RATE = 44100; // sample rate of the sound card
 		private int BUFFERSIZE = (int)Math.Pow(2, 11); // must be a multiple of 2
 
+		public event EventHandler<DataAvailableArgs> DataAvailable;
 		public event EventHandler<MaxSampleEventArgs> MaximumCalculated;
 		public event EventHandler<WaveformEventArgs> WaveformCalculated;
 		public event EventHandler Restart = delegate { };
@@ -29,6 +30,14 @@ namespace Resgrid.Audio.Core
 		{
 			count = 0;
 			maxValue = minValue = 0;
+		}
+
+		public void OnDataAvailable(byte[] buffer, int bytesRecorded)
+		{
+			if (DataAvailable != null)
+			{
+				DataAvailable(this, new DataAvailableArgs(buffer, bytesRecorded));
+			}
 		}
 
 		public void Add(float value)
@@ -58,7 +67,6 @@ namespace Resgrid.Audio.Core
 			double[] Ys2 = new double[buffer.Length / BYTES_PER_POINT];
 			//string[] Xs2 = new string[buffer.Length / BYTES_PER_POINT];
 
-
 			for (int i = 0; i < vals.Length; i++)
 			{
 				// bit shift the byte buffer into the right variable format
@@ -74,9 +82,21 @@ namespace Resgrid.Audio.Core
 
 			if (WaveformCalculated != null)
 			{
-				WaveformCalculated(this, new WaveformEventArgs(Ys.Cast<Object>(), Ys2.Take(Ys2.Length / 2).Cast<Object>()));
+				WaveformCalculated(this, new WaveformEventArgs(Ys, Ys2.Take(Ys2.Length / 2).ToArray()));
 			}
 		}
+	}
+
+	public class DataAvailableArgs : EventArgs
+	{
+		[DebuggerStepThrough]
+		public DataAvailableArgs(byte[] buffer, int bytesRecorded)
+		{
+			Buffer = buffer;
+			BytesRecorded = bytesRecorded;
+		}
+		public byte[] Buffer { get; private set; }
+		public int BytesRecorded { get; private set; }
 	}
 
 	public class MaxSampleEventArgs : EventArgs
@@ -94,7 +114,7 @@ namespace Resgrid.Audio.Core
 	public class WaveformEventArgs : EventArgs
 	{
 		[DebuggerStepThrough]
-		public WaveformEventArgs(IEnumerable<Object> pulseCodeModulation, IEnumerable<Object> fastFourierTransform)
+		public WaveformEventArgs(double[] pulseCodeModulation, double[] fastFourierTransform)
 		{
 			PulseCodeModulation = pulseCodeModulation;
 			FastFourierTransform = fastFourierTransform;
@@ -103,11 +123,11 @@ namespace Resgrid.Audio.Core
 		/// <summary>
 		/// Time Domain
 		/// </summary>
-		public IEnumerable<Object> PulseCodeModulation { get; private set; }
+		public double[] PulseCodeModulation { get; private set; }
 
 		/// <summary>
 		/// Frequency Domain
 		/// </summary>
-		public IEnumerable<Object> FastFourierTransform { get; private set; }
+		public double[] FastFourierTransform { get; private set; }
 	}
 }

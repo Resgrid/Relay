@@ -1,12 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Collections.Generic;
+using Resgrid.Audio.Core.Model;
 
 namespace Resgrid.Audio.Core
 {
 	public interface IAudioEvaluator
 	{
+		bool EvaluateAudioTrigger(Trigger trigger, double[] audio);
 	}
 }

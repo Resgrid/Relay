@@ -6,6 +6,7 @@ using LiveCharts.Wpf;
 using Resgrid.Audio.Core;
 using System;
 using System.IO;
+using System.Linq;
 using System.Windows.Input;
 
 namespace Resgrid.Audio.Relay.ViewModel
@@ -110,10 +111,10 @@ namespace Resgrid.Audio.Relay.ViewModel
 		private void SampleAggregator_WaveformCalculated(object sender, WaveformEventArgs e)
 		{
 			SeriesCollection[0].Values.Clear();
-			SeriesCollection[0].Values.AddRange(e.PulseCodeModulation);
+			SeriesCollection[0].Values.AddRange(e.PulseCodeModulation.Cast<Object>());
 
 			SeriesCollection2[0].Values.Clear();
-			SeriesCollection2[0].Values.AddRange(e.FastFourierTransform);
+			SeriesCollection2[0].Values.AddRange(e.FastFourierTransform.Cast<Object>());
 
 			RaisePropertyChanged("SeriesCollection");
 			RaisePropertyChanged("SeriesCollection2");
