@@ -2,9 +2,10 @@
 {
 	public class Trigger
 	{
-		public decimal Frequency { get; set; }
-		public decimal Tolerance { get; set; }
-		public decimal Time { get; set; }
-
+		public double Frequency1 { get; set; }
+		public double Frequency2 { get; set; }
+		public int Tolerance { get; set; }
+		public double Time { get; set; }
+		public int Count { get; set; }
 	}
 }

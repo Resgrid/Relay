@@ -54,7 +54,9 @@ namespace Resgrid.Audio.Core
 			waveIn.RecordingStopped += OnRecordingStopped;
 			waveIn.WaveFormat = recordingFormat;
 			//wi.WaveFormat = new NAudio.Wave.WaveFormat(RATE, 1);
-			waveIn.BufferMilliseconds = (int)((double)BUFFERSIZE / (double)RATE * 1000.0);
+			//waveIn.BufferMilliseconds = BUFFERSIZE; //(int)((double)BUFFERSIZE / (double)RATE * 1000.0);
+			//waveIn.BufferMilliseconds = (int)((double)BUFFERSIZE / (double)RATE * 1000.0);
+			waveIn.BufferMilliseconds = 5120;
 
 			bwp = new BufferedWaveProvider(waveIn.WaveFormat);
 			bwp.BufferLength = BUFFERSIZE * 2;
@@ -166,8 +168,7 @@ namespace Resgrid.Audio.Core
 
 			for (int index = 0; index < e.BytesRecorded; index += 2)
 			{
-				short sample = (short)((buffer[index + 1] << 8) |
-																buffer[index + 0]);
+				short sample = (short)((buffer[index + 1] << 8) | buffer[index + 0]);
 				float sample32 = sample / 32768f;
 				sampleAggregator.Add(sample32);
 

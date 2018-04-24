@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Audio.Relay", "Resg
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Audio.Relay.Console", "Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj", "{17987428-A954-4A78-A286-BF91E76BBCF8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Audio.Tests", "Resgrid.Audio.Tests\Resgrid.Audio.Tests.csproj", "{00380D66-9F9D-4C3F-83EF-CD46FAC4AFCF}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -27,6 +29,10 @@ Global
 		{17987428-A954-4A78-A286-BF91E76BBCF8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{17987428-A954-4A78-A286-BF91E76BBCF8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{17987428-A954-4A78-A286-BF91E76BBCF8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{00380D66-9F9D-4C3F-83EF-CD46FAC4AFCF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{00380D66-9F9D-4C3F-83EF-CD46FAC4AFCF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{00380D66-9F9D-4C3F-83EF-CD46FAC4AFCF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{00380D66-9F9D-4C3F-83EF-CD46FAC4AFCF}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
