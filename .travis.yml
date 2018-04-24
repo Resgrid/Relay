@@ -1,0 +1,6 @@
+language: csharp
+solution: "./Resgrid Audio.sln"
+install:
+- travis_retry nuget restore -source "https://www.nuget.org/api/v2" ./Resgrid Audio.sln
+after_script:
+  - nunit-console Resgrid.Audio.Tests/bin/Debug/Resgrid.Audio.Tests.dll

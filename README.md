@@ -5,6 +5,8 @@ Resgrid Relay is a desktop and CLI application for creating calls in the Resgrid
 
 *********
 
+[![Build Status](https://travis-ci.org/Resgrid/Relay.svg?branch=master)](https://travis-ci.org/resgrid/relay)
+
 About Resgrid
 -------------
 Resgrid is a software as a service (SaaS) logistics, management and communications platform for first responders, volunteer fire departments, career fire, EMS, Search and Rescue (SAR), public safety, HAZMAT, CERT, disaster response, etc.
