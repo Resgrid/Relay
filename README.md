@@ -5,7 +5,7 @@ Resgrid Relay is a desktop and CLI application for creating calls in the Resgrid
 
 *********
 
-[![Build Status](https://travis-ci.org/Resgrid/Relay.svg?branch=master)](https://travis-ci.org/resgrid/relay)
+[![Build status](https://ci.appveyor.com/api/projects/status/github/resgrid/relay?svg=true)](https://ci.appveyor.com/api/projects/status/github/resgrid/relay)
 
 About Resgrid
 -------------
