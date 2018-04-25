@@ -9,7 +9,7 @@ namespace Resgrid.Audio.Core
 {
 	public class AudioRecorder : IAudioRecorder
 	{
-		WaveIn waveIn;
+		WaveInEvent waveIn;
 		private readonly SampleAggregator sampleAggregator;
 		double desiredVolume = 100;
 		RecordingState recordingState;
@@ -47,7 +47,7 @@ namespace Resgrid.Audio.Core
 			{
 				throw new InvalidOperationException("Can't begin monitoring while we are in this state: " + recordingState.ToString());
 			}
-			waveIn = new WaveIn();
+			waveIn = new WaveInEvent();
 			waveIn.DeviceNumber = recordingDevice;
 			waveIn.DataAvailable += OnDataAvailable;
 			waveIn.RecordingStopped += OnRecordingStopped;
