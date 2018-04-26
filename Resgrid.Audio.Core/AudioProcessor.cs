@@ -1,11 +1,14 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
+using Resgrid.Audio.Core.Events;
 using Resgrid.Audio.Core.Model;
 
 namespace Resgrid.Audio.Core
 {
 	public class AudioProcessor: IAudioProcessor
 	{
+		private bool _initialized = false;
 		private const int BUFFER_SIZE = 26400000; // 5 Minute Buffer, 1 second = 88,000 array elements
 		private Queue<byte> _buffer;
 		private Settings _settings;
@@ -13,6 +16,9 @@ namespace Resgrid.Audio.Core
 		private readonly IAudioRecorder _audioRecorder;
 		private readonly IAudioEvaluator _audioEvaluator;
 		private readonly SampleAggregator _sampleAggregator;
+
+		public event EventHandler<TriggerProcessedEventArgs> TriggerProcessingStarted;
+		public event EventHandler<TriggerProcessedEventArgs> TriggerProcessingFinished;
 
 		public AudioProcessor(IAudioRecorder audioRecorder, IAudioEvaluator audioEvaluator)
 		{
@@ -25,8 +31,18 @@ namespace Resgrid.Audio.Core
 
 		public void Init()
 		{
-			_sampleAggregator.WaveformCalculated += _sampleAggregator_WaveformCalculated;
-			_sampleAggregator.DataAvailable += _sampleAggregator_DataAvailable;
+			if (_sampleAggregator != null && !_initialized)
+			{
+				_sampleAggregator.WaveformCalculated += _sampleAggregator_WaveformCalculated;
+				_sampleAggregator.DataAvailable += _sampleAggregator_DataAvailable;
+				_initialized = true;
+			}
+		}
+
+		public void Start()
+		{
+			Init();
+			_audioRecorder.BeginMonitoring(0);
 		}
 
 		private void _sampleAggregator_DataAvailable(object sender, DataAvailableArgs e)
@@ -52,7 +68,10 @@ namespace Resgrid.Audio.Core
 						{
 							if (_audioEvaluator.EvaluateAudioTrigger(trigger, e.FastFourierTransform))
 							{
-
+								if (TriggerProcessingStarted != null)
+								{
+									TriggerProcessingStarted(this, new TriggerProcessedEventArgs(watcher, trigger, DateTime.UtcNow));
+								}
 							}
 						}
 					}

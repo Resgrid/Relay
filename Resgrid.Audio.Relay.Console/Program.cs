@@ -1,4 +1,5 @@
-﻿using System.Threading;
+﻿using System;
+using System.Threading;
 using Consolas.Core;
 using Consolas.Mustache;
 using Resgrid.Audio.Core;
@@ -24,7 +25,8 @@ namespace Resgrid.Audio.Relay.Console
 			recorder.SampleAggregator.WaveformCalculated += SampleAggregator_WaveformCalculated;
 
 			processor.Init();
-			recorder.BeginMonitoring(0);
+
+			//recorder.BeginMonitoring(0);
 
 			while (recorder.RecordingState == RecordingState.Monitoring || recorder.RecordingState == RecordingState.Recording)
 			{
@@ -39,11 +41,14 @@ namespace Resgrid.Audio.Relay.Console
 
 		private static void SampleAggregator_MaximumCalculated(object sender, MaxSampleEventArgs e)
 		{
-			var table = new ConsoleTable("Time", "Max", "Min");
-			table.AddRow(recorder.RecordedTime.ToString("g"), e.MaxSample, e.MinSample);
+			ConsoleTableOptions options = new ConsoleTableOptions();
+			options.Columns = new[] {"Time", "Max", "Min"};
+			options.EnableCount = false;
+
+			var table = new ConsoleTable(options);
+			table.AddRow(DateTime.Now.ToString("G"), e.MaxSample, e.MinSample);
 
 			table.Write();
-			System.Console.WriteLine();
 		}
 
 		public override void Configure(Container container)

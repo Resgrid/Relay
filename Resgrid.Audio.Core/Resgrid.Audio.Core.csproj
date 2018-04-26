@@ -55,6 +55,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Events\TriggerProcessedEventArgs.cs" />
     <Compile Include="IAudioProcessor.cs" />
     <Compile Include="AudioEvaluator.cs" />
     <Compile Include="AudioProcessor.cs" />
