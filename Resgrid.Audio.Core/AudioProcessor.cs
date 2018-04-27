@@ -13,6 +13,8 @@ namespace Resgrid.Audio.Core
 		private Queue<byte> _buffer;
 		private Settings _settings;
 
+		private Dictionary<Guid, Watcher> _startedWatchers;
+
 		private readonly IAudioRecorder _audioRecorder;
 		private readonly IAudioEvaluator _audioEvaluator;
 		private readonly SampleAggregator _sampleAggregator;
@@ -27,6 +29,7 @@ namespace Resgrid.Audio.Core
 
 			_buffer = new Queue<byte>(BUFFER_SIZE);
 			_sampleAggregator = new SampleAggregator();
+			_startedWatchers = new Dictionary<Guid, Watcher>();
 		}
 
 		public void Init()
@@ -47,11 +50,30 @@ namespace Resgrid.Audio.Core
 
 		private void _sampleAggregator_DataAvailable(object sender, DataAvailableArgs e)
 		{
+			List<Guid> watchersToRemove = new List<Guid>();
+
 			if (e?.Buffer != null)
 			{
 				foreach (var buffer in e.Buffer)
 				{
 					_buffer.Enqueue(buffer);
+				}
+
+				foreach (var watcher in _startedWatchers)
+				{
+					if (!watcher.Value.AddAudio(e.Buffer))
+					{
+						if (TriggerProcessingFinished != null)
+						{
+							watchersToRemove.Add(watcher.Value.Id);
+							TriggerProcessingFinished(this, new TriggerProcessedEventArgs(watcher.Value, watcher.Value.GetTrigger(), DateTime.UtcNow));
+						}
+					}
+				}
+
+				foreach (var id in watchersToRemove)
+				{
+					_startedWatchers.Remove(id);
 				}
 			}
 		}
@@ -70,12 +92,23 @@ namespace Resgrid.Audio.Core
 							{
 								if (TriggerProcessingStarted != null)
 								{
+									AddTriggeredWatcher(watcher, trigger, _buffer.Take(1320000).ToArray());
 									TriggerProcessingStarted(this, new TriggerProcessedEventArgs(watcher, trigger, DateTime.UtcNow));
 								}
 							}
 						}
 					}
 				}
+			}
+		}
+
+		private void AddTriggeredWatcher(Watcher watcher, Trigger trigger, byte[] audio)
+		{
+			if (watcher != null && !_startedWatchers.ContainsKey(watcher.Id))
+			{
+				watcher.SetFiredTrigger(trigger);
+				watcher.AddAudio(audio);
+				_startedWatchers.Add(watcher.Id, watcher);
 			}
 		}
 	}

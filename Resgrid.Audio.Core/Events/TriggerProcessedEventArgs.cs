@@ -13,6 +13,7 @@ namespace Resgrid.Audio.Core.Events
 			Trigger = trigger;
 			Timestamp = timestamp;
 		}
+
 		public Watcher Watcher { get; private set; }
 		public Trigger Trigger { get; private set; }
 		public DateTime Timestamp { get; private set; }
