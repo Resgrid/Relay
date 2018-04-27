@@ -34,9 +34,7 @@ The following prerequisites are required.
 
 
 ## Dependencies ##
-    - [Ionic Framework](http://ionicframework.com/)
-    - [Cordova](https://cordova.apache.org/)
-    - [Angular2-Grid](https://github.com/BTMorton/angular2-grid)
+
 
 ## Notes ##
 
@@ -46,4 +44,11 @@ The following prerequisites are required.
 * Jason Jarrett (Twitter: @staxmanade Blog: http://staxmanade.com)
 
 ## License ##
-Apache 2.0
+[Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0)
+
+## Acknowledgments
+
+Resgrid Relay makes use of the following OSS projects:
+
+- Consolas released under the BSD 2-Clause license: https://github.com/rickardn/Consolas/blob/develop/LICENSE
+- NAudio released under the Microsoft Public License: https://github.com/naudio/NAudio/blob/master/license.txt

@@ -59,8 +59,12 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Args\HelpArgs.cs" />
+    <Compile Include="Args\VersionArgs.cs" />
     <Compile Include="Commands\HelpCommand.cs" />
+    <Compile Include="Commands\VersionCommand.cs" />
     <Compile Include="ConsoleTable.cs" />
+    <Compile Include="Models\ThreadService.cs" />
+    <Compile Include="Models\VersionViewModel.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
@@ -68,6 +72,7 @@
     <None Include="App.config" />
     <None Include="packages.config" />
     <None Include="Views\Default.template" />
+    <None Include="Views\Version.template" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Resgrid.Audio.Core\Resgrid.Audio.Core.csproj">

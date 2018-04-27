@@ -3,6 +3,7 @@ using System.Threading;
 using Consolas.Core;
 using Consolas.Mustache;
 using Resgrid.Audio.Core;
+using Resgrid.Audio.Relay.Console.Models;
 using SimpleInjector;
 
 namespace Resgrid.Audio.Relay.Console
@@ -24,14 +25,25 @@ namespace Resgrid.Audio.Relay.Console
 			recorder.SampleAggregator.MaximumCalculated += SampleAggregator_MaximumCalculated;
 			recorder.SampleAggregator.WaveformCalculated += SampleAggregator_WaveformCalculated;
 
-			processor.Init();
+			processor.TriggerProcessingStarted += Processor_TriggerProcessingStarted;
+			processor.TriggerProcessingFinished += Processor_TriggerProcessingFinished;
 
-			//recorder.BeginMonitoring(0);
+			processor.Start();
 
 			while (recorder.RecordingState == RecordingState.Monitoring || recorder.RecordingState == RecordingState.Recording)
 			{
 				Thread.Sleep(250);
 			}
+		}
+
+		private static void Processor_TriggerProcessingFinished(object sender, Core.Events.TriggerProcessedEventArgs e)
+		{
+			System.Console.WriteLine($"TRIGGER FINISHED: {e.Watcher.Name}");
+		}
+
+		private static void Processor_TriggerProcessingStarted(object sender, Core.Events.TriggerProcessedEventArgs e)
+		{
+			System.Console.WriteLine($"TRIGGER STARTED: {e.Watcher.Name}");
 		}
 
 		private static void SampleAggregator_WaveformCalculated(object sender, WaveformEventArgs e)
@@ -54,6 +66,9 @@ namespace Resgrid.Audio.Relay.Console
 		public override void Configure(Container container)
 		{
 			container.Register<IConsole, SystemConsole>();
+			container.Register<IThreadService, ThreadService>();
+
+
 			ViewEngines.Add<MustacheViewEngine>();
 		}
 	}
