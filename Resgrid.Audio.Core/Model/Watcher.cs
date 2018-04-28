@@ -62,5 +62,10 @@ namespace Resgrid.Audio.Core.Model
 		{
 			return _trigger;
 		}
+
+		public byte[] GetBuffer()
+		{
+			return _buffer.ToArray();
+		}
 	}
 }

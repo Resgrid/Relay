@@ -13,6 +13,13 @@ Resgrid is a software as a service (SaaS) logistics, management and communicatio
 
 [Sign up for your free Resgrid Account Today!](https://resgrid.com)
 
+## System Requirements ##
+
+* Windows 7 or newer
+* .Net Framework 4.6.2
+* 1.4Ghz Single Core Processor
+* 4GB of RAM
+* 1GB of Free Disk Space
 
 ## Environment Setup ##
 
