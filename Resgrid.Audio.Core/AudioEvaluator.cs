@@ -24,7 +24,7 @@ namespace Resgrid.Audio.Core
 			
 			foreach (var a in audio)
 			{
-				if (trigger.Count >= 1)
+				if (trigger.Count == 1)
 				{
 					if (a >= (trigger.Frequency1 - tolerance1) && a <= (trigger.Frequency1 + tolerance1))
 						validation1.Add(true);
@@ -33,6 +33,11 @@ namespace Resgrid.Audio.Core
 				}
 				else if (trigger.Count == 2)
 				{
+					if (a >= (trigger.Frequency1 - tolerance1) && a <= (trigger.Frequency1 + tolerance1))
+						validation1.Add(true);
+					else
+						validation1.Add(false);
+
 					if (a >= (trigger.Frequency2 - tolerance2) && a <= (trigger.Frequency2 + tolerance2))
 						validation2.Add(true);
 					else

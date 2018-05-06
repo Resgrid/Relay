@@ -17,9 +17,10 @@ Resgrid is a software as a service (SaaS) logistics, management and communicatio
 
 * Windows 7 or newer
 * .Net Framework 4.6.2
-* 1.4Ghz Single Core Processor
-* 4GB of RAM
-* 1GB of Free Disk Space
+* 1.8Ghz Single Core Processor
+* 8GB of RAM
+* 2GB of Free Disk Space
+* For Scanner audio a Scanner with an Audio Line Out i.e. [WS1065](https://amzn.to/2Kuck8k) is needed
 
 ## Environment Setup ##
 
