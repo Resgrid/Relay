@@ -15,7 +15,27 @@ namespace Resgrid.Audio.Core
 				fftComplex[i] = new Complex(data[i], 0.0); // make it complex format (imaginary = 0)
 			}
 
-			Accord.Math.FourierTransform.FFT(fftComplex, Accord.Math.FourierTransform.Direction.Forward);
+			if (data.Length > 16384)
+			{
+				int pageNumber = 1;
+				var queryResultPage = fftComplex
+					.Skip(16384 * pageNumber)
+					.Take(16384);
+
+				while (queryResultPage != null && queryResultPage.Count() > 0)
+				{
+					Accord.Math.FourierTransform.FFT(queryResultPage.ToArray(), Accord.Math.FourierTransform.Direction.Forward);
+
+					pageNumber++;
+					queryResultPage = fftComplex
+						.Skip(16384 * pageNumber)
+						.Take(16384);
+				}
+			}
+			else
+			{
+				Accord.Math.FourierTransform.FFT(fftComplex, Accord.Math.FourierTransform.Direction.Forward);
+			}
 			//for (int i = 0; i < data.Length; i++)
 			//{
 			//	fft[i] = fftComplex[i].Magnitude; // back to double
@@ -26,7 +46,7 @@ namespace Resgrid.Audio.Core
 			return fftComplex.Select(x => x.Magnitude).ToArray();
 		}
 
-		public static double[] WaveDataToFFT(byte[] data)
+		public static double[] WaveDataToFFT(double[] data)
 		{
 			int SAMPLE_RESOLUTION = 16;
 			int BYTES_PER_POINT = SAMPLE_RESOLUTION / 8;
@@ -37,8 +57,8 @@ namespace Resgrid.Audio.Core
 			for (int i = 0; i < vals.Length; i++)
 			{
 				// bit shift the byte buffer into the right variable format
-				byte hByte = data[i * 2 + 1];
-				byte lByte = data[i * 2 + 0];
+				byte hByte = (byte)data[i * 2 + 1];
+				byte lByte = (byte)data[i * 2 + 0];
 
 				vals[i] = (int)(short)((hByte << 8) | lByte);
 				Ys[i] = vals[i];
@@ -46,6 +66,30 @@ namespace Resgrid.Audio.Core
 			}
 
 			return Functions.FFT(Ys);
+		}
+
+		// https://stackoverflow.com/questions/13658006/audio-file-reading-for-fft?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+		public static double[] WaveFileDataPrepare(String wavePath, out int SampleRate)
+		{
+			double[] data;
+			byte[] wave;
+			byte[] sR = new byte[4];
+			System.IO.FileStream WaveFile = System.IO.File.OpenRead(wavePath);
+			wave = new byte[WaveFile.Length];
+			data = new double[(wave.Length - 44) / 4];//shifting the headers out of the PCM data;
+			WaveFile.Read(wave, 0, Convert.ToInt32(WaveFile.Length));//read the wave file into the wave variable
+																	 /***********Converting and PCM accounting***************/
+			for (int i = 0; i < data.Length - i * 4; i++)
+			{
+				data[i] = (BitConverter.ToInt32(wave, (1 + i) * 4)) / 65536.0;
+			}
+			/**************assigning sample rate**********************/
+			for (int i = 24; i < 28; i++)
+			{
+				sR[i - 24] = wave[i];
+			}
+			SampleRate = BitConverter.ToInt32(sR, 0);
+			return data;
 		}
 	}
 }
