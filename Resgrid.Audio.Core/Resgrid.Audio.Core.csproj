@@ -71,6 +71,7 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="RecordingState.cs" />
     <Compile Include="SampleAggregator.cs" />
+    <Compile Include="WaveFile.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

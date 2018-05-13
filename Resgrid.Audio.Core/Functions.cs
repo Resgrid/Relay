@@ -8,11 +8,22 @@ namespace Resgrid.Audio.Core
 	{
 		public static double[] FFT(double[] data)
 		{
-			//double[] fft = new double[data.Length]; // this is where we will store the output (fft)
-			Complex[] fftComplex = new Complex[data.Length]; // the FFT function requires complex format
-			for (int i = 0; i < data.Length; i++)
+			double[] fft;// = new double[data.Length]; // this is where we will store the output (fft)
+
+			if (data.Length >= 16384)
 			{
-				fftComplex[i] = new Complex(data[i], 0.0); // make it complex format (imaginary = 0)
+				var size = Math.Ceiling(data.Length / 16384m) * 16384;
+				fft = ArrayLeftPad(data, 0, (int) size);
+			}
+			else
+			{
+				fft = ArrayLeftPad(data, 0, 16384);
+			}
+
+			Complex[] fftComplex = new Complex[fft.Length]; // the FFT function requires complex format
+			for (int i = 0; i < fft.Length; i++)
+			{
+				fftComplex[i] = new Complex(fft[i], 0.0); // make it complex format (imaginary = 0)
 			}
 
 			if (data.Length > 16384)
@@ -90,6 +101,15 @@ namespace Resgrid.Audio.Core
 			}
 			SampleRate = BitConverter.ToInt32(sR, 0);
 			return data;
+		}
+
+		public static double[] ArrayLeftPad(double[] input, double padValue, int len)
+		{
+			var temp = Enumerable.Repeat(padValue, len).ToArray();
+			for (var i = 0; i < input.Length; i++)
+				temp[i] = input[i];
+
+			return temp;
 		}
 	}
 }
