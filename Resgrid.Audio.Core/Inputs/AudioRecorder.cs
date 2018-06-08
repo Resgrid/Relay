@@ -17,6 +17,8 @@ namespace Resgrid.Audio.Core
 		WaveFormat recordingFormat;
 		BufferedWaveProvider bwp;
 
+		private AudioEvaluator audioEvaluator;
+
 		public event EventHandler Stopped = delegate { };
 
 		private int RATE = 44100; // sample rate of the sound card
@@ -24,6 +26,7 @@ namespace Resgrid.Audio.Core
 
 		public AudioRecorder()
 		{
+			audioEvaluator = new AudioEvaluator();
 			sampleAggregator = new SampleAggregator();
 			RecordingFormat = new WaveFormat(RATE, 1);
 		}
@@ -61,6 +64,7 @@ namespace Resgrid.Audio.Core
 			bwp.BufferLength = BUFFERSIZE * 2;
 			bwp.DiscardOnBufferOverflow = true;
 
+			audioEvaluator.Start(waveIn);
 			waveIn.StartRecording();
 			recordingState = RecordingState.Monitoring;
 		}
@@ -130,6 +134,8 @@ namespace Resgrid.Audio.Core
 
 			bwp.Read(frames, 0, frameSize);
 			sampleAggregator.Calculate(frames, frameSize);
+
+
 		}
 
 		private void WriteToFile(byte[] buffer, int bytesRecorded)

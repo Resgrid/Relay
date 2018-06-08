@@ -9,10 +9,11 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>Resgrid.Audio.Core</RootNamespace>
     <AssemblyName>Resgrid.Audio.Core</AssemblyName>
-    <TargetFrameworkVersion>v4.6.2</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.7.1</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
+    <TargetFrameworkProfile />
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -41,8 +42,17 @@
     <Reference Include="Accord.Math.Core, Version=3.8.0.0, Culture=neutral, PublicKeyToken=fa1a88e29555ccf7, processorArchitecture=MSIL">
       <HintPath>..\packages\Accord.Math.3.8.0\lib\net462\Accord.Math.Core.dll</HintPath>
     </Reference>
+    <Reference Include="DtmfDetection">
+      <HintPath>..\References\DtmfDetection.dll</HintPath>
+    </Reference>
+    <Reference Include="DtmfDetection.NAudio">
+      <HintPath>..\References\DtmfDetection.NAudio.dll</HintPath>
+    </Reference>
     <Reference Include="NAudio, Version=1.8.4.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\NAudio.1.8.4\lib\net35\NAudio.dll</HintPath>
+    </Reference>
+    <Reference Include="Newtonsoft.Json, Version=11.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
+      <HintPath>..\packages\Newtonsoft.Json.11.0.2\lib\net45\Newtonsoft.Json.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
@@ -55,14 +65,18 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AudioFunctions.cs" />
+    <Compile Include="Events\EvaluatorEventArgs.cs" />
+    <Compile Include="Events\WatcherEventArgs.cs" />
     <Compile Include="Events\TriggerProcessedEventArgs.cs" />
     <Compile Include="IAudioProcessor.cs" />
     <Compile Include="AudioEvaluator.cs" />
     <Compile Include="AudioProcessor.cs" />
-    <Compile Include="AudioRecorder.cs" />
+    <Compile Include="Inputs\AudioRecorder.cs" />
     <Compile Include="Functions.cs" />
     <Compile Include="IAudioEvaluator.cs" />
     <Compile Include="IAudioRecorder.cs" />
+    <Compile Include="Log.cs" />
     <Compile Include="Model\EvalTypes.cs" />
     <Compile Include="Model\Settings.cs" />
     <Compile Include="Model\Trigger.cs" />
@@ -71,7 +85,6 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="RecordingState.cs" />
     <Compile Include="SampleAggregator.cs" />
-    <Compile Include="WaveFile.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

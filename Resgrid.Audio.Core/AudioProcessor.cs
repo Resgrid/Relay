@@ -88,14 +88,14 @@ namespace Resgrid.Audio.Core
 					{
 						foreach (var trigger in watcher.Triggers)
 						{
-							if (_audioEvaluator.EvaluateAudioTrigger(trigger, e.FastFourierTransform))
-							{
-								if (TriggerProcessingStarted != null)
-								{
-									AddTriggeredWatcher(watcher, trigger, _buffer.Take(1320000).ToArray());
-									TriggerProcessingStarted(this, new TriggerProcessedEventArgs(watcher, trigger, DateTime.UtcNow));
-								}
-							}
+							//if (_audioEvaluator.EvaluateAudioTrigger(trigger, e.FastFourierTransform))
+							//{
+							//	if (TriggerProcessingStarted != null)
+							//	{
+							//		AddTriggeredWatcher(watcher, trigger, _buffer.Take(1320000).ToArray());
+							//		TriggerProcessingStarted(this, new TriggerProcessedEventArgs(watcher, trigger, DateTime.UtcNow));
+							//	}
+							//}
 						}
 					}
 				}

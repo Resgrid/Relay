@@ -33,7 +33,7 @@ namespace Resgrid.Audio.Core
 					.Skip(16384 * pageNumber)
 					.Take(16384);
 
-				while (queryResultPage != null && queryResultPage.Count() > 0)
+				while (queryResultPage != null && queryResultPage.Any())
 				{
 					Accord.Math.FourierTransform.FFT(queryResultPage.ToArray(), Accord.Math.FourierTransform.Direction.Forward);
 

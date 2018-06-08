@@ -7,6 +7,7 @@ using Resgrid.Audio.Core.Model;
 
 namespace Resgrid.Audio.Tests
 {
+	/*
 	[TestFixture]
     public class AudioEvaluatorTests
     {
@@ -145,4 +146,5 @@ namespace Resgrid.Audio.Tests
 		    result.Should().BeFalse();
 	    }
 	}
+	*/
 }
