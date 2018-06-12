@@ -63,6 +63,7 @@
     <Compile Include="Commands\HelpCommand.cs" />
     <Compile Include="Commands\VersionCommand.cs" />
     <Compile Include="ConsoleTable.cs" />
+    <Compile Include="Data\ConfigData.cs" />
     <Compile Include="Models\ThreadService.cs" />
     <Compile Include="Models\VersionViewModel.cs" />
     <Compile Include="Program.cs" />

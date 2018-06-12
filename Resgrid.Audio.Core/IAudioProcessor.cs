@@ -1,8 +1,11 @@
-﻿namespace Resgrid.Audio.Core
+﻿using System.Collections.Generic;
+using Resgrid.Audio.Core.Model;
+
+namespace Resgrid.Audio.Core
 {
 	public interface IAudioProcessor
 	{
-		void Init();
+		void Init(List<Watcher> watchers);
 		void Start();
 	}
 }

@@ -13,6 +13,7 @@ namespace Resgrid.Audio.Core
 		private Queue<byte> _buffer;
 		private Settings _settings;
 
+		private List<Watcher> _watchers;
 		private Dictionary<Guid, Watcher> _startedWatchers;
 
 		private readonly IAudioRecorder _audioRecorder;
@@ -30,21 +31,31 @@ namespace Resgrid.Audio.Core
 			_buffer = new Queue<byte>(BUFFER_SIZE);
 			_sampleAggregator = new SampleAggregator();
 			_startedWatchers = new Dictionary<Guid, Watcher>();
+			_watchers = new List<Watcher>();
 		}
 
-		public void Init()
+		public void Init(List<Watcher> watchers)
 		{
 			if (_sampleAggregator != null && !_initialized)
 			{
 				_sampleAggregator.WaveformCalculated += _sampleAggregator_WaveformCalculated;
 				_sampleAggregator.DataAvailable += _sampleAggregator_DataAvailable;
+				_audioEvaluator.WatcherTriggered += _audioEvaluator_WatcherTriggered;
+
+				_audioEvaluator.Init(watchers);
+
 				_initialized = true;
 			}
 		}
 
+		private void _audioEvaluator_WatcherTriggered(object sender, WatcherEventArgs e)
+		{
+			AddTriggeredWatcher(e.Watcher, e.Triggers.FirstOrDefault(), _buffer.Take(1320000).ToArray());
+		}
+
 		public void Start()
 		{
-			Init();
+			Init(_watchers);
 			_audioRecorder.BeginMonitoring(0);
 		}
 
