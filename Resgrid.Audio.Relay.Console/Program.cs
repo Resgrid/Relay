@@ -3,6 +3,7 @@ using System.Threading;
 using Consolas.Core;
 using Consolas.Mustache;
 using Resgrid.Audio.Core;
+using Resgrid.Audio.Relay.Console.Data;
 using Resgrid.Audio.Relay.Console.Models;
 using SimpleInjector;
 
@@ -28,6 +29,7 @@ namespace Resgrid.Audio.Relay.Console
 			processor.TriggerProcessingStarted += Processor_TriggerProcessingStarted;
 			processor.TriggerProcessingFinished += Processor_TriggerProcessingFinished;
 
+			processor.Init(ConfigData.GetWatcher());
 			processor.Start();
 
 			while (recorder.RecordingState == RecordingState.Monitoring || recorder.RecordingState == RecordingState.Recording)
