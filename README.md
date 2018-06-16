@@ -60,3 +60,4 @@ Resgrid Relay makes use of the following OSS projects:
 
 - Consolas released under the BSD 2-Clause license: https://github.com/rickardn/Consolas/blob/develop/LICENSE
 - NAudio released under the Microsoft Public License: https://github.com/naudio/NAudio/blob/master/license.txt
+- DtmfDetection released under the GNU Lesser GPL v3.0 License: https://github.com/Resgrid/DtmfDetection/blob/master/LICENSE

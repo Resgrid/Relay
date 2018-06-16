@@ -36,6 +36,12 @@
     <Reference Include="Consolas.Core, Version=0.6.2.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\Consolas.0.7.1\lib\net40\Consolas.Core.dll</HintPath>
     </Reference>
+    <Reference Include="NAudio, Version=1.8.4.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\NAudio.1.8.4\lib\net35\NAudio.dll</HintPath>
+    </Reference>
+    <Reference Include="Newtonsoft.Json, Version=11.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
+      <HintPath>..\packages\Newtonsoft.Json.11.0.2\lib\net45\Newtonsoft.Json.dll</HintPath>
+    </Reference>
     <Reference Include="Nustache.Core, Version=1.13.8.22, Culture=neutral, PublicKeyToken=efd6f3d8f76ecd9f, processorArchitecture=MSIL">
       <HintPath>..\packages\Nustache.1.13.8.22\lib\net20\Nustache.Core.dll</HintPath>
     </Reference>
@@ -58,12 +64,17 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Args\RunArgs.cs" />
     <Compile Include="Args\HelpArgs.cs" />
+    <Compile Include="Args\DevicesArgs.cs" />
     <Compile Include="Args\VersionArgs.cs" />
+    <Compile Include="Commands\DevicesCommand.cs" />
     <Compile Include="Commands\HelpCommand.cs" />
+    <Compile Include="Commands\RunCommand.cs" />
     <Compile Include="Commands\VersionCommand.cs" />
     <Compile Include="ConsoleTable.cs" />
     <Compile Include="Data\ConfigData.cs" />
+    <Compile Include="Models\DevicesViewModel.cs" />
     <Compile Include="Models\ThreadService.cs" />
     <Compile Include="Models\VersionViewModel.cs" />
     <Compile Include="Program.cs" />
@@ -72,8 +83,12 @@
   <ItemGroup>
     <None Include="App.config" />
     <None Include="packages.config" />
-    <None Include="Views\Default.template" />
-    <None Include="Views\Version.template" />
+    <None Include="settings.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <EmbeddedResource Include="Views\Default.template" />
+    <EmbeddedResource Include="Views\Version.template" />
+    <EmbeddedResource Include="Views\Devices.template" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Resgrid.Audio.Core\Resgrid.Audio.Core.csproj">

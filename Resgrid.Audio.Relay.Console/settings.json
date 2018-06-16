@@ -1,0 +1,143 @@
+{
+  "InputDevice": 0,
+  "ApiUrl": "https://api.resgrid.com",
+  "ApiCode": "TEST",
+  "Watchers": [
+    {
+      "Name": "Station 2",
+      "Active": true,
+      "Code": null,
+      "Type": 0,
+      "Eval": 0,
+      "Triggers": [
+        {
+          "Frequency1": 524.0,
+          "Frequency2": 794.0,
+          "Tolerance": 0,
+          "Time": 0.0,
+          "Count": 2
+        }
+      ],
+      "Id": "ee188c37-09f4-47c0-9ff1-fe34c9d6a5f1"
+    },
+    {
+      "Name": "Station 3",
+      "Active": true,
+      "Code": null,
+      "Type": 0,
+      "Eval": 0,
+      "Triggers": [
+        {
+          "Frequency1": 1084.0,
+          "Frequency2": 794.0,
+          "Tolerance": 0,
+          "Time": 0.0,
+          "Count": 2
+        }
+      ],
+      "Id": "a434850e-98d2-41f3-943e-5c00aedb9444"
+    },
+    {
+      "Name": "Station 5",
+      "Active": true,
+      "Code": null,
+      "Type": 0,
+      "Eval": 0,
+      "Triggers": [
+        {
+          "Frequency1": 881.0,
+          "Frequency2": 1084.0,
+          "Tolerance": 0,
+          "Time": 0.0,
+          "Count": 2
+        }
+      ],
+      "Id": "915297cb-131a-4408-8aa5-3e4b2cd4da23"
+    },
+    {
+      "Name": "Station 6",
+      "Active": true,
+      "Code": null,
+      "Type": 0,
+      "Eval": 0,
+      "Triggers": [
+        {
+          "Frequency1": 645.0,
+          "Frequency2": 716.0,
+          "Tolerance": 0,
+          "Time": 0.0,
+          "Count": 2
+        }
+      ],
+      "Id": "2fcdb758-8cd2-4de9-9e63-e457bb77deb8"
+    },
+    {
+      "Name": "Station 7",
+      "Active": true,
+      "Code": null,
+      "Type": 0,
+      "Eval": 0,
+      "Triggers": [
+        {
+          "Frequency1": 384.0,
+          "Frequency2": 881.0,
+          "Tolerance": 0,
+          "Time": 0.0,
+          "Count": 2
+        }
+      ],
+      "Id": "d465f84a-f96e-43ec-aaa0-fa918dd5780d"
+    },
+    {
+      "Name": "Station 8",
+      "Active": true,
+      "Code": null,
+      "Type": 0,
+      "Eval": 0,
+      "Triggers": [
+        {
+          "Frequency1": 346.0,
+          "Frequency2": 384.0,
+          "Tolerance": 0,
+          "Time": 0.0,
+          "Count": 2
+        }
+      ],
+      "Id": "3be55ffa-4e50-44bd-9e96-059f11f959c8"
+    },
+    {
+      "Name": "Station 9",
+      "Active": true,
+      "Code": null,
+      "Type": 0,
+      "Eval": 0,
+      "Triggers": [
+        {
+          "Frequency1": 881.0,
+          "Frequency2": 346.0,
+          "Tolerance": 0,
+          "Time": 0.0,
+          "Count": 2
+        }
+      ],
+      "Id": "c0bce949-d659-46c5-8c6e-251a63fab05c"
+    },
+    {
+      "Name": "Station 10",
+      "Active": true,
+      "Code": null,
+      "Type": 0,
+      "Eval": 0,
+      "Triggers": [
+        {
+          "Frequency1": 426.0,
+          "Frequency2": 582.0,
+          "Tolerance": 0,
+          "Time": 0.0,
+          "Count": 2
+        }
+      ],
+      "Id": "e66fb0a7-3898-4fb1-937f-5396491b3265"
+    }
+  ]
+}

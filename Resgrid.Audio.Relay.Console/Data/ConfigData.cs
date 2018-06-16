@@ -6,9 +6,14 @@ namespace Resgrid.Audio.Relay.Console.Data
 {
 	public class ConfigData
 	{
-		public static List<Watcher> GetWatcher()
+		public static Config GetTestConfig()
 		{
-			List<Watcher> data = new List<Watcher>();
+			Config config = new Config();
+			config.ApiUrl = "https://api.resgrid.com";
+			config.ApiCode = "TEST";
+			config.InputDevice = 0;
+
+			config.Watchers = new List<Watcher>();
 			var watcher1 = new Watcher();
 			watcher1.Id = Guid.NewGuid();
 			watcher1.Active = true;
@@ -22,7 +27,7 @@ namespace Resgrid.Audio.Relay.Console.Data
 				Frequency2 = 794
 			});
 
-			data.Add(watcher1);
+			config.Watchers.Add(watcher1);
 
 			var watcher2 = new Watcher();
 			watcher2.Id = Guid.NewGuid();
@@ -36,7 +41,7 @@ namespace Resgrid.Audio.Relay.Console.Data
 				Frequency2 = 794
 			});
 
-			data.Add(watcher2);
+			config.Watchers.Add(watcher2);
 
 			var watcher3 = new Watcher();
 			watcher3.Id = Guid.NewGuid();
@@ -50,7 +55,7 @@ namespace Resgrid.Audio.Relay.Console.Data
 				Frequency2 = 1084
 			});
 
-			data.Add(watcher3);
+			config.Watchers.Add(watcher3);
 
 			var watcher4 = new Watcher();
 			watcher4.Id = Guid.NewGuid();
@@ -64,7 +69,7 @@ namespace Resgrid.Audio.Relay.Console.Data
 				Frequency2 = 716
 			});
 
-			data.Add(watcher4);
+			config.Watchers.Add(watcher4);
 
 			var watcher5 = new Watcher();
 			watcher5.Id = Guid.NewGuid();
@@ -78,7 +83,7 @@ namespace Resgrid.Audio.Relay.Console.Data
 				Frequency2 = 881
 			});
 
-			data.Add(watcher5);
+			config.Watchers.Add(watcher5);
 
 			var watcher6 = new Watcher();
 			watcher6.Id = Guid.NewGuid();
@@ -92,7 +97,7 @@ namespace Resgrid.Audio.Relay.Console.Data
 				Frequency2 = 384
 			});
 
-			data.Add(watcher6);
+			config.Watchers.Add(watcher6);
 
 			var watcher7 = new Watcher();
 			watcher7.Id = Guid.NewGuid();
@@ -106,7 +111,7 @@ namespace Resgrid.Audio.Relay.Console.Data
 				Frequency2 = 346
 			});
 
-			data.Add(watcher7);
+			config.Watchers.Add(watcher7);
 
 			var watcher8 = new Watcher();
 			watcher8.Id = Guid.NewGuid();
@@ -120,9 +125,9 @@ namespace Resgrid.Audio.Relay.Console.Data
 				Frequency2 = 582
 			});
 
-			data.Add(watcher8);
+			config.Watchers.Add(watcher8);
 
-			return data;
+			return config;
 		}
 	}
 }

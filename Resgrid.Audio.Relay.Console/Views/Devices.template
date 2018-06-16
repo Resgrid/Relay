@@ -1,0 +1,7 @@
+﻿Resgrid Relay
+
+Input Devices Detected
+-----------------------------------
+{{#Devices}}
+    {{.}}
+{{/Devices}}

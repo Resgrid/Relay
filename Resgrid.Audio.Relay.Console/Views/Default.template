@@ -6,5 +6,5 @@ SYNTAX
 	Resgrid.Audio.Relay.Console [args] [options]
 
 DESCRIPTION
-	This is the console based version of Resgrid Relay allowing the monitoring of an audio input or audio stream. You will need to modify the settings.json file to figure the application.
+	This is the console based version of Resgrid Relay allowing the monitoring of an audio input or audio stream. You will need to modify the settings.json file to configure the application.
 
