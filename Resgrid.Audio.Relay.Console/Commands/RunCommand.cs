@@ -17,27 +17,41 @@ namespace Resgrid.Audio.Relay.Console.Commands
 
 		public string Execute(RunArgs args)
 		{
-			recorder = new AudioRecorder();
 			evaluator = new AudioEvaluator();
+			recorder = new AudioRecorder(evaluator);
 			processor = new AudioProcessor(recorder, evaluator);
 
+			System.Console.WriteLine("Resgrid Audio");
+			System.Console.WriteLine("-----------------------------------------");
+
+			System.Console.WriteLine("Hooking into Events");
 			recorder.SampleAggregator.MaximumCalculated += SampleAggregator_MaximumCalculated;
 			recorder.SampleAggregator.WaveformCalculated += SampleAggregator_WaveformCalculated;
-
+			
 			processor.TriggerProcessingStarted += Processor_TriggerProcessingStarted;
 			processor.TriggerProcessingFinished += Processor_TriggerProcessingFinished;
 
 			evaluator.WatcherTriggered += Evaluator_WatcherTriggered;
 
-			processor.Init(LoadSettingsFromFile().Watchers);
+			System.Console.WriteLine("Loading Settings");
+			Config config = LoadSettingsFromFile();
+
+			System.Console.WriteLine($"Config Loaded with {config.Watchers.Count} watchers");
+
+			System.Console.WriteLine("Initializing Processor");
+			processor.Init(config);
+
+			System.Console.WriteLine("Starting Processor");
 			processor.Start();
+
+			System.Console.WriteLine("Ready, Listening to Audio. Press Ctrl+C to exit.");
 
 			while (recorder.RecordingState == RecordingState.Monitoring || recorder.RecordingState == RecordingState.Recording)
 			{
 				Thread.Sleep(250);
 			}
 
-			return "Using: Resgrid.Audio.Relay.Console.exe ...";
+			return "";
 		}
 
 		private static Config LoadSettingsFromFile()
@@ -73,14 +87,14 @@ namespace Resgrid.Audio.Relay.Console.Commands
 
 		private static void SampleAggregator_MaximumCalculated(object sender, MaxSampleEventArgs e)
 		{
-			ConsoleTableOptions options = new ConsoleTableOptions();
-			options.Columns = new[] { "Time", "Max", "Min" };
-			options.EnableCount = false;
+			//ConsoleTableOptions options = new ConsoleTableOptions();
+			//options.Columns = new[] { "Time", "Max", "Min" };
+			//options.EnableCount = false;
 
-			var table = new ConsoleTable(options);
-			table.AddRow(DateTime.Now.ToString("G"), e.MaxSample, e.MinSample);
+			//var table = new ConsoleTable(options);
+			//table.AddRow(DateTime.Now.ToString("G"), e.MaxSample, e.MinSample);
 
-			table.Write();
+			//table.Write();
 		}
 	}
 }

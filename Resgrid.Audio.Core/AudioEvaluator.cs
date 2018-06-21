@@ -93,6 +93,8 @@ namespace Resgrid.Audio.Core
 				_finishedTones.Add(end.DtmfTone);
 				CheckFinishedTonesForTriggers();
 			};
+
+			analyzer.StartCapturing();
 		}
 
 		private DtmfTone AddTone(int frequency)
@@ -101,10 +103,11 @@ namespace Resgrid.Audio.Core
 
 			var tone = _dtmfTone.FirstOrDefault(x => x.HighTone == frequency);
 
-			if (tone == null)
+			if (tone == null || tone == DtmfTone.None)
 			{
 				tone = new DtmfTone(frequency, 0, (PhoneKey)(_dtmfTone.Count() + (int)PhoneKey.Custom1));
-				_dtmfTone.Add((tone));
+				DtmfClassification.AddCustomTone(tone);
+				_dtmfTone.Add(tone);
 			}
 
 			return tone;

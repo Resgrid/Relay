@@ -17,16 +17,16 @@ namespace Resgrid.Audio.Core
 		WaveFormat recordingFormat;
 		BufferedWaveProvider bwp;
 
-		private AudioEvaluator audioEvaluator;
+		private AudioEvaluator _audioEvaluator;
 
 		public event EventHandler Stopped = delegate { };
 
 		private int RATE = 44100; // sample rate of the sound card
 		private int BUFFERSIZE = (int)Math.Pow(2, 11); // must be a multiple of 2
 
-		public AudioRecorder()
+		public AudioRecorder(AudioEvaluator audioEvaluator)
 		{
-			audioEvaluator = new AudioEvaluator();
+			_audioEvaluator = audioEvaluator;
 			sampleAggregator = new SampleAggregator();
 			RecordingFormat = new WaveFormat(RATE, 1);
 		}
@@ -50,6 +50,7 @@ namespace Resgrid.Audio.Core
 			{
 				throw new InvalidOperationException("Can't begin monitoring while we are in this state: " + recordingState.ToString());
 			}
+
 			waveIn = new WaveInEvent();
 			waveIn.DeviceNumber = recordingDevice;
 			waveIn.DataAvailable += OnDataAvailable;
@@ -64,8 +65,8 @@ namespace Resgrid.Audio.Core
 			bwp.BufferLength = BUFFERSIZE * 2;
 			bwp.DiscardOnBufferOverflow = true;
 
-			audioEvaluator.Start(waveIn);
-			waveIn.StartRecording();
+			_audioEvaluator.Start(waveIn);
+			//waveIn.StartRecording();
 			recordingState = RecordingState.Monitoring;
 		}
 

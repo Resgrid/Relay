@@ -1,5 +1,5 @@
 {
-  "InputDevice": 0,
+  "InputDevice": 1,
   "ApiUrl": "https://api.resgrid.com",
   "ApiCode": "TEST",
   "Watchers": [
