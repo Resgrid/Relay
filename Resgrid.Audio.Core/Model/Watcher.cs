@@ -13,6 +13,7 @@ namespace Resgrid.Audio.Core.Model
 		private Queue<byte> _buffer;
 		private Trigger _trigger;
 		private int _audioCount;
+		private List<string> _additionalCodes;
 
 		public string Name { get; set; }
 		public bool Active { get; set; }
@@ -75,6 +76,20 @@ namespace Resgrid.Audio.Core.Model
 		public byte[] GetBuffer()
 		{
 			return _buffer.ToArray();
+		}
+
+		public void AddAdditionalCode(string code)
+		{
+			if (_additionalCodes == null)
+				_additionalCodes = new List<string>();
+
+			if (!_additionalCodes.Contains(code))
+				_additionalCodes.Add(code);
+		}
+
+		public List<string> GetAdditionalCodes()
+		{
+			return _additionalCodes;
 		}
 
 		public List<Tuple<Trigger, List<DtmfTone>>> DidTriggerProcess(List<DtmfTone> tones)

@@ -159,13 +159,20 @@ namespace Resgrid.Audio.Core
 
 		private void AddTriggeredWatcher(Watcher watcher, Trigger trigger, byte[] audio, DateTime timeStamp)
 		{
-			if (watcher != null && !_startedWatchers.ContainsKey(watcher.Id))
+			if (watcher != null)
 			{
-				watcher.TriggerFiredTimestamp = timeStamp;
-				watcher.LastCheckedTimestamp = timeStamp;
-				watcher.SetFiredTrigger(trigger);
-				watcher.AddAudio(audio);
-				_startedWatchers.Add(watcher.Id, watcher);
+				if (_startedWatchers.Count > 0 && !_config.Multiple)
+				{
+					_startedWatchers.First().Value.AddAdditionalCode(watcher.Code);
+				}
+				else if (!_startedWatchers.ContainsKey(watcher.Id))
+				{
+					watcher.TriggerFiredTimestamp = timeStamp;
+					watcher.LastCheckedTimestamp = timeStamp;
+					watcher.SetFiredTrigger(trigger);
+					watcher.AddAudio(audio);
+					_startedWatchers.Add(watcher.Id, watcher);
+				}
 			}
 		}
 	}

@@ -95,6 +95,12 @@
     <None Include="app.config" />
     <None Include="packages.config" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Providers\Resgrid.Providers.ApiClient\Resgrid.Providers.ApiClient.csproj">
+      <Project>{7aa51788-4951-4ec0-8feb-8381200600c4}</Project>
+      <Name>Resgrid.Providers.ApiClient</Name>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Import Project="..\packages\Accord.3.8.0\build\Accord.targets" Condition="Exists('..\packages\Accord.3.8.0\build\Accord.targets')" />
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">

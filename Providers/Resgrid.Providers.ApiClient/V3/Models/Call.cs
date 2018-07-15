@@ -42,5 +42,6 @@ namespace Resgrid.Providers.ApiClient.V3.Models
 	    public bool Public { get; set; }
 	    public string ExternalIdentifier { get; set; }
 		public string ReferenceNumber { get; set; }
+		public List<string> GroupCodesToDispatch { get; set; }
 	}
 }

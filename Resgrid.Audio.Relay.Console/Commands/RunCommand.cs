@@ -6,6 +6,7 @@ using Newtonsoft.Json;
 using Resgrid.Audio.Core;
 using Resgrid.Audio.Core.Model;
 using Resgrid.Audio.Relay.Console.Args;
+using Resgrid.Providers.ApiClient.V3;
 
 namespace Resgrid.Audio.Relay.Console.Commands
 {
@@ -35,6 +36,8 @@ namespace Resgrid.Audio.Relay.Console.Commands
 
 			System.Console.WriteLine("Loading Settings");
 			Config config = LoadSettingsFromFile();
+
+			ResgridV3ApiClient.Init(config.ApiUrl, config.Username, config.Password);
 
 			System.Console.WriteLine($"Config Loaded with {config.Watchers.Count} watchers");
 

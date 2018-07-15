@@ -16,7 +16,7 @@ namespace Resgrid.Providers.ApiClient.V3
 		private static DateTime _tokenExpiry;
 		private const string _baseApiUrl = "/api/v3/";
 
-		public ResgridV3ApiClient(string baseUrl, string userName, string password)
+		public static void Init(string baseUrl, string userName, string password)
 		{
 			_client = HttpClientFactory.Create();
 			_client.BaseAddress = new Uri(baseUrl);

@@ -91,6 +91,10 @@
     <EmbeddedResource Include="Views\Devices.template" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Providers\Resgrid.Providers.ApiClient\Resgrid.Providers.ApiClient.csproj">
+      <Project>{7aa51788-4951-4ec0-8feb-8381200600c4}</Project>
+      <Name>Resgrid.Providers.ApiClient</Name>
+    </ProjectReference>
     <ProjectReference Include="..\Resgrid.Audio.Core\Resgrid.Audio.Core.csproj">
       <Project>{64d892bf-42a5-40b6-93a4-e9ade0774abf}</Project>
       <Name>Resgrid.Audio.Core</Name>

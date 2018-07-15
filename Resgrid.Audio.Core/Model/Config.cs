@@ -9,6 +9,7 @@ namespace Resgrid.Audio.Core.Model
 		public string ApiUrl { get; set; }
 		public string Username { get; set; }
 		public string Password { get; set; }
+		public bool Multiple { get; set; }
 		public List<Watcher> Watchers { get; set; }
 	}
 }

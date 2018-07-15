@@ -1,6 +1,8 @@
 ﻿using System;
-using System.Net.Http;
+using System.Collections.Generic;
 using Resgrid.Audio.Core.Model;
+using Resgrid.Providers.ApiClient.V3;
+using Resgrid.Providers.ApiClient.V3.Models;
 
 namespace Resgrid.Audio.Core
 {
@@ -23,7 +25,33 @@ namespace Resgrid.Audio.Core
 
 		private void _audioProcessor_TriggerProcessingFinished(object sender, Events.TriggerProcessedEventArgs e)
 		{
-			
+			Call newCall = new Call();
+			newCall.Name = $"Audio Import {DateTime.Now.ToString("g")}";
+			newCall.Priority = (int)CallPriority.Medium;
+			newCall.NatureOfCall = $"Audio import from a radio dispatch. Listen to attached audio for call information.";
+			newCall.Notes = $"Audio import from a radio dispatch. Listen to attached audio for call information. Call was created on {DateTime.Now.ToString("F")}.";
+			newCall.GroupCodesToDispatch = new List<string>();
+			newCall.GroupCodesToDispatch.Add(e.Watcher.Code);
+
+			var additionalCodes = e.Watcher.GetAdditionalCodes();
+			if (additionalCodes != null && additionalCodes.Count > 0)
+			{
+				foreach (var code in additionalCodes)
+				{
+					newCall.GroupCodesToDispatch.Add(code);
+				}
+			}
+
+			newCall.Attachments = new List<CallAttachment>();
+			newCall.Attachments.Add(new CallAttachment()
+			{
+				CallAttachmentType = (int)CallAttachmentTypes.DispatchAudio,
+				FileName = $"Relay_{DateTime.Now.ToString("s")}",
+				Timestamp = DateTime.UtcNow,
+				Data = e.Watcher.GetBuffer()
+			});
+
+			var savedCall = CallsApi.AddNewCall(newCall).Result;
 		}
 	}
 }

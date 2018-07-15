@@ -4,6 +4,7 @@
   "ApiUrl": "https://api.resgrid.com",
   "Username": "TEST",
   "Password": "TEST",
+  "Multiple": false,
   "Watchers": [
     {
       "Name": "Station 2",
