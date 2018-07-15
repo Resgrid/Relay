@@ -1,7 +1,9 @@
 {
-  "InputDevice": 1,
+  "InputDevice": 0,
+  "AudioLength": 30,
   "ApiUrl": "https://api.resgrid.com",
-  "ApiCode": "TEST",
+  "Username": "TEST",
+  "Password": "TEST",
   "Watchers": [
     {
       "Name": "Station 2",

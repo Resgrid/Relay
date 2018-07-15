@@ -10,7 +10,8 @@ namespace Resgrid.Audio.Relay.Console.Data
 		{
 			Config config = new Config();
 			config.ApiUrl = "https://api.resgrid.com";
-			config.ApiCode = "TEST";
+			config.Username = "TEST";
+			config.Password = "TEST";
 			config.InputDevice = 0;
 
 			config.Watchers = new List<Watcher>();

@@ -11,6 +11,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Audio.Relay.Console
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Audio.Tests", "Resgrid.Audio.Tests\Resgrid.Audio.Tests.csproj", "{00380D66-9F9D-4C3F-83EF-CD46FAC4AFCF}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Providers", "Providers", "{75122A69-C1CD-47A0-8941-4849ECF3F996}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Providers.ApiClient", "Providers\Resgrid.Providers.ApiClient\Resgrid.Providers.ApiClient.csproj", "{3C20FB6C-7113-494B-A2CF-573C11DDE795}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -33,9 +37,16 @@ Global
 		{00380D66-9F9D-4C3F-83EF-CD46FAC4AFCF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{00380D66-9F9D-4C3F-83EF-CD46FAC4AFCF}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{00380D66-9F9D-4C3F-83EF-CD46FAC4AFCF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3C20FB6C-7113-494B-A2CF-573C11DDE795}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3C20FB6C-7113-494B-A2CF-573C11DDE795}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3C20FB6C-7113-494B-A2CF-573C11DDE795}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3C20FB6C-7113-494B-A2CF-573C11DDE795}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{3C20FB6C-7113-494B-A2CF-573C11DDE795} = {75122A69-C1CD-47A0-8941-4849ECF3F996}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {B21E1951-25A4-4C32-ACD8-F88BFC714B5A}

@@ -21,6 +21,12 @@ namespace Resgrid.Audio.Core.Model
 		public int Eval { get; set; }
 		public List<Trigger> Triggers { get; set; }
 
+		[Newtonsoft.Json.JsonIgnore]
+		public DateTime TriggerFiredTimestamp { get; set; }
+
+		[Newtonsoft.Json.JsonIgnore]
+		public DateTime LastCheckedTimestamp { get; set; }
+
 		public Guid Id
 		{
 			get
