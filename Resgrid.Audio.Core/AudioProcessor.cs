@@ -163,7 +163,7 @@ namespace Resgrid.Audio.Core
 			{
 				if (_startedWatchers.Count > 0 && !_config.Multiple)
 				{
-					_startedWatchers.First().Value.AddAdditionalCode(watcher.Code);
+					_startedWatchers.First().Value.AddAdditionalWatcher(watcher);
 				}
 				else if (!_startedWatchers.ContainsKey(watcher.Id))
 				{

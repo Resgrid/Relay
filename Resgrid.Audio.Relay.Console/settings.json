@@ -12,6 +12,7 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
+      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 524.0,
@@ -29,6 +30,7 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
+      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 1084.0,
@@ -46,6 +48,7 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
+      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 881.0,
@@ -63,6 +66,7 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
+      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 645.0,
@@ -80,6 +84,7 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
+      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 384.0,
@@ -97,6 +102,7 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
+      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 346.0,
@@ -114,6 +120,7 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
+      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 881.0,
@@ -131,6 +138,7 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
+      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 426.0,

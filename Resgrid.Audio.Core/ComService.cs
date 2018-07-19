@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using Resgrid.Audio.Core.Events;
 using Resgrid.Audio.Core.Model;
 using Resgrid.Providers.ApiClient.V3;
 using Resgrid.Providers.ApiClient.V3.Models;
@@ -33,14 +34,20 @@ namespace Resgrid.Audio.Core
 			newCall.GroupCodesToDispatch = new List<string>();
 			newCall.GroupCodesToDispatch.Add(e.Watcher.Code);
 
-			var additionalCodes = e.Watcher.GetAdditionalCodes();
+			var additionalCodes = e.Watcher.GetAdditionalWatchers();
 			if (additionalCodes != null && additionalCodes.Count > 0)
 			{
 				foreach (var code in additionalCodes)
 				{
-					newCall.GroupCodesToDispatch.Add(code);
+					newCall.GroupCodesToDispatch.Add(code.Code);
+
+					if (code.Type == 1)
+						newCall.AllCall = true;
 				}
 			}
+
+			if (e.Watcher.Type == 1)
+				newCall.AllCall = true;
 
 			newCall.Attachments = new List<CallAttachment>();
 			newCall.Attachments.Add(new CallAttachment()
