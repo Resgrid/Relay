@@ -93,9 +93,8 @@ namespace Resgrid.Audio.Tests
 			var trigger = new Trigger();
 			trigger.Frequency1 = 645.7;
 			trigger.Frequency2 = 716.10;
-			trigger.Tolerance = 10;
 			trigger.Count = 2;
-			trigger.Time = .8;
+			trigger.Time = 1;
 
 			//wavFile.FFT(false);
 

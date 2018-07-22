@@ -2,8 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
-using System.Timers;
 using DtmfDetection;
 using DtmfDetection.NAudio;
 using NAudio.Wave;
@@ -11,11 +9,22 @@ using Resgrid.Audio.Core.Events;
 
 namespace Resgrid.Audio.Core
 {
+	public interface IAudioEvaluator
+	{
+		event EventHandler<EvaluatorEventArgs> EvaluatorStarted;
+		event EventHandler<EvaluatorEventArgs> EvaluatorFinished;
+		event EventHandler<WatcherEventArgs> WatcherTriggered;
+
+		void Init(Config config);
+		void Start(IWaveIn waveIn);
+		void ClearTones();
+	}
+
 	public class AudioEvaluator: IAudioEvaluator
 	{
-		private List<Watcher> _watchers;
+		private Config _config;
 		private List<DtmfTone> _dtmfTone;
-		private static List<DtmfTone> _finishedTones;
+		private static List<DtmfToneEnd> _finishedTones;
 
 		public event EventHandler<EvaluatorEventArgs> EvaluatorStarted;
 		public event EventHandler<EvaluatorEventArgs> EvaluatorFinished;
@@ -23,21 +32,22 @@ namespace Resgrid.Audio.Core
 
 		public AudioEvaluator()
 		{
-			_watchers = new List<Watcher>();
 			_dtmfTone = new List<DtmfTone>();
-			_finishedTones = new List<DtmfTone>();
+			_finishedTones = new List<DtmfToneEnd>();
 		}
 
-		public void Init(List<Watcher> watchers)
+		public void Init(Config config)
 		{
-			_watchers = watchers;
+			_config = config;
 
-			if (_watchers != null && _watchers.Any())
+			if (_config.Watchers != null && _config.Watchers.Any())
 			{
 				PureTones.ClearTones();
 				DtmfClassification.ClearAllTones();
 
-				foreach (var watcher in watchers)
+				var activeWatchers = config.Watchers.Where(x => x.Active).ToList();
+
+				foreach (var watcher in activeWatchers)
 				{ 
 					if (watcher.Triggers != null && watcher.Triggers.Any())
 					{
@@ -47,12 +57,14 @@ namespace Resgrid.Audio.Core
 							{
 								if (trigger.Count >= 1)
 								{
-									trigger.Tones.Add(AddTone((int) trigger.Frequency1));
+									var addedTone = AddTone((int) trigger.Frequency1);
+									trigger.Tones.Add(addedTone);
 								}
 
 								if (trigger.Count >= 2)
 								{
-									trigger.Tones.Add(AddTone((int) trigger.Frequency1));
+									var addedTone = AddTone((int)trigger.Frequency2);
+									trigger.Tones.Add(addedTone);
 								}
 							}
 						}
@@ -74,9 +86,17 @@ namespace Resgrid.Audio.Core
 		//		(channel, start, tone) => detectedTones.Enqueue(new DtmfOccurence(tone, channel, start, waveFile.CurrentTime - start)));
 		//}
 
+		public void ClearTones()
+		{
+			_finishedTones.Clear();
+		}
+
 		public void Start(IWaveIn waveIn)
 		{
-			var analyzer = new LiveAudioDtmfAnalyzer(waveIn);
+			var config = new DetectorConfig();
+			config.PowerThreshold = _config.Tolerance;
+
+			var analyzer = new LiveAudioDtmfAnalyzer(config, waveIn);
 
 			//analyzer.DtmfToneStarted += start => _log.Add($"{start.DtmfTone.Key} key started on {start.Position.TimeOfDay} (channel {start.Channel})");
 			//analyzer.DtmfToneStopped += end => _log.Add($"{end.DtmfTone.Key} key stopped after {end.Duration.TotalSeconds}s (channel {end.Channel})");
@@ -90,7 +110,20 @@ namespace Resgrid.Audio.Core
 			{
 				EvaluatorFinished?.Invoke(this, new EvaluatorEventArgs(null, end, DateTime.UtcNow));
 
-				_finishedTones.Add(end.DtmfTone);
+				if (end.Duration > new TimeSpan(0, 0, 0, 0, 0))
+				{
+					var existingTone = _finishedTones.FirstOrDefault(x => x.DtmfTone.HighTone == end.DtmfTone.HighTone && end.TimeStamp.Subtract(x.TimeStamp).Milliseconds < 150);
+
+					if (existingTone != null)
+					{
+						existingTone.Duration += end.Duration;
+					}
+					else
+					{
+						_finishedTones.Add(end);
+					}
+				}
+
 				CheckFinishedTonesForTriggers();
 			};
 
@@ -115,27 +148,29 @@ namespace Resgrid.Audio.Core
 
 		private void CheckFinishedTonesForTriggers()
 		{
-			if (_watchers != null && _watchers.Any())
+			if (_config.Watchers != null && _config.Watchers.Any() && _config.Watchers.Any(x => x.Active))
 			{
 				if (_finishedTones != null && _finishedTones.Any())
 				{
-					foreach (var watcher in _watchers)
+					var activeWatchers = _config.Watchers.Where(x => x.Active).ToList();
+
+					foreach (var watcher in activeWatchers)
 					{
-						List<Tuple<Trigger, List<DtmfTone>>> triggers = watcher.DidTriggerProcess(_finishedTones);
+						List<Tuple<Trigger, List<DtmfToneEnd>>> triggers = watcher.DidTriggerProcess(_finishedTones);
 
 						if (triggers != null && triggers.Any())
 						{
 							var tones = triggers.SelectMany(x => x.Item2).Distinct().ToList();
+							_finishedTones.RemoveAll(x => tones.Select(y => y.Id).ToList().Contains(x.Id));
 
-							foreach (var tone in tones)
-							{
-								_finishedTones.Remove(tone);
-							}
-
-							WatcherTriggered?.Invoke(this, new WatcherEventArgs(watcher, triggers.Select(x => x.Item1).ToList(), tones, DateTime.UtcNow));
+							WatcherTriggered?.Invoke(this, new WatcherEventArgs(watcher, triggers.Select(x => x.Item1).ToList(), tones.Select(x => x.DtmfTone).ToList(), DateTime.UtcNow));
 						}
 					}
 				}
+			}
+			else
+			{
+				_finishedTones.Clear();
 			}
 		}
 	}

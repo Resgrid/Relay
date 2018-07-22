@@ -10,6 +10,8 @@ namespace Resgrid.Audio.Core.Model
 		public string Username { get; set; }
 		public string Password { get; set; }
 		public bool Multiple { get; set; }
+		public double Tolerance { get; set; }
+		public sbyte Threshold { get; set; }
 		public List<Watcher> Watchers { get; set; }
 	}
 }

@@ -1,13 +1,5 @@
-﻿using System;
-using System.IO;
-using System.Threading;
-using Consolas.Core;
+﻿using Consolas.Core;
 using Consolas.Mustache;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using Resgrid.Audio.Core;
-using Resgrid.Audio.Core.Model;
-using Resgrid.Audio.Relay.Console.Data;
 using Resgrid.Audio.Relay.Console.Models;
 using SimpleInjector;
 

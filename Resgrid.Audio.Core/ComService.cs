@@ -24,6 +24,23 @@ namespace Resgrid.Audio.Core
 			_audioProcessor.TriggerProcessingFinished += _audioProcessor_TriggerProcessingFinished;
 		}
 
+		public bool IsConnectionValid()
+		{
+			try
+			{
+				var result = HealthApi.GetApiHealth().Result;
+
+				if (result != null && result.DatabaseOnline)
+					return true;
+			}
+			catch (Exception e)
+			{
+				return false;
+			}
+
+			return false;
+		}
+
 		private void _audioProcessor_TriggerProcessingFinished(object sender, Events.TriggerProcessedEventArgs e)
 		{
 			Call newCall = new Call();

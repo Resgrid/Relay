@@ -1,10 +1,12 @@
 {
   "InputDevice": 0,
-  "AudioLength": 30,
+  "AudioLength": 60,
   "ApiUrl": "https://api.resgrid.com",
   "Username": "TEST",
   "Password": "TEST",
   "Multiple": false,
+  "Tolerance": 100,
+  "Threshold": -40,
   "Watchers": [
     {
       "Name": "Station 2",
@@ -12,13 +14,11 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
-      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 524.0,
           "Frequency2": 794.0,
-          "Tolerance": 0,
-          "Time": 0.0,
+          "Time": 500,
           "Count": 2
         }
       ],
@@ -30,13 +30,11 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
-      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 1084.0,
           "Frequency2": 794.0,
-          "Tolerance": 0,
-          "Time": 0.0,
+          "Time": 500,
           "Count": 2
         }
       ],
@@ -48,13 +46,11 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
-      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 881.0,
           "Frequency2": 1084.0,
-          "Tolerance": 0,
-          "Time": 0.0,
+          "Time": 500,
           "Count": 2
         }
       ],
@@ -66,13 +62,11 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
-      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 645.0,
           "Frequency2": 716.0,
-          "Tolerance": 0,
-          "Time": 0.0,
+          "Time": 500,
           "Count": 2
         }
       ],
@@ -84,13 +78,11 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
-      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 384.0,
           "Frequency2": 881.0,
-          "Tolerance": 0,
-          "Time": 0.0,
+          "Time": 500,
           "Count": 2
         }
       ],
@@ -102,13 +94,11 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
-      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 346.0,
           "Frequency2": 384.0,
-          "Tolerance": 0,
-          "Time": 0.0,
+          "Time": 500,
           "Count": 2
         }
       ],
@@ -120,13 +110,11 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
-      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 881.0,
           "Frequency2": 346.0,
-          "Tolerance": 0,
-          "Time": 0.0,
+          "Time": 500,
           "Count": 2
         }
       ],
@@ -138,13 +126,11 @@
       "Code": null,
       "Type": 0,
       "Eval": 0,
-      "AllCall": false,
       "Triggers": [
         {
           "Frequency1": 426.0,
           "Frequency2": 582.0,
-          "Tolerance": 0,
-          "Time": 0.0,
+          "Time": 500,
           "Count": 2
         }
       ],

@@ -73,13 +73,10 @@
     <Compile Include="Events\EvaluatorEventArgs.cs" />
     <Compile Include="Events\WatcherEventArgs.cs" />
     <Compile Include="Events\TriggerProcessedEventArgs.cs" />
-    <Compile Include="IAudioProcessor.cs" />
     <Compile Include="AudioEvaluator.cs" />
     <Compile Include="AudioProcessor.cs" />
     <Compile Include="Inputs\AudioRecorder.cs" />
     <Compile Include="Functions.cs" />
-    <Compile Include="IAudioEvaluator.cs" />
-    <Compile Include="IAudioRecorder.cs" />
     <Compile Include="Log.cs" />
     <Compile Include="Model\Config.cs" />
     <Compile Include="Model\EvalTypes.cs" />

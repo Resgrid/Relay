@@ -34,23 +34,19 @@ namespace Resgrid.Audio.Core
 
 		public void OnDataAvailable(byte[] buffer, int bytesRecorded)
 		{
-			if (DataAvailable != null)
-			{
-				DataAvailable(this, new DataAvailableArgs(buffer, bytesRecorded));
-			}
+			DataAvailable?.Invoke(this, new DataAvailableArgs(buffer, bytesRecorded));
 		}
 
 		public void Add(float value)
 		{
 			maxValue = Math.Max(maxValue, value);
 			minValue = Math.Min(minValue, value);
+			double dB = 20 * Math.Log10(Math.Abs(value));
+
 			count++;
 			if (count >= NotificationCount && NotificationCount > 0)
 			{
-				if (MaximumCalculated != null)
-				{
-					MaximumCalculated(this, new MaxSampleEventArgs(minValue, maxValue));
-				}
+				MaximumCalculated?.Invoke(this, new MaxSampleEventArgs(minValue, maxValue, dB));
 				Reset();
 			}
 		}
@@ -81,13 +77,15 @@ namespace Resgrid.Audio.Core
 	public class MaxSampleEventArgs : EventArgs
 	{
 		[DebuggerStepThrough]
-		public MaxSampleEventArgs(float minValue, float maxValue)
+		public MaxSampleEventArgs(float minValue, float maxValue, double db)
 		{
 			MaxSample = maxValue;
 			MinSample = minValue;
+			Db = db;
 		}
 		public float MaxSample { get; private set; }
 		public float MinSample { get; private set; }
+		public double Db { get; private set; }
 	}
 
 	public class WaveformEventArgs : EventArgs

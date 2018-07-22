@@ -53,6 +53,8 @@
     <Compile Include="V3\Models\CallAttachmentTypes.cs" />
     <Compile Include="V3\Models\CallDispatchGroup.cs" />
     <Compile Include="V3\Models\CallPriority.cs" />
+    <Compile Include="V3\HealthApi.cs" />
+    <Compile Include="V3\Models\HealthResult.cs" />
     <Compile Include="V3\Models\ValidateResult.cs" />
     <Compile Include="V3\ResgridV3ApiClient.cs" />
   </ItemGroup>

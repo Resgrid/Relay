@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using DtmfDetection;
+using DtmfDetection.NAudio;
 
 namespace Resgrid.Audio.Core.Model
 {
@@ -92,9 +93,9 @@ namespace Resgrid.Audio.Core.Model
 			return _additionalWatchers;
 		}
 
-		public List<Tuple<Trigger, List<DtmfTone>>> DidTriggerProcess(List<DtmfTone> tones)
+		public List<Tuple<Trigger, List<DtmfToneEnd>>> DidTriggerProcess(List<DtmfToneEnd> tones)
 		{
-			List<Tuple<Trigger, List<DtmfTone>>> triggers = new List<Tuple<Trigger, List<DtmfTone>>>();
+			List<Tuple<Trigger, List<DtmfToneEnd>>> triggers = new List<Tuple<Trigger, List<DtmfToneEnd>>>();
 
 			if (tones != null && tones.Any())
 			{
@@ -102,9 +103,9 @@ namespace Resgrid.Audio.Core.Model
 				{
 					foreach (var trigger in Triggers)
 					{
-						List<DtmfTone> matchedTones = trigger.GetMatchingTones(tones);
+						List<DtmfToneEnd> matchedTones = trigger.GetMatchingTones(tones);
 						if (matchedTones != null && matchedTones.Any())
-							triggers.Add(new Tuple<Trigger, List<DtmfTone>>(trigger, matchedTones));
+							triggers.Add(new Tuple<Trigger, List<DtmfToneEnd>>(trigger, matchedTones));
 					}
 				}
 			}

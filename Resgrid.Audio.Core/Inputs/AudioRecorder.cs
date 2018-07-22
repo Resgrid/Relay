@@ -7,10 +7,23 @@ using System.Linq;
 
 namespace Resgrid.Audio.Core
 {
+	public interface IAudioRecorder
+	{
+		void BeginMonitoring(int recordingDevice);
+		void BeginRecording(string path);
+		void Stop();
+		RecordingState RecordingState { get; }
+		SampleAggregator SampleAggregator { get; }
+		event EventHandler Stopped;
+		WaveFormat RecordingFormat { get; set; }
+		TimeSpan RecordedTime { get; }
+		void SetSampleAggregator(SampleAggregator sampleAggregator);
+	}
+
 	public class AudioRecorder : IAudioRecorder
 	{
 		WaveInEvent waveIn;
-		private readonly SampleAggregator sampleAggregator;
+		private SampleAggregator _sampleAggregator;
 		double desiredVolume = 100;
 		RecordingState recordingState;
 		WaveFileWriter writer;
@@ -27,8 +40,6 @@ namespace Resgrid.Audio.Core
 		public AudioRecorder(AudioEvaluator audioEvaluator)
 		{
 			_audioEvaluator = audioEvaluator;
-			sampleAggregator = new SampleAggregator();
-			RecordingFormat = new WaveFormat(RATE, 1);
 		}
 
 		public WaveFormat RecordingFormat
@@ -40,8 +51,14 @@ namespace Resgrid.Audio.Core
 			set
 			{
 				recordingFormat = value;
-				sampleAggregator.NotificationCount = value.SampleRate / 10;
+				_sampleAggregator.NotificationCount = value.SampleRate / 10;
 			}
+		}
+
+		public void SetSampleAggregator(SampleAggregator sampleAggregator)
+		{
+			_sampleAggregator = sampleAggregator;
+			RecordingFormat = new WaveFormat(RATE, 1);
 		}
 
 		public void BeginMonitoring(int recordingDevice)
@@ -58,15 +75,17 @@ namespace Resgrid.Audio.Core
 			waveIn.WaveFormat = recordingFormat;
 			//wi.WaveFormat = new NAudio.Wave.WaveFormat(RATE, 1);
 			//waveIn.BufferMilliseconds = BUFFERSIZE; //(int)((double)BUFFERSIZE / (double)RATE * 1000.0);
-			//waveIn.BufferMilliseconds = (int)((double)BUFFERSIZE / (double)RATE * 1000.0);
-			waveIn.BufferMilliseconds = 5120;
+			waveIn.BufferMilliseconds = (int)((double)BUFFERSIZE / (double)RATE * 1000.0);
+			//waveIn.BufferMilliseconds = 5120;
 
 			bwp = new BufferedWaveProvider(waveIn.WaveFormat);
 			bwp.BufferLength = BUFFERSIZE * 2;
 			bwp.DiscardOnBufferOverflow = true;
 
-			_audioEvaluator.Start(waveIn);
-			//waveIn.StartRecording();
+			waveIn.StartRecording();
+			//_audioEvaluator.Start(waveIn);
+			_audioEvaluator.Start(new WaveInEvent() {DeviceNumber = recordingDevice});
+
 			recordingState = RecordingState.Monitoring;
 		}
 
@@ -96,7 +115,7 @@ namespace Resgrid.Audio.Core
 			}
 		}
 
-		public SampleAggregator SampleAggregator => sampleAggregator;
+		public SampleAggregator SampleAggregator => _sampleAggregator;
 
 		public RecordingState RecordingState => recordingState;
 
@@ -120,21 +139,20 @@ namespace Resgrid.Audio.Core
 			int bytesRecorded = e.BytesRecorded;
 			//WriteToFile(buffer, bytesRecorded);
 
-			sampleAggregator.OnDataAvailable(buffer, bytesRecorded);
+			_sampleAggregator.OnDataAvailable(buffer, bytesRecorded);
 
 			for (int index = 0; index < e.BytesRecorded; index += 2)
 			{
 				short sample = (short)((buffer[index + 1] << 8) | buffer[index + 0]);
 				float sample32 = sample / 32768f;
-				sampleAggregator.Add(sample32);
-
+				_sampleAggregator.Add(sample32);
 			}
 
 			int frameSize = BUFFERSIZE;
 			byte[] frames = new byte[frameSize];
 
 			bwp.Read(frames, 0, frameSize);
-			sampleAggregator.Calculate(frames, frameSize);
+			_sampleAggregator.Calculate(frames, frameSize);
 
 
 		}

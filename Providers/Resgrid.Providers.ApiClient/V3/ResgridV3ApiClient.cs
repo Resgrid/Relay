@@ -48,6 +48,8 @@ namespace Resgrid.Providers.ApiClient.V3
 				_token = result.Tkn;
 				_tokenExpiry = DateTime.Parse(result.Txd);
 
+				_client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", _token);
+
 				return true;
 			};
 

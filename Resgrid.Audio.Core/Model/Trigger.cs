@@ -1,6 +1,8 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using DtmfDetection;
+using DtmfDetection.NAudio;
 using Newtonsoft.Json;
 
 namespace Resgrid.Audio.Core.Model
@@ -9,8 +11,7 @@ namespace Resgrid.Audio.Core.Model
 	{
 		public double Frequency1 { get; set; }
 		public double Frequency2 { get; set; }
-		public int Tolerance { get; set; }
-		public double Time { get; set; }
+		public int Time { get; set; }
 		public int Count { get; set; }
 
 		[JsonIgnore]
@@ -21,36 +22,33 @@ namespace Resgrid.Audio.Core.Model
 			Tones = new List<DtmfTone>();
 		}
 
-		public List<DtmfTone> GetMatchingTones(List<DtmfTone> tones)
+		public List<DtmfToneEnd> GetMatchingTones(List<DtmfToneEnd> tones)
 		{
-			List<DtmfTone> matchingTones = new List<DtmfTone>();
+			List<DtmfToneEnd> matchingTones = new List<DtmfToneEnd>();
 
 			if (tones != null && tones.Any())
 			{
-				foreach (var tone in tones)
+				var firstTone = tones.FirstOrDefault(x => x.DtmfTone.HighTone == Frequency1 && x.Duration >= new TimeSpan(0, 0, 0, 0, Time));
+
+				if (firstTone == null)
+					return null;
+
+				if (Count == 1)
 				{
-					if (Frequency1 == tone.HighTone)
-						if (!matchingTones.Contains(tone))
-							matchingTones.Add(tone);
+					if (matchingTones.Count() == 1)
+						return new List<DtmfToneEnd>() { firstTone };
+				}
+				else if (Count == 2)
+				{
+					var secondTone = tones.FirstOrDefault(x => x.DtmfTone.HighTone == Frequency2 && x.Duration >= new TimeSpan(0, 0, 0, 0, Time) &&
+					                 (x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds <= 500 || x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds >= -500));
 
-					if (Frequency2 == tone.HighTone)
-						if (!matchingTones.Contains(tone))
-							matchingTones.Add(tone);
-
-					if (Count == 1)
-					{
-						if (matchingTones.Count() == 1)
-							return matchingTones;
-					}
-					else if (Count == 2)
-					{
-						if (matchingTones.Count() == 2)
-							return matchingTones;
-					}
+					if (secondTone != null)
+						return new List<DtmfToneEnd>() { firstTone, secondTone };
 				}
 			}
 
-			return matchingTones;
+			return null;
 		}
 	}
 }
