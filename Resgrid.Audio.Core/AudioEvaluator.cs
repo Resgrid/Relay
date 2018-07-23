@@ -112,7 +112,8 @@ namespace Resgrid.Audio.Core
 
 				if (end.Duration > new TimeSpan(0, 0, 0, 0, 0))
 				{
-					var existingTone = _finishedTones.FirstOrDefault(x => x.DtmfTone.HighTone == end.DtmfTone.HighTone && end.TimeStamp.Subtract(x.TimeStamp).Milliseconds < 150);
+					var existingTone = _finishedTones.FirstOrDefault(x => x.DtmfTone.HighTone == end.DtmfTone.HighTone &&
+					                   (end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds <= 250 || end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds >= -250));
 
 					if (existingTone != null)
 					{

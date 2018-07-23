@@ -1,6 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using Resgrid.Audio.Core.Events;
+using System.Text;
 using Resgrid.Audio.Core.Model;
 using Resgrid.Providers.ApiClient.V3;
 using Resgrid.Providers.ApiClient.V3.Models;
@@ -47,21 +47,29 @@ namespace Resgrid.Audio.Core
 			newCall.Name = $"Audio Import {DateTime.Now.ToString("g")}";
 			newCall.Priority = (int)CallPriority.Medium;
 			newCall.NatureOfCall = $"Audio import from a radio dispatch. Listen to attached audio for call information.";
-			newCall.Notes = $"Audio import from a radio dispatch. Listen to attached audio for call information. Call was created on {DateTime.Now.ToString("F")}.";
+			StringBuilder watchersToned = new StringBuilder();
+
+			watchersToned.Append($"{e.Watcher.Name} ");
+
 			newCall.GroupCodesToDispatch = new List<string>();
 			newCall.GroupCodesToDispatch.Add(e.Watcher.Code);
+			newCall.CallSource = 3;
+			newCall.SourceIdentifier = e.Watcher.Id.ToString();
 
 			var additionalCodes = e.Watcher.GetAdditionalWatchers();
 			if (additionalCodes != null && additionalCodes.Count > 0)
 			{
 				foreach (var code in additionalCodes)
 				{
+					watchersToned.Append($"{code.Name} ");
 					newCall.GroupCodesToDispatch.Add(code.Code);
 
 					if (code.Type == 1)
 						newCall.AllCall = true;
 				}
 			}
+
+			newCall.Notes = $"Audio import from a radio dispatch. Listen to attached audio for call information. Call was created on {DateTime.Now.ToString("F")}. Was an AllCall: {newCall.AllCall}. Watchers Toned: {watchersToned}";
 
 			if (e.Watcher.Type == 1)
 				newCall.AllCall = true;

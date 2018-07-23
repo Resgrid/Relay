@@ -17,6 +17,7 @@ namespace Resgrid.Audio.Core
 	public class AudioProcessor : IAudioProcessor
 	{
 		private static Object _lock = new Object();
+		private static bool _timerProcessing = false;
 
 		private const int BUFFER_SIZE = 26400000; // 5 Minute Buffer, 1 second = 88,000 array elements
 		private const int ONE_SEC = 88000;
@@ -53,43 +54,52 @@ namespace Resgrid.Audio.Core
 
 		private void _timer_Elapsed(object sender, ElapsedEventArgs e)
 		{
-			// This timer is the first pass, _sampleAggregator_DataAvailable looking for silence is a better long term pattern.
-			if (_startedWatchers != null && _startedWatchers.Any())
+			if (!_timerProcessing)
 			{
-				List<Guid> watchersToRemove = new List<Guid>();
+				_timerProcessing = true;
 
-				lock (_lock)
+				// This timer is the first pass, _sampleAggregator_DataAvailable looking for silence is a better long term pattern.
+				if (_startedWatchers != null && _startedWatchers.Any())
 				{
-					foreach (var startedWatcher in _startedWatchers)
-					{
-						var diffInSeconds = (DateTime.UtcNow - startedWatcher.Value.LastCheckedTimestamp).TotalSeconds;
-
-						lock (_lock)
-						{
-							startedWatcher.Value.AddAudio(_buffer.Take((int) diffInSeconds * ONE_SEC).ToArray());
-						}
-
-						startedWatcher.Value.LastCheckedTimestamp = DateTime.UtcNow;
-
-						if ((DateTime.UtcNow - startedWatcher.Value.TriggerFiredTimestamp).TotalSeconds >= _config.AudioLength)
-						{
-							watchersToRemove.Add(startedWatcher.Value.Id);
-						}
-					}
-				}
-
-				foreach (var id in watchersToRemove)
-				{
-					var watcher = _startedWatchers[id];
-					TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow));
+					List<Guid> watchersToRemove = new List<Guid>();
 
 					lock (_lock)
 					{
-						_startedWatchers.Remove(id);
-					}
+						foreach (var startedWatcher in _startedWatchers)
+						{
+							var diffInSeconds = (DateTime.UtcNow - startedWatcher.Value.LastCheckedTimestamp).TotalSeconds;
 
-					_audioEvaluator.ClearTones();
+							lock (_lock)
+							{
+								startedWatcher.Value.AddAudio(_buffer.Take((int) diffInSeconds * ONE_SEC).ToArray());
+							}
+
+							startedWatcher.Value.LastCheckedTimestamp = DateTime.UtcNow;
+
+							if ((DateTime.UtcNow - startedWatcher.Value.TriggerFiredTimestamp).TotalSeconds >= _config.AudioLength)
+							{
+								watchersToRemove.Add(startedWatcher.Value.Id);
+							}
+						}
+
+						if (watchersToRemove != null && watchersToRemove.Any())
+						{
+							foreach (var id in watchersToRemove)
+							{
+								var watcher = _startedWatchers[id];
+								TriggerProcessingFinished?.Invoke(this,
+									new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow));
+
+								_startedWatchers.Remove(id);
+							}
+
+							_audioEvaluator.ClearTones();
+							watchersToRemove.Clear();
+						}
+					}
 				}
+
+				_timerProcessing = false;
 			}
 		}
 
