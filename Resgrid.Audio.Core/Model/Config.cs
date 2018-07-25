@@ -12,6 +12,7 @@ namespace Resgrid.Audio.Core.Model
 		public bool Multiple { get; set; }
 		public double Tolerance { get; set; }
 		public sbyte Threshold { get; set; }
+		public bool Debug { get; set; }
 		public List<Watcher> Watchers { get; set; }
 	}
 }

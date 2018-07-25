@@ -1,13 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.IO;
-using System.Linq;
-using FluentAssertions;
 using NAudio.Wave;
 using NUnit.Framework;
 using Resgrid.Audio.Core;
 using Resgrid.Audio.Core.Model;
+using Serilog;
+using Serilog.Core;
 
 namespace Resgrid.Audio.Tests
 {
@@ -83,7 +81,11 @@ namespace Resgrid.Audio.Tests
 			//	testAudio1 = new List<byte>(buffer);
 			//}
 
-			var audioEvaluator = new AudioEvaluator();
+			Logger log = new LoggerConfiguration()
+				.MinimumLevel.Error()
+				.CreateLogger();
+
+			var audioEvaluator = new AudioEvaluator(log);
 
 			//if (testAudio1.Count() % 2 != 0)
 			//{

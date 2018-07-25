@@ -1,7 +1,6 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using Consolas.Core;
 using Newtonsoft.Json;
@@ -9,6 +8,8 @@ using Resgrid.Audio.Core;
 using Resgrid.Audio.Core.Model;
 using Resgrid.Audio.Relay.Console.Args;
 using Resgrid.Providers.ApiClient.V3;
+using Serilog;
+using Serilog.Core;
 
 namespace Resgrid.Audio.Relay.Console.Commands
 {
@@ -21,13 +22,36 @@ namespace Resgrid.Audio.Relay.Console.Commands
 
 		public string Execute(RunArgs args)
 		{
-			evaluator = new AudioEvaluator();
+			System.Console.WriteLine("Resgrid Audio");
+			System.Console.WriteLine("-----------------------------------------");
+
+			System.Console.WriteLine("Loading Settings");
+			Config config = LoadSettingsFromFile();
+
+			System.Console.WriteLine($"Listening for Dispatches on Device: {config.InputDevice}");
+
+			Logger log;
+
+			if (config.Debug)
+			{
+				log = new LoggerConfiguration()
+					.MinimumLevel.Debug()
+					.WriteTo.Console()
+					.CreateLogger();
+			}
+			else
+			{
+				log = new LoggerConfiguration()
+					.MinimumLevel.Error()
+					.WriteTo.Console()
+					.CreateLogger();
+			}
+
+			evaluator = new AudioEvaluator(log);
 			recorder = new AudioRecorder(evaluator);
 			processor = new AudioProcessor(recorder, evaluator);
 			com = new ComService(processor);
 
-			System.Console.WriteLine("Resgrid Audio");
-			System.Console.WriteLine("-----------------------------------------");
 
 			System.Console.WriteLine("Hooking into Events");
 			recorder.SampleAggregator.MaximumCalculated += SampleAggregator_MaximumCalculated;
@@ -37,9 +61,6 @@ namespace Resgrid.Audio.Relay.Console.Commands
 			processor.TriggerProcessingFinished += Processor_TriggerProcessingFinished;
 
 			evaluator.WatcherTriggered += Evaluator_WatcherTriggered;
-
-			System.Console.WriteLine("Loading Settings");
-			Config config = LoadSettingsFromFile();
 
 			ResgridV3ApiClient.Init(config.ApiUrl, config.Username, config.Password);
 

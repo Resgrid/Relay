@@ -6,6 +6,7 @@ using DtmfDetection;
 using DtmfDetection.NAudio;
 using NAudio.Wave;
 using Resgrid.Audio.Core.Events;
+using Serilog.Core;
 
 namespace Resgrid.Audio.Core
 {
@@ -22,6 +23,8 @@ namespace Resgrid.Audio.Core
 
 	public class AudioEvaluator: IAudioEvaluator
 	{
+		private readonly Logger _logger;
+
 		private Config _config;
 		private List<DtmfTone> _dtmfTone;
 		private static List<DtmfToneEnd> _finishedTones;
@@ -30,8 +33,10 @@ namespace Resgrid.Audio.Core
 		public event EventHandler<EvaluatorEventArgs> EvaluatorFinished;
 		public event EventHandler<WatcherEventArgs> WatcherTriggered;
 
-		public AudioEvaluator()
+		public AudioEvaluator(Logger logger)
 		{
+			_logger = logger;
+
 			_dtmfTone = new List<DtmfTone>();
 			_finishedTones = new List<DtmfToneEnd>();
 		}
@@ -88,6 +93,8 @@ namespace Resgrid.Audio.Core
 
 		public void ClearTones()
 		{
+			_logger.Debug("AudioEvaluator->Clearning Tones");
+
 			_finishedTones.Clear();
 		}
 
@@ -108,10 +115,19 @@ namespace Resgrid.Audio.Core
 
 			analyzer.DtmfToneStopped += end =>
 			{
+				_logger.Debug($"AudioEvaluator->DtmfToneStopped {end.TimeStamp.ToString("O")}");
+
 				EvaluatorFinished?.Invoke(this, new EvaluatorEventArgs(null, end, DateTime.UtcNow));
 
 				if (end.Duration > new TimeSpan(0, 0, 0, 0, 0))
 				{
+					_logger.Debug($"AudioEvaluator->Finished Tones: {_finishedTones.Count}");
+
+					foreach (var tone in _finishedTones)
+					{
+						_logger.Debug($"AudioEvaluator->Finished Tone: {tone.ToString()}");
+					}
+
 					var existingTone = _finishedTones.FirstOrDefault(x => x.DtmfTone.HighTone == end.DtmfTone.HighTone &&
 					                   (end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds <= 250 || end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds >= -250));
 

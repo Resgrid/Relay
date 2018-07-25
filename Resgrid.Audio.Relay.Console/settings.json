@@ -7,6 +7,7 @@
   "Multiple": false,
   "Tolerance": 100,
   "Threshold": -40,
+  "Debug":  true, 
   "Watchers": [
     {
       "Name": "Station 2",

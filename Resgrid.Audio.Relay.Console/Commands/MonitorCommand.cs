@@ -4,6 +4,8 @@ using Consolas.Core;
 using Resgrid.Audio.Core;
 using Resgrid.Audio.Core.Model;
 using Resgrid.Audio.Relay.Console.Args;
+using Serilog;
+using Serilog.Core;
 
 namespace Resgrid.Audio.Relay.Console.Commands
 {
@@ -15,7 +17,12 @@ namespace Resgrid.Audio.Relay.Console.Commands
 
 		public string Execute(MonitorArgs args)
 		{
-			evaluator = new AudioEvaluator();
+			Logger log = new LoggerConfiguration()
+				.MinimumLevel.Error()
+				.WriteTo.Console()
+				.CreateLogger();
+
+			evaluator = new AudioEvaluator(log);
 			recorder = new AudioRecorder(evaluator);
 			processor = new AudioProcessor(recorder, evaluator);
 
