@@ -122,7 +122,7 @@ Resgrid is a software as a service (SaaS) logistics, management and communicatio
   <tr>
     <td>Watchers</td>
     <td>
-      An Array of Watcher Objects
+      <a href="https://github.com/Resgrid/Relay#watcher-settings-values">An Array of Watcher Objects</a>
     </td>
   </tr>
 </table>
@@ -154,7 +154,7 @@ Resgrid is a software as a service (SaaS) logistics, management and communicatio
   <tr>
     <td>Code</td>
     <td>
-      Your department groups dispatch code. You get this value from the Stations & Groups section of the website, and it's the alphanumeric code in front of @groups.resgrid.com. Do not include anything other then the 6 character code.
+      Your department groups dispatch code. For a Type of 2 (Group) You get this value from the Stations & Groups section of the website, and it's the alphanumeric code in front of @groups.resgrid.com. For a Type of 1 (Department) you get this from the Calls Import Settings screen excluding @dispatch.resgrid.com. Do not include anything other then the 6 character code.
     </td>
   </tr>
   <tr>
@@ -164,15 +164,9 @@ Resgrid is a software as a service (SaaS) logistics, management and communicatio
     </td>
   </tr>
   <tr>
-    <td>Eval</td>
-    <td>
-      Unused, leave 0
-    </td>
-  </tr>
-  <tr>
     <td>Triggers</td>
     <td>
-      Array of triggers
+      <a href="https://github.com/Resgrid/Relay#triggers-settings-values">Array of triggers</a>
     </td>
   </tr>
 </table>
@@ -209,27 +203,9 @@ Resgrid is a software as a service (SaaS) logistics, management and communicatio
   </tr>
 </table>
 
-## Environment Setup ##
+## Installation ##
 
-The following prerequisites are required.
-
-* Visual Studio
-
-
-## Compilation ##
-
-
-
-## Development ##
-
-
-
-## Solution ##
-
-
-
-## Dependencies ##
-
+You should download the latest sable release from our <a href="https://github.com/Resgrid/Relay/releases">Release page</a>. It's recommend that you use the setup\installer based option. 
 
 ## Notes ##
 

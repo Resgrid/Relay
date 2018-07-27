@@ -1,20 +1,19 @@
 {
   "InputDevice": 0,
-  "AudioLength": 60,
+  "AudioLength": 120,
   "ApiUrl": "https://api.resgrid.com",
   "Username": "TEST",
   "Password": "TEST",
   "Multiple": false,
   "Tolerance": 100,
   "Threshold": -40,
-  "Debug":  true, 
+  "Debug": false,
   "Watchers": [
     {
       "Name": "Station 2",
       "Active": true,
       "Code": null,
       "Type": 0,
-      "Eval": 0,
       "Triggers": [
         {
           "Frequency1": 524.0,
@@ -30,7 +29,6 @@
       "Active": true,
       "Code": null,
       "Type": 0,
-      "Eval": 0,
       "Triggers": [
         {
           "Frequency1": 1084.0,
@@ -46,7 +44,6 @@
       "Active": true,
       "Code": null,
       "Type": 0,
-      "Eval": 0,
       "Triggers": [
         {
           "Frequency1": 881.0,
@@ -62,7 +59,6 @@
       "Active": true,
       "Code": null,
       "Type": 0,
-      "Eval": 0,
       "Triggers": [
         {
           "Frequency1": 645.0,
@@ -78,7 +74,6 @@
       "Active": true,
       "Code": null,
       "Type": 0,
-      "Eval": 0,
       "Triggers": [
         {
           "Frequency1": 384.0,
@@ -94,7 +89,6 @@
       "Active": true,
       "Code": null,
       "Type": 0,
-      "Eval": 0,
       "Triggers": [
         {
           "Frequency1": 346.0,
@@ -110,7 +104,6 @@
       "Active": true,
       "Code": null,
       "Type": 0,
-      "Eval": 0,
       "Triggers": [
         {
           "Frequency1": 881.0,
@@ -126,7 +119,6 @@
       "Active": true,
       "Code": null,
       "Type": 0,
-      "Eval": 0,
       "Triggers": [
         {
           "Frequency1": 426.0,

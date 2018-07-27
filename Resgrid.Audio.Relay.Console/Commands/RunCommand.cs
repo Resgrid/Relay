@@ -22,6 +22,8 @@ namespace Resgrid.Audio.Relay.Console.Commands
 
 		public string Execute(RunArgs args)
 		{
+			CreateAudioDirectory();
+
 			System.Console.WriteLine("Resgrid Audio");
 			System.Console.WriteLine("-----------------------------------------");
 
@@ -64,7 +66,7 @@ namespace Resgrid.Audio.Relay.Console.Commands
 
 			ResgridV3ApiClient.Init(config.ApiUrl, config.Username, config.Password);
 
-			System.Console.WriteLine($"Config Loaded with {config.Watchers.Count} watchers ({config.Watchers.Select(x => x.Active).Count()} active)");
+			System.Console.WriteLine($"Config Loaded with {config.Watchers.Count} watchers ({config.Watchers.Count(x => x.Active)} active)");
 
 			System.Console.WriteLine("Initializing Processor");
 			processor.Init(config);
@@ -97,6 +99,12 @@ namespace Resgrid.Audio.Relay.Console.Commands
 			Config config = JsonConvert.DeserializeObject<Config>(File.ReadAllText($"{path}\\settings.json"));
 
 			return config;
+		}
+
+		private static void CreateAudioDirectory()
+		{
+			var path = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().CodeBase).Replace("file:\\", "");
+			Directory.CreateDirectory($"{path}\\DispatchAudio\\");
 		}
 
 		private static void Evaluator_WatcherTriggered(object sender, Core.Events.WatcherEventArgs e)

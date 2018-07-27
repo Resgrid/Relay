@@ -23,7 +23,7 @@ namespace Resgrid.Audio.Core
 		private const int ONE_SEC = 88000;
 
 		private bool _initialized = false;
-		private Queue<byte> _buffer;
+		private CircularBuffer<byte> _buffer;
 		private Settings _settings;
 
 		private Config _config;
@@ -42,13 +42,13 @@ namespace Resgrid.Audio.Core
 			_audioRecorder = audioRecorder;
 			_audioEvaluator = audioEvaluator;
 
-			_buffer = new Queue<byte>(BUFFER_SIZE);
+			_buffer = new CircularBuffer<byte>(BUFFER_SIZE);
 			_sampleAggregator = new SampleAggregator();
 			_startedWatchers = new Dictionary<Guid, Watcher>();
 
 			_audioRecorder.SetSampleAggregator(_sampleAggregator);
 
-			_timer = new Timer(500);
+			_timer = new Timer(1000);
 			_timer.Elapsed += _timer_Elapsed;
 		}
 
@@ -63,39 +63,34 @@ namespace Resgrid.Audio.Core
 				{
 					List<Guid> watchersToRemove = new List<Guid>();
 
-					lock (_lock)
+					foreach (var startedWatcher in _startedWatchers)
 					{
-						foreach (var startedWatcher in _startedWatchers)
+						startedWatcher.Value.LastCheckedTimestamp = DateTime.UtcNow;
+
+						if ((DateTime.UtcNow - startedWatcher.Value.TriggerFiredTimestamp).TotalSeconds >= _config.AudioLength)
 						{
-							var diffInSeconds = (DateTime.UtcNow - startedWatcher.Value.LastCheckedTimestamp).TotalSeconds;
+							watchersToRemove.Add(startedWatcher.Value.Id);
+						}
+					}
+
+					if (watchersToRemove != null && watchersToRemove.Any())
+					{
+						foreach (var id in watchersToRemove)
+						{
+							var watcher = _startedWatchers[id];
 
 							lock (_lock)
 							{
-								startedWatcher.Value.AddAudio(_buffer.Take((int) diffInSeconds * ONE_SEC).ToArray());
+								watcher.AddAudio(_buffer.ToArray().Take(_config.AudioLength * ONE_SEC).ToArray());
+								var mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
+								TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
 							}
 
-							startedWatcher.Value.LastCheckedTimestamp = DateTime.UtcNow;
-
-							if ((DateTime.UtcNow - startedWatcher.Value.TriggerFiredTimestamp).TotalSeconds >= _config.AudioLength)
-							{
-								watchersToRemove.Add(startedWatcher.Value.Id);
-							}
+							_startedWatchers.Remove(id);
 						}
 
-						if (watchersToRemove != null && watchersToRemove.Any())
-						{
-							foreach (var id in watchersToRemove)
-							{
-								var watcher = _startedWatchers[id];
-								TriggerProcessingFinished?.Invoke(this,
-									new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow));
-
-								_startedWatchers.Remove(id);
-							}
-
-							_audioEvaluator.ClearTones();
-							watchersToRemove.Clear();
-						}
+						_audioEvaluator.ClearTones();
+						watchersToRemove.Clear();
 					}
 				}
 
@@ -109,7 +104,6 @@ namespace Resgrid.Audio.Core
 
 			if (_sampleAggregator != null && !_initialized)
 			{
-				_sampleAggregator.WaveformCalculated += _sampleAggregator_WaveformCalculated;
 				_sampleAggregator.DataAvailable += _sampleAggregator_DataAvailable;
 				_audioEvaluator.WatcherTriggered += _audioEvaluator_WatcherTriggered;
 
@@ -126,7 +120,7 @@ namespace Resgrid.Audio.Core
 		{
 			lock (_lock)
 			{
-				AddTriggeredWatcher(e.Watcher, e.Triggers.FirstOrDefault(), _buffer.Take(1320000).ToArray(), e.Timestamp);
+				AddTriggeredWatcher(e.Watcher, e.Triggers.FirstOrDefault(), e.Timestamp);
 			}
 		}
 
@@ -140,12 +134,6 @@ namespace Resgrid.Audio.Core
 		{
 			if (e?.Buffer != null)
 			{
-				//foreach (var buffer in e.Buffer)
-				//{
-				//if (!IsSilence(buffer, _config.Threshold))
-				//	_buffer.Enqueue(buffer);
-				//}
-
 				for (int index = 0; index < e.BytesRecorded; index += 2)
 				{
 					short sample = (short)((e.Buffer[index + 1] << 8) | e.Buffer[index + 0]);
@@ -155,20 +143,15 @@ namespace Resgrid.Audio.Core
 					{
 						lock (_lock)
 						{
-							_buffer.Enqueue(e.Buffer[index + 0]);
-							_buffer.Enqueue(e.Buffer[index + 1]);
+							_buffer.PushBack(e.Buffer[index + 0]);
+							_buffer.PushBack(e.Buffer[index + 1]);
 						}
 					}
 				}
 			}
 		}
 
-		private void _sampleAggregator_WaveformCalculated(object sender, WaveformEventArgs e)
-		{
-
-		}
-
-		private void AddTriggeredWatcher(Watcher watcher, Trigger trigger, byte[] audio, DateTime timeStamp)
+		private void AddTriggeredWatcher(Watcher watcher, Trigger trigger, DateTime timeStamp)
 		{
 			if (watcher != null)
 			{
@@ -181,7 +164,6 @@ namespace Resgrid.Audio.Core
 					watcher.TriggerFiredTimestamp = timeStamp;
 					watcher.LastCheckedTimestamp = timeStamp;
 					watcher.SetFiredTrigger(trigger);
-					watcher.AddAudio(audio);
 					_startedWatchers.Add(watcher.Id, watcher);
 				}
 			}
@@ -190,8 +172,7 @@ namespace Resgrid.Audio.Core
 		private bool IsSilence(float amplitude, sbyte threshold)
 		{
 			double dB = 20 * Math.Log10(Math.Abs(amplitude));
-			//var isSilence = dB < threshold;
-			var isSilence = dB > threshold;
+			var isSilence = dB < threshold;
 
 			return isSilence;
 		}

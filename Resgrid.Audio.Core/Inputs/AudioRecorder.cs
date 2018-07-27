@@ -3,7 +3,10 @@
 using NAudio.Mixer;
 using NAudio.Wave;
 using System;
+using System.IO;
 using System.Linq;
+using NAudio.Lame;
+using Resgrid.Audio.Core.Model;
 
 namespace Resgrid.Audio.Core
 {
@@ -18,6 +21,7 @@ namespace Resgrid.Audio.Core
 		WaveFormat RecordingFormat { get; set; }
 		TimeSpan RecordedTime { get; }
 		void SetSampleAggregator(SampleAggregator sampleAggregator);
+		byte[] SaveWatcherAudio(Watcher watcher);
 	}
 
 	public class AudioRecorder : IAudioRecorder
@@ -83,7 +87,6 @@ namespace Resgrid.Audio.Core
 			bwp.DiscardOnBufferOverflow = true;
 
 			waveIn.StartRecording();
-			//_audioEvaluator.Start(waveIn);
 			_audioEvaluator.Start(new WaveInEvent() {DeviceNumber = recordingDevice});
 
 			recordingState = RecordingState.Monitoring;
@@ -153,8 +156,6 @@ namespace Resgrid.Audio.Core
 
 			bwp.Read(frames, 0, frameSize);
 			_sampleAggregator.Calculate(frames, frameSize);
-
-
 		}
 
 		private void WriteToFile(byte[] buffer, int bytesRecorded)
@@ -173,6 +174,27 @@ namespace Resgrid.Audio.Core
 				{
 					Stop();
 				}
+			}
+		}
+
+		public byte[] SaveWatcherAudio(Watcher watcher)
+		{
+			var path = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().CodeBase).Replace("file:\\", "");
+			var fileName = $"{path}\\DispatchAudio\\RelayAudio_{watcher.TriggerFiredTimestamp.ToString("s").Replace(":", "_")}.wav";
+
+			var waveWriter = new WaveFileWriter(fileName, recordingFormat);
+
+			var buffer = watcher.GetBuffer();
+			waveWriter.Write(buffer, 0, buffer.Length);
+			waveWriter.Dispose();
+
+			using (var retMs = new MemoryStream())
+			using (var ms = new MemoryStream())
+			using (var rdr = new WaveFileReader(fileName))
+			using (var wtr = new LameMP3FileWriter(retMs, rdr.WaveFormat, 128))
+			{
+				rdr.CopyTo(wtr);
+				return retMs.ToArray();
 			}
 		}
 	}

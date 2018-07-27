@@ -78,9 +78,9 @@ namespace Resgrid.Audio.Core
 			newCall.Attachments.Add(new CallAttachment()
 			{
 				CallAttachmentType = (int)CallAttachmentTypes.DispatchAudio,
-				FileName = $"Relay_{DateTime.Now.ToString("s")}",
+				FileName = $"Relay_{e.Watcher.TriggerFiredTimestamp.ToString("s").Replace(":", "_")}.mp3",
 				Timestamp = DateTime.UtcNow,
-				Data = e.Watcher.GetBuffer()
+				Data = e.Mp3Audio
 			});
 
 			var savedCall = CallsApi.AddNewCall(newCall).Result;

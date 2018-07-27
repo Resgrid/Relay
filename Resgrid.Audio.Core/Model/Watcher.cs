@@ -8,10 +8,8 @@ namespace Resgrid.Audio.Core.Model
 {
 	public class Watcher
 	{
-		private const int BUFFER_SIZE = 10560000;
-
 		private Guid _id;
-		private Queue<byte> _buffer;
+		private byte[] _buffer;
 		private Trigger _trigger;
 		private int _audioCount;
 		private List<Watcher> _additionalWatchers;
@@ -20,7 +18,6 @@ namespace Resgrid.Audio.Core.Model
 		public bool Active { get; set; }
 		public string Code { get; set; }
 		public int Type { get; set; } // 1 Department, 2 Group
-		public int Eval { get; set; }
 		public List<Trigger> Triggers { get; set; }
 
 		[Newtonsoft.Json.JsonIgnore]
@@ -47,26 +44,9 @@ namespace Resgrid.Audio.Core.Model
 				_trigger = trigger;
 		}
 
-		public bool AddAudio(byte[] audio)
+		public void AddAudio(byte[] audio)
 		{
-			if (_buffer == null)
-				_buffer = new Queue<byte>(BUFFER_SIZE);
-
-			foreach (var b in audio)
-			{
-				if (IsQueueFull())
-					return false;
-
-				_buffer.Enqueue(b);
-				_audioCount++;
-			}
-
-			return true;
-		}
-
-		public bool IsQueueFull()
-		{
-			return _audioCount >= BUFFER_SIZE;
+			_buffer = audio;
 		}
 
 		public Trigger GetTrigger()
@@ -76,7 +56,7 @@ namespace Resgrid.Audio.Core.Model
 
 		public byte[] GetBuffer()
 		{
-			return _buffer.ToArray();
+			return _buffer;
 		}
 
 		public void AddAdditionalWatcher(Watcher watcher)
