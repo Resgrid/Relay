@@ -1,18 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
 
-  <?define VersionNumber="!(bind.FileVersion.Resgrid.Audio.Relay.Console.exe)" ?>
-  <?define uberAgentExeSourcePath = "$(var.ProjectDir)..\uberAgent\x64\Release\uberAgent.exe" ?>
+  <?define InfoURL="https://resgrid.com/" ?>
+  <?define VersionNumber="!(bind.FileVersion.RelayConsoleexe)" ?>
+  <?define RelayConsoleExeSourcePath = "$(var.ProjectDir)..\Resgrid.Audio.Relay.Console\bin\Release\Resgrid.Audio.Relay.Console.exe" ?><?define Resgrid.Audio.Relay_TargetDir=$(var.Resgrid.Audio.Relay.TargetDir)?><?define Resgrid.Providers.ApiClient_TargetDir=$(var.Resgrid.Providers.ApiClient.TargetDir)?><?define Resgrid.Audio.Core_TargetDir=$(var.Resgrid.Audio.Core.TargetDir)?><?define Resgrid.Audio.Relay.Console_TargetDir=$(var.Resgrid.Audio.Relay.Console.TargetDir)?>
 
-  <Product Id="*" Name="Resgrid Relay" Language="1033" Version="1.0.0.0" Manufacturer="Resgrid, LLC" UpgradeCode="17394df4-cfbf-4366-b04c-17614543dfa5">
+  <Product Id="*" Name="Resgrid Relay" Language="1033" Version="$(var.VersionNumber)" Manufacturer="Resgrid, LLC" UpgradeCode="17394df4-cfbf-4366-b04c-17614543dfa5">
     <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Resgrid Relay is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer or same version of Resgrid Relay is already installed." AllowSameVersionUpgrades="yes" />
     <MediaTemplate />
 
-    <Feature Id="ProductFeature" Title="RelaySetup" Level="1">
+    <Feature Id="ProductFeature" Title="Relay" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
     </Feature>
+
+    <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
+    <!-- Remove repair -->
+    <Property Id="ARPNOMODIFY" Value="yes" Secure="yes" />
+    <!-- Remove modify -->
   </Product>
 
   <Fragment>
@@ -29,6 +35,141 @@
       <!-- <Component Id="ProductComponent"> -->
       <!-- TODO: Insert files, registry keys, and other resources here. -->
       <!-- </Component> -->
+
+
+
+      <!-- Main program file -->
+      <Component Id="Relay.exe_comp" Guid="*">
+        <File Source="$(var.RelayConsoleExeSourcePath)" Id="RelayConsoleexe" KeyPath="yes" />
+      </Component>
+
+      <!-- Configuration file -->
+      <Component Id="settings.json_comp" Guid="e0eb4c07-3f99-45e6-b799-018a97f614e0">
+        <File Source="$(var.ProjectDir)..\Resgrid.Audio.Relay.Console\bin\Release\settings.json" Id="RelayConf" KeyPath="yes" />
+      </Component>
+      <Component Id="Accord.dll.config" Guid="6322e6b3-58c8-464d-a8b1-a89b0f01b9e7">
+        <File Id="Accord.dll.config" Name="Accord.dll.config" Source="$(var.Resgrid.Audio.Relay_TargetDir)Accord.dll.config" />
+      </Component>
+      <Component Id="ResgridRelay.exe" Guid="9681299f-5d29-4fae-bbe7-6188ae7f8c76">
+        <File Id="ResgridRelay.exe" Name="ResgridRelay.exe" Source="$(var.Resgrid.Audio.Relay_TargetDir)ResgridRelay.exe" />
+      </Component>
+      <Component Id="ResgridRelay.exe.config" Guid="ae230b8c-7f1d-47c5-86c1-5ec4e2900dc3">
+        <File Id="ResgridRelay.exe.config" Name="ResgridRelay.exe.config" Source="$(var.Resgrid.Audio.Relay_TargetDir)ResgridRelay.exe.config" />
+      </Component>
+      <Component Id="ResgridRelay.pdb" Guid="b6de51f1-e773-419e-959a-83d50a4f6474">
+        <File Id="ResgridRelay.pdb" Name="ResgridRelay.pdb" Source="$(var.Resgrid.Audio.Relay_TargetDir)ResgridRelay.pdb" />
+      </Component>
+      <Component Id="Accord.dll" Guid="fbe48db6-828e-438f-82b8-139f94e9e639">
+        <File Id="Accord.dll" Name="Accord.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)Accord.dll" />
+      </Component>
+      <Component Id="Accord.Audio.dll" Guid="a9194eb0-fefb-4754-b3c2-89f363b6cb41">
+        <File Id="Accord.Audio.dll" Name="Accord.Audio.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)Accord.Audio.dll" />
+      </Component>
+      <Component Id="Accord.Math.dll" Guid="14acb2f4-6ca5-452e-a1b0-fcafe52ed25a">
+        <File Id="Accord.Math.dll" Name="Accord.Math.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)Accord.Math.dll" />
+      </Component>
+      <Component Id="Accord.Math.Core.dll" Guid="c66a8a68-7747-417b-a369-47b726509f8b">
+        <File Id="Accord.Math.Core.dll" Name="Accord.Math.Core.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)Accord.Math.Core.dll" />
+      </Component>
+      <Component Id="CommonServiceLocator.dll" Guid="8f552503-1ed9-4319-83d4-18a3248dd77b">
+        <File Id="CommonServiceLocator.dll" Name="CommonServiceLocator.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)CommonServiceLocator.dll" />
+      </Component>
+      <Component Id="ControlzEx.dll" Guid="d10dd488-f40a-42d1-9628-baf22f263bd6">
+        <File Id="ControlzEx.dll" Name="ControlzEx.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)ControlzEx.dll" />
+      </Component>
+      <Component Id="GalaSoft.MvvmLight.dll" Guid="b20ed265-a7e2-4450-b9f8-edab70e26203">
+        <File Id="GalaSoft.MvvmLight.dll" Name="GalaSoft.MvvmLight.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)GalaSoft.MvvmLight.dll" />
+      </Component>
+      <Component Id="GalaSoft.MvvmLight.Extras.dll" Guid="07aca9f2-598f-46d2-80d3-5deefec65a77">
+        <File Id="GalaSoft.MvvmLight.Extras.dll" Name="GalaSoft.MvvmLight.Extras.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)GalaSoft.MvvmLight.Extras.dll" />
+      </Component>
+      <Component Id="GalaSoft.MvvmLight.Platform.dll" Guid="ad12a3c7-d853-4a82-b885-9e7cc5e21f31">
+        <File Id="GalaSoft.MvvmLight.Platform.dll" Name="GalaSoft.MvvmLight.Platform.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)GalaSoft.MvvmLight.Platform.dll" />
+      </Component>
+      <Component Id="LiveCharts.dll" Guid="ef513408-b83d-496b-babb-7967dc8db69d">
+        <File Id="LiveCharts.dll" Name="LiveCharts.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)LiveCharts.dll" />
+      </Component>
+      <Component Id="LiveCharts.Wpf.dll" Guid="4596ab0a-424a-4fde-830b-eb7757440af3">
+        <File Id="LiveCharts.Wpf.dll" Name="LiveCharts.Wpf.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)LiveCharts.Wpf.dll" />
+      </Component>
+      <Component Id="MahApps.Metro.dll" Guid="c4afab50-eff0-4375-8d95-14067a6cb726">
+        <File Id="MahApps.Metro.dll" Name="MahApps.Metro.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)MahApps.Metro.dll" />
+      </Component>
+      <Component Id="MaterialDesignColors.dll" Guid="9989249a-916a-4504-b51c-db2a9aeec9cd">
+        <File Id="MaterialDesignColors.dll" Name="MaterialDesignColors.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)MaterialDesignColors.dll" />
+      </Component>
+      <Component Id="MaterialDesignThemes.MahApps.dll" Guid="3fda2e56-f5fe-4297-96b8-4d36094d1d40">
+        <File Id="MaterialDesignThemes.MahApps.dll" Name="MaterialDesignThemes.MahApps.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)MaterialDesignThemes.MahApps.dll" />
+      </Component>
+      <Component Id="MaterialDesignThemes.Wpf.dll" Guid="2853de46-1244-4ab0-8534-0e2953870c9a">
+        <File Id="MaterialDesignThemes.Wpf.dll" Name="MaterialDesignThemes.Wpf.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)MaterialDesignThemes.Wpf.dll" />
+      </Component>
+      <Component Id="NAudio.dll" Guid="df9750d2-cc5b-4c8b-90df-118c986b55fa">
+        <File Id="NAudio.dll" Name="NAudio.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)NAudio.dll" />
+      </Component>
+      <Component Id="ServiceLocation.dll" Guid="26610e18-f055-4251-88a9-e6eaa43f60d7">
+        <File Id="ServiceLocation.dll" Name="ServiceLocation.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)ServiceLocation.dll" />
+      </Component>
+      <Component Id="System.Windows.Interactivity.dll" Guid="29bac5c6-8505-454b-a063-5929a5299e87">
+        <File Id="System.Windows.Interactivity.dll" Name="System.Windows.Interactivity.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)System.Windows.Interactivity.dll" />
+      </Component>
+      <Component Id="Resgrid.Providers.ApiClient.dll" Guid="0909a366-97a2-4e22-bd1b-be6f984b8356">
+        <File Id="Resgrid.Providers.ApiClient.dll" Name="Resgrid.Providers.ApiClient.dll" Source="$(var.Resgrid.Providers.ApiClient_TargetDir)Resgrid.Providers.ApiClient.dll" />
+      </Component>
+      <Component Id="Serilog.dll" Guid="7aa2d965-b484-470c-bae0-9432eb1fcd09">
+        <File Id="Serilog.dll" Name="Serilog.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)Serilog.dll" />
+      </Component>
+      <Component Id="DtmfDetection.dll" Guid="1d87fe04-6a60-4bef-939f-99d080966e36">
+        <File Id="DtmfDetection.dll" Name="DtmfDetection.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)DtmfDetection.dll" />
+      </Component>
+      <Component Id="DtmfDetection.NAudio.dll" Guid="5ce926c4-6043-4961-b483-4fe5c098bb58">
+        <File Id="DtmfDetection.NAudio.dll" Name="DtmfDetection.NAudio.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)DtmfDetection.NAudio.dll" />
+      </Component>
+      <Component Id="NAudio.Lame.dll" Guid="131fcd4b-a579-4e1c-9bbd-04f911b314ab">
+        <File Id="NAudio.Lame.dll" Name="NAudio.Lame.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)NAudio.Lame.dll" />
+      </Component>
+      <Component Id="Newtonsoft.Json.dll" Guid="f918ac2b-9dd6-4bee-b013-a43d3173decf">
+        <File Id="Newtonsoft.Json.dll" Name="Newtonsoft.Json.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)Newtonsoft.Json.dll" />
+      </Component>
+      <Component Id="libmp3lame.32.dll" Guid="a376de3e-b91d-4e41-98ea-73827feb090e">
+        <File Id="libmp3lame.32.dll" Name="libmp3lame.32.dll" Source="$(var.Resgrid.Audio.Core_TargetDir)libmp3lame.32.dll" />
+      </Component>
+      <Component Id="libmp3lame.64.dll" Guid="13a74344-4ae4-4054-bc25-bf1a4cd914fa">
+        <File Id="libmp3lame.64.dll" Name="libmp3lame.64.dll" Source="$(var.Resgrid.Audio.Core_TargetDir)libmp3lame.64.dll" />
+      </Component>
+      <Component Id="Resgrid.Audio.Core.dll" Guid="9a900166-f7d7-4523-8e47-8c87b2ec8064">
+        <File Id="Resgrid.Audio.Core.dll" Name="Resgrid.Audio.Core.dll" Source="$(var.Resgrid.Audio.Core_TargetDir)Resgrid.Audio.Core.dll" />
+      </Component>
+      <Component Id="Resgrid.Audio.Core.pdb" Guid="25d6e308-b366-47b3-a8f4-36dd14b7132f">
+        <File Id="Resgrid.Audio.Core.pdb" Name="Resgrid.Audio.Core.pdb" Source="$(var.Resgrid.Audio.Core_TargetDir)Resgrid.Audio.Core.pdb" />
+      </Component>
+      <Component Id="Serilog.Sinks.Console.dll" Guid="578d7fcd-0732-4ef8-b353-76062e7327cd">
+        <File Id="Serilog.Sinks.Console.dll" Name="Serilog.Sinks.Console.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)Serilog.Sinks.Console.dll" />
+      </Component>
+      <Component Id="System.Net.Http.Formatting.dll" Guid="0fc6a973-976f-4160-a4ad-2d0d3527b0a7">
+        <File Id="System.Net.Http.Formatting.dll" Name="System.Net.Http.Formatting.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)System.Net.Http.Formatting.dll" />
+      </Component>
+      <Component Id="Resgrid.Providers.ApiClient.pdb" Guid="7dc7f57b-7677-4798-b93f-9aebc6b6a0d9">
+        <File Id="Resgrid.Providers.ApiClient.pdb" Name="Resgrid.Providers.ApiClient.pdb" Source="$(var.Resgrid.Providers.ApiClient_TargetDir)Resgrid.Providers.ApiClient.pdb" />
+      </Component>
+      <Component Id="Resgrid.Audio.Relay.Console.exe" Guid="4fa9813f-9e68-40e2-8ce0-8e5f4eccc9cc">
+        <File Id="Resgrid.Audio.Relay.Console.exe" Name="Resgrid.Audio.Relay.Console.exe" Source="$(var.Resgrid.Audio.Relay.Console_TargetDir)Resgrid.Audio.Relay.Console.exe" />
+      </Component>
+      <Component Id="Resgrid.Audio.Relay.Console.exe.config" Guid="7e6ecd5e-e257-4fad-8dde-4b1fe5d697a9">
+        <File Id="Resgrid.Audio.Relay.Console.exe.config" Name="Resgrid.Audio.Relay.Console.exe.config" Source="$(var.Resgrid.Audio.Relay.Console_TargetDir)Resgrid.Audio.Relay.Console.exe.config" />
+      </Component>
+      <Component Id="Resgrid.Audio.Relay.Console.pdb" Guid="188975f7-8119-479e-affa-c8f47e589409">
+        <File Id="Resgrid.Audio.Relay.Console.pdb" Name="Resgrid.Audio.Relay.Console.pdb" Source="$(var.Resgrid.Audio.Relay.Console_TargetDir)Resgrid.Audio.Relay.Console.pdb" />
+      </Component>
+      <Component Id="Consolas.Core.dll" Guid="ac96b279-e321-4a2f-8c5a-b082b7fb6b6e">
+        <File Id="Consolas.Core.dll" Name="Consolas.Core.dll" Source="$(var.Resgrid.Audio.Relay.Console_TargetDir)Consolas.Core.dll" />
+      </Component>
+      <Component Id="Nustache.Core.dll" Guid="bebde80c-16d8-4737-a68e-52f74a63c30d">
+        <File Id="Nustache.Core.dll" Name="Nustache.Core.dll" Source="$(var.Resgrid.Audio.Relay.Console_TargetDir)Nustache.Core.dll" />
+      </Component>
+      <Component Id="SimpleInjector.dll" Guid="d60eaf28-35cb-4df5-8688-ec4a1b02bab8">
+        <File Id="SimpleInjector.dll" Name="SimpleInjector.dll" Source="$(var.Resgrid.Audio.Relay.Console_TargetDir)SimpleInjector.dll" />
+      </Component>
     </ComponentGroup>
   </Fragment>
 </Wix>

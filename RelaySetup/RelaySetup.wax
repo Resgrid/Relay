@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-16"?>
+<Configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <DeployedProjects>
+    <string>Resgrid.Audio.Relay\Resgrid.Audio.Relay.csproj</string>
+    <string>Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj</string>
+    <string>Resgrid.Audio.Core\Resgrid.Audio.Core.csproj</string>
+    <string>Providers\Resgrid.Providers.ApiClient\Resgrid.Providers.ApiClient.csproj</string>
+  </DeployedProjects>
+  <DirectoryMappings>
+    <Item Key="" Value="INSTALLFOLDER" />
+  </DirectoryMappings>
+  <FileMappings />
+  <DeploySymbols>true</DeploySymbols>
+  <DeployLocalizations>true</DeployLocalizations>
+  <DeployExternalLocalizations>true</DeployExternalLocalizations>
+</Configuration>
