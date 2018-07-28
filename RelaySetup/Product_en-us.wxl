@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="en-us" Codepage="1252" xmlns="http://schemas.microsoft.com/wix/2006/localization">
+  <String Id="Language">1033</String>
+  <!-- Supported language and codepage codes can be found here: http://www.tramontana.co.hu/wix/lesson2.php#2.4 -->
+
+  <String Id="ApplicationName">Resgrid Relay</String>
+  <String Id="ManufacturerName">Resgrid</String>
+  <String Id="ManufacturerFullName">Resgrid, LLC.</String>
+  <String Id="ProductDescription">Resgird Relay monitors an audio input to create calls in the Resgrid system and dispatches it</String>
+  <String Id="Comments">Installs Resgrid Relay</String>
+
+  <String Id="NewerInstalled">The same or a newer version of this product is already installed.</String>
+
+  <String Id="FeatureCompleteDescription">Complete Installation</String>
+</WixLocalization>

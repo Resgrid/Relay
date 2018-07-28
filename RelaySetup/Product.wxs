@@ -2,7 +2,7 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
 
   <?define InfoURL="https://resgrid.com/" ?>
-  <?define VersionNumber="!(bind.FileVersion.RelayConsoleexe)" ?>
+  <?define VersionNumber="!(bind.FileVersion.Resgrid.Audio.Relay.Console.exe)" ?>
   <?define RelayConsoleExeSourcePath = "$(var.ProjectDir)..\Resgrid.Audio.Relay.Console\bin\Release\Resgrid.Audio.Relay.Console.exe" ?><?define Resgrid.Audio.Relay_TargetDir=$(var.Resgrid.Audio.Relay.TargetDir)?><?define Resgrid.Providers.ApiClient_TargetDir=$(var.Resgrid.Providers.ApiClient.TargetDir)?><?define Resgrid.Audio.Core_TargetDir=$(var.Resgrid.Audio.Core.TargetDir)?><?define Resgrid.Audio.Relay.Console_TargetDir=$(var.Resgrid.Audio.Relay.Console.TargetDir)?>
 
   <Product Id="*" Name="Resgrid Relay" Language="1033" Version="$(var.VersionNumber)" Manufacturer="Resgrid, LLC" UpgradeCode="17394df4-cfbf-4366-b04c-17614543dfa5">
@@ -16,34 +16,25 @@
     </Feature>
 
     <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
-    <!-- Remove repair -->
     <Property Id="ARPNOMODIFY" Value="yes" Secure="yes" />
-    <!-- Remove modify -->
+
+    <UI>
+      <UIRef Id="WixUI_HK" />
+    </UI>
   </Product>
 
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder">
-        <Directory Id="INSTALLFOLDER" Name="RelaySetup" />
+        <Directory Id="Resgrid">
+          <Directory Id="INSTALLFOLDER" Name="Relay" />
+        </Directory>
       </Directory>
     </Directory>
   </Fragment>
 
   <Fragment>
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
-      <!-- TODO: Remove the comments around this Component element and the ComponentRef below in order to add resources to this installer. -->
-      <!-- <Component Id="ProductComponent"> -->
-      <!-- TODO: Insert files, registry keys, and other resources here. -->
-      <!-- </Component> -->
-
-
-
-      <!-- Main program file -->
-      <Component Id="Relay.exe_comp" Guid="*">
-        <File Source="$(var.RelayConsoleExeSourcePath)" Id="RelayConsoleexe" KeyPath="yes" />
-      </Component>
-
-      <!-- Configuration file -->
       <Component Id="settings.json_comp" Guid="e0eb4c07-3f99-45e6-b799-018a97f614e0">
         <File Source="$(var.ProjectDir)..\Resgrid.Audio.Relay.Console\bin\Release\settings.json" Id="RelayConf" KeyPath="yes" />
       </Component>
@@ -55,9 +46,6 @@
       </Component>
       <Component Id="ResgridRelay.exe.config" Guid="ae230b8c-7f1d-47c5-86c1-5ec4e2900dc3">
         <File Id="ResgridRelay.exe.config" Name="ResgridRelay.exe.config" Source="$(var.Resgrid.Audio.Relay_TargetDir)ResgridRelay.exe.config" />
-      </Component>
-      <Component Id="ResgridRelay.pdb" Guid="b6de51f1-e773-419e-959a-83d50a4f6474">
-        <File Id="ResgridRelay.pdb" Name="ResgridRelay.pdb" Source="$(var.Resgrid.Audio.Relay_TargetDir)ResgridRelay.pdb" />
       </Component>
       <Component Id="Accord.dll" Guid="fbe48db6-828e-438f-82b8-139f94e9e639">
         <File Id="Accord.dll" Name="Accord.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)Accord.dll" />
@@ -140,26 +128,17 @@
       <Component Id="Resgrid.Audio.Core.dll" Guid="9a900166-f7d7-4523-8e47-8c87b2ec8064">
         <File Id="Resgrid.Audio.Core.dll" Name="Resgrid.Audio.Core.dll" Source="$(var.Resgrid.Audio.Core_TargetDir)Resgrid.Audio.Core.dll" />
       </Component>
-      <Component Id="Resgrid.Audio.Core.pdb" Guid="25d6e308-b366-47b3-a8f4-36dd14b7132f">
-        <File Id="Resgrid.Audio.Core.pdb" Name="Resgrid.Audio.Core.pdb" Source="$(var.Resgrid.Audio.Core_TargetDir)Resgrid.Audio.Core.pdb" />
-      </Component>
       <Component Id="Serilog.Sinks.Console.dll" Guid="578d7fcd-0732-4ef8-b353-76062e7327cd">
-        <File Id="Serilog.Sinks.Console.dll" Name="Serilog.Sinks.Console.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)Serilog.Sinks.Console.dll" />
+        <File Id="Serilog.Sinks.Console.dll" Name="Serilog.Sinks.Console.dll" Source="$(var.Resgrid.Audio.Core_TargetDir)Serilog.Sinks.Console.dll" />
       </Component>
       <Component Id="System.Net.Http.Formatting.dll" Guid="0fc6a973-976f-4160-a4ad-2d0d3527b0a7">
-        <File Id="System.Net.Http.Formatting.dll" Name="System.Net.Http.Formatting.dll" Source="$(var.Resgrid.Audio.Relay_TargetDir)System.Net.Http.Formatting.dll" />
-      </Component>
-      <Component Id="Resgrid.Providers.ApiClient.pdb" Guid="7dc7f57b-7677-4798-b93f-9aebc6b6a0d9">
-        <File Id="Resgrid.Providers.ApiClient.pdb" Name="Resgrid.Providers.ApiClient.pdb" Source="$(var.Resgrid.Providers.ApiClient_TargetDir)Resgrid.Providers.ApiClient.pdb" />
+        <File Id="System.Net.Http.Formatting.dll" Name="System.Net.Http.Formatting.dll" Source="$(var.Resgrid.Audio.Core_TargetDir)System.Net.Http.Formatting.dll" />
       </Component>
       <Component Id="Resgrid.Audio.Relay.Console.exe" Guid="4fa9813f-9e68-40e2-8ce0-8e5f4eccc9cc">
         <File Id="Resgrid.Audio.Relay.Console.exe" Name="Resgrid.Audio.Relay.Console.exe" Source="$(var.Resgrid.Audio.Relay.Console_TargetDir)Resgrid.Audio.Relay.Console.exe" />
       </Component>
       <Component Id="Resgrid.Audio.Relay.Console.exe.config" Guid="7e6ecd5e-e257-4fad-8dde-4b1fe5d697a9">
         <File Id="Resgrid.Audio.Relay.Console.exe.config" Name="Resgrid.Audio.Relay.Console.exe.config" Source="$(var.Resgrid.Audio.Relay.Console_TargetDir)Resgrid.Audio.Relay.Console.exe.config" />
-      </Component>
-      <Component Id="Resgrid.Audio.Relay.Console.pdb" Guid="188975f7-8119-479e-affa-c8f47e589409">
-        <File Id="Resgrid.Audio.Relay.Console.pdb" Name="Resgrid.Audio.Relay.Console.pdb" Source="$(var.Resgrid.Audio.Relay.Console_TargetDir)Resgrid.Audio.Relay.Console.pdb" />
       </Component>
       <Component Id="Consolas.Core.dll" Guid="ac96b279-e321-4a2f-8c5a-b082b7fb6b6e">
         <File Id="Consolas.Core.dll" Name="Consolas.Core.dll" Source="$(var.Resgrid.Audio.Relay.Console_TargetDir)Consolas.Core.dll" />

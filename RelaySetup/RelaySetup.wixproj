@@ -20,6 +20,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Product.wxs" />
+    <Compile Include="WixUI_HK.wxs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Providers\Resgrid.Providers.ApiClient\Resgrid.Providers.ApiClient.csproj">
@@ -65,6 +66,15 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="RelaySetup.wax" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Product_en-us.wxl" />
+  </ItemGroup>
+  <ItemGroup>
+    <WixExtension Include="WixUIExtension">
+      <HintPath>$(WixExtDir)\WixUIExtension.dll</HintPath>
+      <Name>WixUIExtension</Name>
+    </WixExtension>
   </ItemGroup>
   <Import Project="$(WixTargetsPath)" Condition=" '$(WixTargetsPath)' != '' " />
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\WiX\v3.x\Wix.targets" Condition=" '$(WixTargetsPath)' == '' AND Exists('$(MSBuildExtensionsPath32)\Microsoft\WiX\v3.x\Wix.targets') " />
