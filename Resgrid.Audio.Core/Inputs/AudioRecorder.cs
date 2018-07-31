@@ -86,8 +86,9 @@ namespace Resgrid.Audio.Core
 			bwp.BufferLength = BUFFERSIZE * 2;
 			bwp.DiscardOnBufferOverflow = true;
 
-			waveIn.StartRecording();
-			_audioEvaluator.Start(new WaveInEvent() {DeviceNumber = recordingDevice});
+			//waveIn.StartRecording();
+			//_audioEvaluator.Start(new WaveInEvent() {DeviceNumber = recordingDevice});
+			_audioEvaluator.Start(waveIn);
 
 			recordingState = RecordingState.Monitoring;
 		}

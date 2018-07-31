@@ -1,19 +1,26 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using Resgrid.Audio.Core.Events;
 using Resgrid.Audio.Core.Model;
 using Resgrid.Providers.ApiClient.V3;
 using Resgrid.Providers.ApiClient.V3.Models;
+using Serilog.Core;
 
 namespace Resgrid.Audio.Core
 {
 	public class ComService
 	{
-		private AudioProcessor _audioProcessor;
+		private readonly Logger _logger;
+		private readonly AudioProcessor _audioProcessor;
+
 		private Config _config;
 
-		public ComService(AudioProcessor audioProcessor)
+		public event EventHandler<CallCreatedEventArgs> CallCreatedEvent;
+
+		public ComService(Logger logger, AudioProcessor audioProcessor)
 		{
+			_logger = logger;
 			_audioProcessor = audioProcessor;
 		}
 
@@ -83,7 +90,20 @@ namespace Resgrid.Audio.Core
 				Data = e.Mp3Audio
 			});
 
-			var savedCall = CallsApi.AddNewCall(newCall).Result;
+			try
+			{
+				var savedCall = CallsApi.AddNewCall(newCall).Result;
+
+				if (savedCall != null)
+					CallCreatedEvent?.Invoke(this, new CallCreatedEventArgs(e.Watcher.Name, savedCall.CallId, savedCall.Number, DateTime.UtcNow));
+
+				newCall = null;
+				savedCall = null;
+			}
+			catch (Exception ex)
+			{
+				_logger.Error(ex.ToString());
+			}
 		}
 	}
 }

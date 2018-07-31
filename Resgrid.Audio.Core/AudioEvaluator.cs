@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using Accord.Statistics.Models;
 using DtmfDetection;
 using DtmfDetection.NAudio;
 using NAudio.Wave;
@@ -20,6 +21,7 @@ namespace Resgrid.Audio.Core
 		void Init(Config config);
 		void Start(IWaveIn waveIn);
 		void ClearTones();
+		int CleanUpTones();
 	}
 
 	public class AudioEvaluator: IAudioEvaluator
@@ -142,8 +144,11 @@ namespace Resgrid.Audio.Core
 					}
 					else
 					{
-						_logger.Debug($"AudioEvaluator->DtmfToneStopped: No Existing tone for {end.DtmfTone.HighTone}");
-						_finishedTones.Add(end);
+						if (end.Duration > new TimeSpan(0, 0, 0, 0, 150))
+						{
+							_logger.Debug($"AudioEvaluator->DtmfToneStopped: No Existing tone for {end.DtmfTone.HighTone}");
+							_finishedTones.Add(end);
+						}
 					}
 				}
 
@@ -167,6 +172,32 @@ namespace Resgrid.Audio.Core
 			}
 
 			return tone;
+		}
+
+		public int CleanUpTones()
+		{
+			List<DtmfToneEnd> tonesToCleanUp = new List<DtmfToneEnd>();
+
+			if (_finishedTones != null && _finishedTones.Any())
+			{
+				foreach (var tone in _finishedTones)
+				{
+					if (DateTime.Now.Subtract(tone.TimeStamp).TotalMinutes > 5)
+						tonesToCleanUp.Add(tone);
+				}
+
+				if (tonesToCleanUp.Any())
+				{
+					foreach (var tone in tonesToCleanUp)
+					{
+						_logger.Debug(
+							$"AudioEvaluator->CleanUpTones: Cleaning up tone {tone.DtmfTone.HighTone} that has been around for {DateTime.Now.Subtract(tone.TimeStamp).TotalMinutes}m");
+						_finishedTones.Remove(tone);
+					}
+				}
+			}
+
+			return tonesToCleanUp.Count;
 		}
 
 		private void CheckFinishedTonesForTriggers()

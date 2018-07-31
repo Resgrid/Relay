@@ -44,5 +44,5 @@ namespace Resgrid.Providers.ApiClient.V3.Models
 		public string ReferenceNumber { get; set; }
 		public List<string> GroupCodesToDispatch { get; set; }
 		public bool AllCall { get; set; }
-	}
+    }
 }

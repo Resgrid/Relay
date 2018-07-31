@@ -28,6 +28,31 @@ namespace Resgrid.Audio.Core.Model
 
 			if (tones != null && tones.Any())
 			{
+				/*
+				for (int i = 0; i < tones.Count; i++)
+				{
+					if (Count == 1)
+					{
+						if (tones[i].DtmfTone.HighTone == Frequency1 && tones[i].Duration >= new TimeSpan(0, 0, 0, 0, Time))
+							return new List<DtmfToneEnd>() { tones[i] };
+					}
+					else if (Count == 2)
+					{
+						if (tones[i].DtmfTone.HighTone == Frequency1 && tones[i].Duration >= new TimeSpan(0, 0, 0, 0, Time))
+						{
+							if (i + 1 < tones.Count)
+							{
+								if (tones[i + 1].DtmfTone.HighTone == Frequency2 && tones[i + 1].Duration >= new TimeSpan(0, 0, 0, 0, Time))
+								{
+									return new List<DtmfToneEnd>() { tones[i], tones[i + 1] };
+								}
+							}
+						}
+					}
+				}
+				*/
+
+
 				var firstTone = tones.FirstOrDefault(x => x.DtmfTone.HighTone == Frequency1 && x.Duration >= new TimeSpan(0, 0, 0, 0, Time));
 
 				if (firstTone == null)
@@ -35,13 +60,12 @@ namespace Resgrid.Audio.Core.Model
 
 				if (Count == 1)
 				{
-					if (matchingTones.Count() == 1)
-						return new List<DtmfToneEnd>() { firstTone };
+					return new List<DtmfToneEnd>() { firstTone };
 				}
 				else if (Count == 2)
 				{
 					var secondTone = tones.FirstOrDefault(x => x.DtmfTone.HighTone == Frequency2 && x.Duration >= new TimeSpan(0, 0, 0, 0, Time) &&
-					                 (x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds <= 500 || x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds >= -500));
+									 x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds <= 2500);
 
 					if (secondTone != null)
 						return new List<DtmfToneEnd>() { firstTone, secondTone };

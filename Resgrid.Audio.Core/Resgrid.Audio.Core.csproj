@@ -80,11 +80,13 @@
     <Compile Include="AudioFunctions.cs" />
     <Compile Include="CircularBuffer.cs" />
     <Compile Include="ComService.cs" />
+    <Compile Include="Events\CallCreatedEventArgs.cs" />
     <Compile Include="Events\EvaluatorEventArgs.cs" />
     <Compile Include="Events\WatcherEventArgs.cs" />
     <Compile Include="Events\TriggerProcessedEventArgs.cs" />
     <Compile Include="AudioEvaluator.cs" />
     <Compile Include="AudioProcessor.cs" />
+    <Compile Include="Extensions.cs" />
     <Compile Include="Inputs\AudioRecorder.cs" />
     <Compile Include="Functions.cs" />
     <Compile Include="Log.cs" />

@@ -52,8 +52,8 @@ namespace Resgrid.Audio.Relay.Console.Commands
 			evaluator = new AudioEvaluator(log);
 			recorder = new AudioRecorder(evaluator);
 			processor = new AudioProcessor(recorder, evaluator);
-			com = new ComService(processor);
-
+			com = new ComService(log, processor);
+			com.CallCreatedEvent += Com_CallCreatedEvent;
 
 			System.Console.WriteLine("Hooking into Events");
 			recorder.SampleAggregator.MaximumCalculated += SampleAggregator_MaximumCalculated;
@@ -91,6 +91,11 @@ namespace Resgrid.Audio.Relay.Console.Commands
 			}
 
 			return "";
+		}
+
+		private void Com_CallCreatedEvent(object sender, Core.Events.CallCreatedEventArgs e)
+		{
+			System.Console.WriteLine($"{e.Timestamp.ToString("G")}: CALL CREATED: {e.CallId} ({e.CallNumber})");
 		}
 
 		private static Config LoadSettingsFromFile()

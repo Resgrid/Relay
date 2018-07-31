@@ -37,6 +37,8 @@ namespace Resgrid.Audio.Core
 		public event EventHandler<TriggerProcessedEventArgs> TriggerProcessingStarted;
 		public event EventHandler<TriggerProcessedEventArgs> TriggerProcessingFinished;
 
+		private int _checkCount = 0;
+
 		public AudioProcessor(IAudioRecorder audioRecorder, IAudioEvaluator audioEvaluator)
 		{
 			_audioRecorder = audioRecorder;
@@ -79,14 +81,22 @@ namespace Resgrid.Audio.Core
 						{
 							var watcher = _startedWatchers[id];
 
-							lock (_lock)
-							{
-								watcher.AddAudio(_buffer.ToArray().Take(_config.AudioLength * ONE_SEC).ToArray());
+							//IEnumerable<Tuple<long, byte>> lastAudioSlice = null;
+							//lock (_lock)
+							//{
+							//	lastAudioSlice = _buffer.ToArray().TakeLast(_config.AudioLength * ONE_SEC);
+							//}
+
+							//if (lastAudioSlice != null)
+							//{
+								//byte[] watcherAudioOnly = lastAudioSlice.Where(x => x.Item1 >= watcher.TriggerFiredTimestamp.Ticks).Select(y => y.Item2).ToArray();
+
+								//watcher.AddAudio(watcherAudioOnly);
 								var mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
 								TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
-							}
 
-							_startedWatchers.Remove(id);
+								_startedWatchers.Remove(id);
+							//}
 						}
 
 						_audioEvaluator.ClearTones();
@@ -94,6 +104,7 @@ namespace Resgrid.Audio.Core
 					}
 				}
 
+				CleanUpCheck();
 				_timerProcessing = false;
 			}
 		}
@@ -146,6 +157,16 @@ namespace Resgrid.Audio.Core
 							_buffer.PushBack(e.Buffer[index + 0]);
 							_buffer.PushBack(e.Buffer[index + 1]);
 						}
+
+						if (_startedWatchers != null && _startedWatchers.Count > 0)
+						{
+							var data = new byte[] {e.Buffer[index + 0], e.Buffer[index + 1]};
+							foreach (var watcher in _startedWatchers)
+							{
+
+								watcher.Value.AddAudio(data);
+							}
+						}
 					}
 				}
 			}
@@ -164,13 +185,41 @@ namespace Resgrid.Audio.Core
 					watcher.TriggerFiredTimestamp = timeStamp;
 					watcher.LastCheckedTimestamp = timeStamp;
 					watcher.SetFiredTrigger(trigger);
+
+					//IEnumerable<byte> lastAudioSlice = null;
+					//lock (_lock)
+					//{
+					//	lastAudioSlice = _buffer.ToArray().TakeLast(15 * ONE_SEC);
+					//}
+
+					//watcher.InitBuffer(_config.AudioLength * ONE_SEC, );
+
 					_startedWatchers.Add(watcher.Id, watcher);
 				}
 			}
 		}
 
+		private void CleanUpCheck()
+		{
+			// Time gating this so were not constantly hitting the triggers
+			if (_checkCount >= 60)
+			{
+				if (_startedWatchers == null || _startedWatchers.Count <= 0)
+					_audioEvaluator.CleanUpTones();
+
+				_checkCount = 0;
+			}
+			else
+			{
+				_checkCount++;
+			}
+		}
+
 		private bool IsSilence(float amplitude, sbyte threshold)
 		{
+			if (!_config.EnableSilenceDetection)
+				return false;
+
 			double dB = 20 * Math.Log10(Math.Abs(amplitude));
 			var isSilence = dB < threshold;
 
