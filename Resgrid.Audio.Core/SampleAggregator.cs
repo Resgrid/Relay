@@ -98,7 +98,7 @@ namespace Resgrid.Audio.Core
 		}
 
 		/// <summary>
-		/// Time Domain
+		/// Time1 Domain
 		/// </summary>
 		public double[] PulseCodeModulation { get; private set; }
 

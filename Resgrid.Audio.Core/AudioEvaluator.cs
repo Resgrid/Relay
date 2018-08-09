@@ -22,6 +22,8 @@ namespace Resgrid.Audio.Core
 		void Start(IWaveIn waveIn);
 		void ClearTones();
 		int CleanUpTones();
+		void AddActiveWatcher(Guid watcherId);
+		void RemoveActiveWatcher(Guid watcherId);
 	}
 
 	public class AudioEvaluator: IAudioEvaluator
@@ -31,6 +33,7 @@ namespace Resgrid.Audio.Core
 		private Config _config;
 		private List<DtmfTone> _dtmfTone;
 		private static List<DtmfToneEnd> _finishedTones;
+		private static List<Guid> _startedWatchers;
 
 		public event EventHandler<EvaluatorEventArgs> EvaluatorStarted;
 		public event EventHandler<EvaluatorEventArgs> EvaluatorFinished;
@@ -42,6 +45,7 @@ namespace Resgrid.Audio.Core
 
 			_dtmfTone = new List<DtmfTone>();
 			_finishedTones = new List<DtmfToneEnd>();
+			_startedWatchers = new List<Guid>();
 		}
 
 		public void Init(Config config)
@@ -101,6 +105,18 @@ namespace Resgrid.Audio.Core
 			_finishedTones.Clear();
 		}
 
+		public void AddActiveWatcher(Guid watcherId)
+		{
+			if (!_startedWatchers.Contains(watcherId))
+				_startedWatchers.Add(watcherId);
+		}
+
+		public void RemoveActiveWatcher(Guid watcherId)
+		{
+			if (_startedWatchers.Contains(watcherId))
+				_startedWatchers.Remove(watcherId);
+		}
+
 		public void Start(IWaveIn waveIn)
 		{
 			var config = new DetectorConfig();
@@ -135,20 +151,18 @@ namespace Resgrid.Audio.Core
 					_logger.Debug($"==========================================================");
 
 					var existingTone = _finishedTones.FirstOrDefault(x => x.DtmfTone.HighTone == end.DtmfTone.HighTone &&
-					                   (end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds <= 500 && end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds >= -500));
+					                                                 (end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds <= 1000 &&
+					                                                  end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds >= -1000));
 
-					if (existingTone != null)
+					if (existingTone != null && existingTone.Duration < new TimeSpan(0, 0, 0, 0, 1750))
 					{
 						_logger.Debug($"AudioEvaluator->DtmfToneStopped: Existing tone for {existingTone.DtmfTone.HighTone} adding {end.Duration.TotalMilliseconds}ms");
 						existingTone.Duration += end.Duration;
 					}
 					else
 					{
-						if (end.Duration > new TimeSpan(0, 0, 0, 0, 150))
-						{
-							_logger.Debug($"AudioEvaluator->DtmfToneStopped: No Existing tone for {end.DtmfTone.HighTone}");
-							_finishedTones.Add(end);
-						}
+						_logger.Debug($"AudioEvaluator->DtmfToneStopped: No Existing tone for {end.DtmfTone.HighTone} for duration {end.Duration}");
+						_finishedTones.Add(end);
 					}
 				}
 
@@ -215,16 +229,29 @@ namespace Resgrid.Audio.Core
 					foreach (var watcher in activeWatchers)
 					{
 						_logger.Debug($"AudioEvaluator->CheckFinishedTonesForTriggers: Check Watcher {watcher.Name} triggers");
-						List<Tuple<Trigger, List<DtmfToneEnd>>> triggers = watcher.DidTriggerProcess(_finishedTones);
-						
-						if (triggers != null && triggers.Any())
+
+						if (!_startedWatchers.Contains(watcher.Id))
 						{
-							var tones = triggers.SelectMany(x => x.Item2).Distinct().ToList();
-							_logger.Debug($"AudioEvaluator->CheckFinishedTonesForTriggers: Watcher {watcher.Name} had {tones.Count} tiggers match");
+							_logger.Debug($"AudioEvaluator->CheckFinishedTonesForTriggers: Watcher {watcher.Name} is not currently active in this tone bank, checking tones.");
 
-							_finishedTones.RemoveAll(x => tones.Select(y => y.Id).ToList().Contains(x.Id));
+							List<Tuple<Trigger, List<DtmfToneEnd>>> triggers = watcher.DidTriggerProcess(_finishedTones);
 
-							WatcherTriggered?.Invoke(this, new WatcherEventArgs(watcher, triggers.Select(x => x.Item1).ToList(), tones.Select(x => x.DtmfTone).ToList(), DateTime.UtcNow));
+							if (triggers != null && triggers.Any())
+							{
+								var tones = triggers.SelectMany(x => x.Item2).Distinct().ToList();
+								_logger.Debug(
+									$"AudioEvaluator->CheckFinishedTonesForTriggers: Watcher {watcher.Name} had {tones.Count} tiggers match");
+
+								_finishedTones.RemoveAll(x => tones.Select(y => y.Id).ToList().Contains(x.Id));
+
+								WatcherTriggered?.Invoke(this,
+									new WatcherEventArgs(watcher, triggers.Select(x => x.Item1).ToList(), tones.Select(x => x.DtmfTone).ToList(),
+										DateTime.UtcNow));
+							}
+						}
+						else
+						{
+							_logger.Debug($"AudioEvaluator->CheckFinishedTonesForTriggers: Watcher {watcher.Name} has already been marked for this tone bank, not checking again.");
 						}
 					}
 				}

@@ -6,7 +6,7 @@
   "Password": "TEST",
   "Multiple": false,
   "Tolerance": 100,
-  "Threshold": -40,
+  "Threshold": -50,
   "EnableSilenceDetection": true,
   "Debug": false,
   "Watchers": [
@@ -19,7 +19,8 @@
         {
           "Frequency1": 524.0,
           "Frequency2": 794.0,
-          "Time": 500,
+          "Time1": 500,
+          "Time2": 500,
           "Count": 2
         }
       ],
@@ -34,7 +35,8 @@
         {
           "Frequency1": 1084.0,
           "Frequency2": 794.0,
-          "Time": 500,
+          "Time1": 500,
+          "Time2": 500,
           "Count": 2
         }
       ],
@@ -49,7 +51,8 @@
         {
           "Frequency1": 881.0,
           "Frequency2": 1084.0,
-          "Time": 500,
+          "Time1": 500,
+          "Time2": 500,
           "Count": 2
         }
       ],
@@ -64,7 +67,8 @@
         {
           "Frequency1": 645.0,
           "Frequency2": 716.0,
-          "Time": 500,
+          "Time1": 500,
+          "Time2": 500,
           "Count": 2
         }
       ],
@@ -79,7 +83,8 @@
         {
           "Frequency1": 384.0,
           "Frequency2": 881.0,
-          "Time": 500,
+          "Time1": 500,
+          "Time2": 500,
           "Count": 2
         }
       ],
@@ -94,7 +99,8 @@
         {
           "Frequency1": 346.0,
           "Frequency2": 384.0,
-          "Time": 500,
+          "Time1": 500,
+          "Time2": 500,
           "Count": 2
         }
       ],
@@ -109,7 +115,8 @@
         {
           "Frequency1": 881.0,
           "Frequency2": 346.0,
-          "Time": 500,
+          "Time1": 500,
+          "Time2": 500,
           "Count": 2
         }
       ],
@@ -124,7 +131,8 @@
         {
           "Frequency1": 426.0,
           "Frequency2": 582.0,
-          "Time": 500,
+          "Time1": 500,
+          "Time2": 500,
           "Count": 2
         }
       ],

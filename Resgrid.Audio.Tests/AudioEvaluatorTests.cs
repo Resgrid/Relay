@@ -20,7 +20,7 @@ namespace Resgrid.Audio.Tests
 			trigger.Frequency1 = 50;
 			trigger.Tolerance = 0;
 			trigger.Count = 1;
-			trigger.Time = .00004;
+			trigger.Time1 = .00004;
 			double[] sample = new double[10];
 			sample[0] = 50;
 			sample[1] = 12;
@@ -47,7 +47,7 @@ namespace Resgrid.Audio.Tests
 		    trigger.Frequency1 = 50;
 		    trigger.Tolerance = 0;
 			trigger.Count = 1;
-		    trigger.Time = .00004;
+		    trigger.Time1 = .00004;
 		    double[] sample = new double[10];
 			sample[0] = 103;
 		    sample[1] = 12;
@@ -74,7 +74,7 @@ namespace Resgrid.Audio.Tests
 		    trigger.Frequency1 = 50;
 		    trigger.Tolerance = 0;
 		    trigger.Count = 1;
-		    trigger.Time = .0008;
+		    trigger.Time1 = .0008;
 		    double[] sample = new double[10];
 			sample[0] = 103;
 		    sample[1] = 12;
@@ -101,7 +101,7 @@ namespace Resgrid.Audio.Tests
 		    trigger.Frequency1 = 50;
 		    trigger.Tolerance = 10;
 		    trigger.Count = 1;
-		    trigger.Time = .00004;
+		    trigger.Time1 = .00004;
 		    double[] sample = new double[10];
 			sample[0] = 51;
 		    sample[1] = 12;
@@ -128,7 +128,7 @@ namespace Resgrid.Audio.Tests
 		    trigger.Frequency1 = 50;
 		    trigger.Tolerance = 2;
 		    trigger.Count = 1;
-		    trigger.Time = .00004;
+		    trigger.Time1 = .00004;
 		    double[] sample = new double[10];
 			sample[0] = 57;
 		    sample[1] = 12;

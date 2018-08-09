@@ -38,7 +38,7 @@ namespace Resgrid.Audio.Core
 
 		public event EventHandler Stopped = delegate { };
 
-		private int RATE = 44100; // sample rate of the sound card
+		private int RATE = 44100; // 44100 is a pretty standard rate, but for Speech-to-Text they almost always want 16000
 		private int BUFFERSIZE = (int)Math.Pow(2, 11); // must be a multiple of 2
 
 		public AudioRecorder(AudioEvaluator audioEvaluator)
@@ -86,9 +86,9 @@ namespace Resgrid.Audio.Core
 			bwp.BufferLength = BUFFERSIZE * 2;
 			bwp.DiscardOnBufferOverflow = true;
 
-			//waveIn.StartRecording();
-			//_audioEvaluator.Start(new WaveInEvent() {DeviceNumber = recordingDevice});
-			_audioEvaluator.Start(waveIn);
+			waveIn.StartRecording();
+			_audioEvaluator.Start(new WaveInEvent() {DeviceNumber = recordingDevice});
+			//_audioEvaluator.Start(waveIn);
 
 			recordingState = RecordingState.Monitoring;
 		}
@@ -181,7 +181,7 @@ namespace Resgrid.Audio.Core
 		public byte[] SaveWatcherAudio(Watcher watcher)
 		{
 			var path = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().CodeBase).Replace("file:\\", "");
-			var fileName = $"{path}\\DispatchAudio\\RelayAudio_{watcher.TriggerFiredTimestamp.ToString("s").Replace(":", "_")}.wav";
+			var fileName = $"{path}\\DispatchAudio\\RelayAudio_{DateTime.Now.ToString("s").Replace(":", "_")}.wav";
 
 			var waveWriter = new WaveFileWriter(fileName, recordingFormat);
 
@@ -192,7 +192,7 @@ namespace Resgrid.Audio.Core
 			using (var retMs = new MemoryStream())
 			using (var ms = new MemoryStream())
 			using (var rdr = new WaveFileReader(fileName))
-			using (var wtr = new LameMP3FileWriter(retMs, rdr.WaveFormat, 128))
+			using (var wtr = new LameMP3FileWriter(retMs, rdr.WaveFormat, RATE / 10))
 			{
 				rdr.CopyTo(wtr);
 				return retMs.ToArray();

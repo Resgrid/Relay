@@ -95,7 +95,7 @@ namespace Resgrid.Audio.Core
 				var savedCall = CallsApi.AddNewCall(newCall).Result;
 
 				if (savedCall != null)
-					CallCreatedEvent?.Invoke(this, new CallCreatedEventArgs(e.Watcher.Name, savedCall.CallId, savedCall.Number, DateTime.UtcNow));
+					CallCreatedEvent?.Invoke(this, new CallCreatedEventArgs(e.Watcher.Name, savedCall.CallId, savedCall.Number, DateTime.Now));
 
 				newCall = null;
 				savedCall = null;

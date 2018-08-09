@@ -138,7 +138,7 @@ namespace Resgrid.Audio.Relay.Console.Commands
 		private static void SampleAggregator_MaximumCalculated(object sender, MaxSampleEventArgs e)
 		{
 			//ConsoleTableOptions options = new ConsoleTableOptions();
-			//options.Columns = new[] { "Time", "Max", "Min" };
+			//options.Columns = new[] { "Time1", "Max", "Min" };
 			//options.EnableCount = false;
 
 			//var table = new ConsoleTable(options);

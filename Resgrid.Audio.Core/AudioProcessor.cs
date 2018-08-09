@@ -19,7 +19,8 @@ namespace Resgrid.Audio.Core
 		private static Object _lock = new Object();
 		private static bool _timerProcessing = false;
 
-		private const int BUFFER_SIZE = 26400000; // 5 Minute Buffer, 1 second = 88,000 array elements
+		//private const int BUFFER_SIZE = 26400000; // 5 Minute Buffer, 1 second = 88,000 array elements
+		private const int BUFFER_SIZE = 10560000; // 2 Minute Buffer, 1 second = 88,000 array elements
 		private const int ONE_SEC = 88000;
 
 		private bool _initialized = false;
@@ -96,11 +97,13 @@ namespace Resgrid.Audio.Core
 								TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
 
 								_startedWatchers.Remove(id);
+								_audioEvaluator.RemoveActiveWatcher(id);
 							//}
 						}
 
-						_audioEvaluator.ClearTones();
+						//_audioEvaluator.ClearTones();
 						watchersToRemove.Clear();
+
 					}
 				}
 
@@ -179,6 +182,7 @@ namespace Resgrid.Audio.Core
 				if (_startedWatchers.Count > 0 && !_config.Multiple)
 				{
 					_startedWatchers.First().Value.AddAdditionalWatcher(watcher);
+					_audioEvaluator.AddActiveWatcher(watcher.Id);
 				}
 				else if (!_startedWatchers.ContainsKey(watcher.Id))
 				{
@@ -195,13 +199,14 @@ namespace Resgrid.Audio.Core
 					//watcher.InitBuffer(_config.AudioLength * ONE_SEC, );
 
 					_startedWatchers.Add(watcher.Id, watcher);
+					_audioEvaluator.AddActiveWatcher(watcher.Id);
 				}
 			}
 		}
 
 		private void CleanUpCheck()
 		{
-			// Time gating this so were not constantly hitting the triggers
+			// Time1 gating this so were not constantly hitting the triggers
 			if (_checkCount >= 60)
 			{
 				if (_startedWatchers == null || _startedWatchers.Count <= 0)
