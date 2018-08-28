@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using Resgrid.Audio.Core.Events;
 using Resgrid.Audio.Core.Model;
+using Resgrid.Providers.ApiClient;
 using Resgrid.Providers.ApiClient.V3;
 using Resgrid.Providers.ApiClient.V3.Models;
 using Serilog.Core;
@@ -51,9 +52,7 @@ namespace Resgrid.Audio.Core
 		private void _audioProcessor_TriggerProcessingFinished(object sender, Events.TriggerProcessedEventArgs e)
 		{
 			Call newCall = new Call();
-			newCall.Name = $"Audio Import {DateTime.Now.ToString("g")}";
 			newCall.Priority = (int)CallPriority.Medium;
-			newCall.NatureOfCall = $"Audio import from a radio dispatch. Listen to attached audio for call information.";
 			StringBuilder watchersToned = new StringBuilder();
 
 			watchersToned.Append($"{e.Watcher.Name} ");
@@ -76,10 +75,16 @@ namespace Resgrid.Audio.Core
 				}
 			}
 
+			newCall.NatureOfCall = $"Audio import from a radio dispatch. Listen to attached audio for call information. Watchers Toned: {watchersToned}";
 			newCall.Notes = $"Audio import from a radio dispatch. Listen to attached audio for call information. Call was created on {DateTime.Now.ToString("F")}. Was an AllCall: {newCall.AllCall}. Watchers Toned: {watchersToned}";
 
 			if (e.Watcher.Type == 1)
 				newCall.AllCall = true;
+
+			if (newCall.AllCall)
+				newCall.Name = $"ALLCALL Audio Import {DateTime.Now.ToString("g")}";
+			else
+				newCall.Name = $"Audio Import {DateTime.Now.ToString("g")}";
 
 			newCall.Attachments = new List<CallAttachment>();
 			newCall.Attachments.Add(new CallAttachment()
@@ -92,10 +97,11 @@ namespace Resgrid.Audio.Core
 
 			try
 			{
-				var savedCall = CallsApi.AddNewCall(newCall).Result;
+				var savedCall = AsyncHelpers.RunSync<Call>(() => CallsApi.AddNewCall(newCall));
 
 				if (savedCall != null)
-					CallCreatedEvent?.Invoke(this, new CallCreatedEventArgs(e.Watcher.Name, savedCall.CallId, savedCall.Number, DateTime.Now));
+					CallCreatedEvent?.Invoke(this,
+						new CallCreatedEventArgs(e.Watcher.Name, savedCall.CallId, savedCall.Number, DateTime.Now));
 
 				newCall = null;
 				savedCall = null;
@@ -103,6 +109,15 @@ namespace Resgrid.Audio.Core
 			catch (Exception ex)
 			{
 				_logger.Error(ex.ToString());
+			}
+			finally
+			{
+				foreach (var additionalWatcher in e.Watcher.GetAdditionalWatchers())
+				{
+					additionalWatcher.ClearBuffer();
+				}
+
+				e.Watcher.ClearBuffer();
 			}
 		}
 	}

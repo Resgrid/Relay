@@ -64,6 +64,15 @@ namespace Resgrid.Audio.Core.Model
 			return _buffer.ToArray();
 		}
 
+		public void ClearBuffer()
+		{
+			_buffer = null;
+			_buffer = new List<byte>();
+
+			_additionalWatchers = null;
+			_additionalWatchers = new List<Watcher>();
+		}
+
 		public void AddAdditionalWatcher(Watcher watcher)
 		{
 			if (_additionalWatchers == null)

@@ -96,7 +96,7 @@ namespace Resgrid.Audio.Core
 		void OnRecordingStopped(object sender, StoppedEventArgs e)
 		{
 			recordingState = RecordingState.Stopped;
-			writer.Dispose();
+			writer?.Dispose();
 			Stopped(this, EventArgs.Empty);
 		}
 
@@ -143,20 +143,20 @@ namespace Resgrid.Audio.Core
 			int bytesRecorded = e.BytesRecorded;
 			//WriteToFile(buffer, bytesRecorded);
 
-			_sampleAggregator.OnDataAvailable(buffer, bytesRecorded);
+			_sampleAggregator?.OnDataAvailable(buffer, bytesRecorded);
 
 			for (int index = 0; index < e.BytesRecorded; index += 2)
 			{
 				short sample = (short)((buffer[index + 1] << 8) | buffer[index + 0]);
 				float sample32 = sample / 32768f;
-				_sampleAggregator.Add(sample32);
+				_sampleAggregator?.Add(sample32);
 			}
 
 			int frameSize = BUFFERSIZE;
 			byte[] frames = new byte[frameSize];
 
 			bwp.Read(frames, 0, frameSize);
-			_sampleAggregator.Calculate(frames, frameSize);
+			_sampleAggregator?.Calculate(frames, frameSize);
 		}
 
 		private void WriteToFile(byte[] buffer, int bytesRecorded)
