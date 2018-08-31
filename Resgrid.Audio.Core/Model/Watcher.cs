@@ -9,7 +9,6 @@ namespace Resgrid.Audio.Core.Model
 	public class Watcher
 	{
 		private Guid _id;
-		private List<byte> _buffer;
 		private Trigger _trigger;
 		private int _audioCount;
 		private List<Watcher> _additionalWatchers;
@@ -25,11 +24,6 @@ namespace Resgrid.Audio.Core.Model
 
 		[Newtonsoft.Json.JsonIgnore]
 		public DateTime LastCheckedTimestamp { get; set; }
-
-		public Watcher()
-		{
-			_buffer = new List<byte>();
-		}
 
 		public Guid Id
 		{
@@ -49,26 +43,13 @@ namespace Resgrid.Audio.Core.Model
 				_trigger = trigger;
 		}
 
-		public void AddAudio(byte[] audio)
-		{
-			_buffer.AddRange(audio);
-		}
-
 		public Trigger GetTrigger()
 		{
 			return _trigger;
 		}
 
-		public byte[] GetBuffer()
+		public void Clear()
 		{
-			return _buffer.ToArray();
-		}
-
-		public void ClearBuffer()
-		{
-			_buffer = null;
-			_buffer = new List<byte>();
-
 			_additionalWatchers = null;
 			_additionalWatchers = new List<Watcher>();
 		}

@@ -14,15 +14,17 @@ namespace Resgrid.Audio.Core
 	{
 		private readonly Logger _logger;
 		private readonly AudioProcessor _audioProcessor;
+		private readonly IWatcherAudioStorage _audioStorage;
 
 		private Config _config;
 
 		public event EventHandler<CallCreatedEventArgs> CallCreatedEvent;
 
-		public ComService(Logger logger, AudioProcessor audioProcessor)
+		public ComService(Logger logger, AudioProcessor audioProcessor, IWatcherAudioStorage audioStorage)
 		{
 			_logger = logger;
 			_audioProcessor = audioProcessor;
+			_audioStorage = audioStorage;
 		}
 
 		public void Init(Config config)
@@ -112,12 +114,7 @@ namespace Resgrid.Audio.Core
 			}
 			finally
 			{
-				foreach (var additionalWatcher in e.Watcher.GetAdditionalWatchers())
-				{
-					additionalWatcher.ClearBuffer();
-				}
-
-				e.Watcher.ClearBuffer();
+				_audioStorage.FinishWatcher(e.Watcher.Id);
 			}
 		}
 	}

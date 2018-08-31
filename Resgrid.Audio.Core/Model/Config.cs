@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 
 namespace Resgrid.Audio.Core.Model
 {
@@ -14,6 +15,7 @@ namespace Resgrid.Audio.Core.Model
 		public sbyte Threshold { get; set; }
 		public bool EnableSilenceDetection { get; set; }
 		public bool Debug { get; set; }
+		public string DebugKey { get; set; }
 		public List<Watcher> Watchers { get; set; }
 	}
 }

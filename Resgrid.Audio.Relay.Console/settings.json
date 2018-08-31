@@ -9,6 +9,7 @@
   "Threshold": -50,
   "EnableSilenceDetection": true,
   "Debug": false,
+  "DebugKey": "",
   "Watchers": [
     {
       "Name": "Station 2",

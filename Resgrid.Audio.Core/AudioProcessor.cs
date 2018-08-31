@@ -32,6 +32,7 @@ namespace Resgrid.Audio.Core
 
 		private readonly IAudioRecorder _audioRecorder;
 		private readonly IAudioEvaluator _audioEvaluator;
+		private readonly IWatcherAudioStorage _watcherAudioStorage;
 		private readonly SampleAggregator _sampleAggregator;
 		private Timer _timer;
 
@@ -40,10 +41,11 @@ namespace Resgrid.Audio.Core
 
 		private int _checkCount = 0;
 
-		public AudioProcessor(IAudioRecorder audioRecorder, IAudioEvaluator audioEvaluator)
+		public AudioProcessor(IAudioRecorder audioRecorder, IAudioEvaluator audioEvaluator, IWatcherAudioStorage watcherAudioStorage)
 		{
 			_audioRecorder = audioRecorder;
 			_audioEvaluator = audioEvaluator;
+			_watcherAudioStorage = watcherAudioStorage;
 
 			_buffer = new CircularBuffer<byte>(BUFFER_SIZE);
 			_sampleAggregator = new SampleAggregator();
@@ -90,14 +92,14 @@ namespace Resgrid.Audio.Core
 
 							//if (lastAudioSlice != null)
 							//{
-								//byte[] watcherAudioOnly = lastAudioSlice.Where(x => x.Item1 >= watcher.TriggerFiredTimestamp.Ticks).Select(y => y.Item2).ToArray();
+							//byte[] watcherAudioOnly = lastAudioSlice.Where(x => x.Item1 >= watcher.TriggerFiredTimestamp.Ticks).Select(y => y.Item2).ToArray();
 
-								//watcher.AddAudio(watcherAudioOnly);
-								var mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
-								TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
+							//watcher.AddAudio(watcherAudioOnly);
+							var mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
+							_startedWatchers.Remove(id);
+							_audioEvaluator.RemoveActiveWatcher(id);
 
-								_startedWatchers.Remove(id);
-								_audioEvaluator.RemoveActiveWatcher(id);
+							TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
 							//}
 						}
 
@@ -163,11 +165,10 @@ namespace Resgrid.Audio.Core
 
 						if (_startedWatchers != null && _startedWatchers.Count > 0)
 						{
-							var data = new byte[] {e.Buffer[index + 0], e.Buffer[index + 1]};
+							var data = new byte[] { e.Buffer[index + 0], e.Buffer[index + 1] };
 							foreach (var watcher in _startedWatchers)
 							{
-
-								watcher.Value.AddAudio(data);
+								_watcherAudioStorage.AddAudio(watcher.Value.Id, data);
 							}
 						}
 					}

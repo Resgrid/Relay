@@ -35,15 +35,17 @@ namespace Resgrid.Audio.Core
 		BufferedWaveProvider bwp;
 
 		private AudioEvaluator _audioEvaluator;
+		private IWatcherAudioStorage _audioStorage;
 
 		public event EventHandler Stopped = delegate { };
 
 		private int RATE = 44100; // 44100 is a pretty standard rate, but for Speech-to-Text they almost always want 16000
 		private int BUFFERSIZE = (int)Math.Pow(2, 11); // must be a multiple of 2
 
-		public AudioRecorder(AudioEvaluator audioEvaluator)
+		public AudioRecorder(AudioEvaluator audioEvaluator, IWatcherAudioStorage audioStorage)
 		{
 			_audioEvaluator = audioEvaluator;
+			_audioStorage = audioStorage;
 		}
 
 		public WaveFormat RecordingFormat
@@ -185,7 +187,7 @@ namespace Resgrid.Audio.Core
 
 			var waveWriter = new WaveFileWriter(fileName, recordingFormat);
 
-			var buffer = watcher.GetBuffer();
+			var buffer = _audioStorage.GetAudio(watcher.Id);
 			waveWriter.Write(buffer, 0, buffer.Length);
 			waveWriter.Dispose();
 

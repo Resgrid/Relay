@@ -12,6 +12,7 @@ namespace Resgrid.Audio.Relay.Console.Commands
 	public class MonitorCommand : Command
 	{
 		private static AudioRecorder recorder;
+		private static IWatcherAudioStorage audioStorage;
 		private static AudioEvaluator evaluator;
 		private static AudioProcessor processor;
 
@@ -22,9 +23,10 @@ namespace Resgrid.Audio.Relay.Console.Commands
 				.WriteTo.Console()
 				.CreateLogger();
 
+			audioStorage = new WatcherAudioStorage();
 			evaluator = new AudioEvaluator(log);
-			recorder = new AudioRecorder(evaluator);
-			processor = new AudioProcessor(recorder, evaluator);
+			recorder = new AudioRecorder(evaluator, audioStorage);
+			processor = new AudioProcessor(recorder, evaluator, audioStorage);
 
 			System.Console.WriteLine("Resgrid Audio");
 			System.Console.WriteLine("-----------------------------------------");
