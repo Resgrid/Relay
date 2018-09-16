@@ -96,10 +96,11 @@ namespace Resgrid.Audio.Core
 
 							//watcher.AddAudio(watcherAudioOnly);
 							var mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
+							_watcherAudioStorage.FinishWatcher(watcher.Id);
+							TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
+
 							_startedWatchers.Remove(id);
 							_audioEvaluator.RemoveActiveWatcher(id);
-
-							TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
 							//}
 						}
 
@@ -199,6 +200,7 @@ namespace Resgrid.Audio.Core
 
 					//watcher.InitBuffer(_config.AudioLength * ONE_SEC, );
 
+					_watcherAudioStorage.StartNewAudio(watcher.Id, null);
 					_startedWatchers.Add(watcher.Id, watcher);
 					_audioEvaluator.AddActiveWatcher(watcher.Id);
 				}

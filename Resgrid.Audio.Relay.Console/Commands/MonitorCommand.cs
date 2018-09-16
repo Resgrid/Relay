@@ -23,7 +23,7 @@ namespace Resgrid.Audio.Relay.Console.Commands
 				.WriteTo.Console()
 				.CreateLogger();
 
-			audioStorage = new WatcherAudioStorage();
+			audioStorage = new WatcherAudioStorage(log);
 			evaluator = new AudioEvaluator(log);
 			recorder = new AudioRecorder(evaluator, audioStorage);
 			processor = new AudioProcessor(recorder, evaluator, audioStorage);

@@ -74,11 +74,11 @@ namespace Resgrid.Audio.Relay.Console.Commands
 						.CreateLogger();
 				}
 
-				audioStorage = new WatcherAudioStorage();
+				audioStorage = new WatcherAudioStorage(log);
 				evaluator = new AudioEvaluator(log);
 				recorder = new AudioRecorder(evaluator, audioStorage);
 				processor = new AudioProcessor(recorder, evaluator, audioStorage);
-				com = new ComService(log, processor, audioStorage);
+				com = new ComService(log, processor);
 				com.CallCreatedEvent += Com_CallCreatedEvent;
 
 				System.Console.WriteLine("Hooking into Events");
