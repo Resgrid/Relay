@@ -86,7 +86,7 @@ namespace Resgrid.Audio.Core.Model
 						}
 					}
 
-					var secondTone = secondTonesList.FirstOrDefault(x => x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds <= ((Time1 + Time2) * 10));
+					var secondTone = secondTonesList.FirstOrDefault(x => x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds <= ((Time1 + Time2) * 6));
 					//var secondTone = secondTonesList.FirstOrDefault(x => x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds <= (1000 * 60));
 
 					if (secondTone != null)
