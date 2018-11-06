@@ -15,6 +15,7 @@
       "Name": "Station 2",
       "Active": true,
       "Code": null,
+      "AdditionalCodes": null,
       "Type": 0,
       "Triggers": [
         {
@@ -31,6 +32,7 @@
       "Name": "Station 3",
       "Active": true,
       "Code": null,
+      "AdditionalCodes": null,
       "Type": 0,
       "Triggers": [
         {
@@ -47,6 +49,7 @@
       "Name": "Station 5",
       "Active": true,
       "Code": null,
+      "AdditionalCodes": null,
       "Type": 0,
       "Triggers": [
         {
@@ -63,6 +66,7 @@
       "Name": "Station 6",
       "Active": true,
       "Code": null,
+      "AdditionalCodes": null,
       "Type": 0,
       "Triggers": [
         {
@@ -79,6 +83,7 @@
       "Name": "Station 7",
       "Active": true,
       "Code": null,
+      "AdditionalCodes": null,
       "Type": 0,
       "Triggers": [
         {
@@ -95,6 +100,7 @@
       "Name": "Station 8",
       "Active": true,
       "Code": null,
+      "AdditionalCodes": null,
       "Type": 0,
       "Triggers": [
         {
@@ -111,6 +117,7 @@
       "Name": "Station 9",
       "Active": true,
       "Code": null,
+      "AdditionalCodes": null,
       "Type": 0,
       "Triggers": [
         {
@@ -127,6 +134,7 @@
       "Name": "Station 10",
       "Active": true,
       "Code": null,
+      "AdditionalCodes": null,
       "Type": 0,
       "Triggers": [
         {

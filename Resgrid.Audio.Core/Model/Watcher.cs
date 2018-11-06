@@ -16,6 +16,7 @@ namespace Resgrid.Audio.Core.Model
 		public string Name { get; set; }
 		public bool Active { get; set; }
 		public string Code { get; set; }
+		public string AdditionalCodes { get; set; }
 		public int Type { get; set; } // 1 Department, 2 Group
 		public List<Trigger> Triggers { get; set; }
 

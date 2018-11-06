@@ -69,11 +69,31 @@ namespace Resgrid.Audio.Core
 				{
 					foreach (var code in additionalCodes)
 					{
-						watchersToned.Append($"{code.Name} ");
-						newCall.GroupCodesToDispatch.Add(code.Code);
+						if (!newCall.GroupCodesToDispatch.Contains(code.Code))
+						{
+							watchersToned.Append($"{code.Name} ");
+							newCall.GroupCodesToDispatch.Add(code.Code);
 
-						if (code.Type == 1)
-							newCall.AllCall = true;
+							if (code.Type == 1)
+								newCall.AllCall = true;
+						}
+					}
+				}
+
+				// Run through the additional comma seperated group codes and add them.
+				if (!string.IsNullOrWhiteSpace(e.Watcher.AdditionalCodes))
+				{
+					var newCodes = e.Watcher.AdditionalCodes.Split(char.Parse(","));
+
+					if (newCodes != null && newCodes.Length > 0)
+					{
+						foreach (var code in newCodes)
+						{
+							if (!newCall.GroupCodesToDispatch.Contains(code))
+							{
+								newCall.GroupCodesToDispatch.Add(code);
+							}
+						}
 					}
 				}
 
