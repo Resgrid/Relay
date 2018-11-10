@@ -114,6 +114,7 @@
     <Compile Include="Args\DevicesArgs.cs" />
     <Compile Include="Args\VersionArgs.cs" />
     <Compile Include="Commands\DevicesCommand.cs" />
+    <Compile Include="Commands\SetupCommand.cs" />
     <Compile Include="Commands\HelpCommand.cs" />
     <Compile Include="Commands\MonitorCommand.cs" />
     <Compile Include="Commands\RunCommand.cs" />

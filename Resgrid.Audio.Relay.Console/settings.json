@@ -7,7 +7,7 @@
   "Multiple": false,
   "Tolerance": 100,
   "Threshold": -50,
-  "EnableSilenceDetection": true,
+  "EnableSilenceDetection": false,
   "Debug": false,
   "DebugKey": "",
   "Watchers": [

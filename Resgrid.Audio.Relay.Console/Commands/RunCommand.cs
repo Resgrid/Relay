@@ -109,7 +109,7 @@ namespace Resgrid.Audio.Relay.Console.Commands
 					System.Console.WriteLine("Communiation Service: API Connection is Valid");
 				else
 					System.Console.WriteLine(
-						"Communiation Service: CANNOT TALK TO RESGRID API, CHECK YOUR CONFIGS APIURL AND ENSURE YOUR COMPUTER CAN TALK TO THAT URL");
+						"Communiation Service: CANNOT TALK TO RESGRID API, CHECK YOUR CONFIG APIURL AND ENSURE YOUR COMPUTER CAN TALK TO THAT URL");
 
 				System.Console.WriteLine("Ready, Listening to Audio. Press Ctrl+C to exit.");
 
