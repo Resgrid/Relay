@@ -35,6 +35,23 @@ namespace Resgrid.Audio.Relay.Console.Commands
 			System.Console.WriteLine("Loading Settings");
 			Config config = LoadSettingsFromFile();
 
+			Logger log;
+
+			if (config.Debug)
+			{
+				log = new LoggerConfiguration()
+					.MinimumLevel.Debug()
+					.WriteTo.Console()
+					.CreateLogger();
+			}
+			else
+			{
+				log = new LoggerConfiguration()
+					.MinimumLevel.Error()
+					.WriteTo.Console()
+					.CreateLogger();
+			}
+
 			TelemetryConfiguration configuration = null;
 			TelemetryClient telemetryClient = null;
 
@@ -55,67 +72,18 @@ namespace Resgrid.Audio.Relay.Console.Commands
 
 			using (InitializeDependencyTracking(configuration))
 			{
-				System.Console.WriteLine($"Listening for Dispatches on Device: {config.InputDevice}");
-
-				Logger log;
-
-				if (config.Debug)
+				while (true)
 				{
-					log = new LoggerConfiguration()
-						.MinimumLevel.Debug()
-						.WriteTo.Console()
-						.CreateLogger();
-				}
-				else
-				{
-					log = new LoggerConfiguration()
-						.MinimumLevel.Error()
-						.WriteTo.Console()
-						.CreateLogger();
-				}
-
-				audioStorage = new WatcherAudioStorage(log);
-				evaluator = new AudioEvaluator(log);
-				recorder = new AudioRecorder(evaluator, audioStorage);
-				processor = new AudioProcessor(recorder, evaluator, audioStorage);
-				com = new ComService(log, processor);
-				com.CallCreatedEvent += Com_CallCreatedEvent;
-
-				System.Console.WriteLine("Hooking into Events");
-				recorder.SampleAggregator.MaximumCalculated += SampleAggregator_MaximumCalculated;
-				recorder.SampleAggregator.WaveformCalculated += SampleAggregator_WaveformCalculated;
-
-				processor.TriggerProcessingStarted += Processor_TriggerProcessingStarted;
-				processor.TriggerProcessingFinished += Processor_TriggerProcessingFinished;
-
-				evaluator.WatcherTriggered += Evaluator_WatcherTriggered;
-
-				ResgridV3ApiClient.Init(config.ApiUrl, config.Username, config.Password);
-
-				System.Console.WriteLine(
-					$"Config Loaded with {config.Watchers.Count} watchers ({config.Watchers.Count(x => x.Active)} active)");
-
-				System.Console.WriteLine("Initializing Processor");
-				processor.Init(config);
-
-				System.Console.WriteLine("Starting Processor");
-				processor.Start();
-
-				System.Console.WriteLine("Starting Communiation Service");
-				com.Init(config);
-				System.Console.WriteLine("Communiation Service: Validating API Connection");
-
-				if (com.IsConnectionValid())
-					System.Console.WriteLine("Communiation Service: API Connection is Valid");
-				else
-					System.Console.WriteLine(
-						"Communiation Service: CANNOT TALK TO RESGRID API, CHECK YOUR CONFIG APIURL AND ENSURE YOUR COMPUTER CAN TALK TO THAT URL");
-
-				System.Console.WriteLine("Ready, Listening to Audio. Press Ctrl+C to exit.");
-
-				while (recorder.RecordingState == RecordingState.Monitoring || recorder.RecordingState == RecordingState.Recording)
-				{
-					Thread.Sleep(250);
+					try
+					{
+						if (Run(config, log))
+							break;
+					}
+					catch (Exception ex)
+					{
+						log.Fatal(ex.ToString());
+						System.Console.WriteLine($"Restarting listener due to an error, if this keeps ocurring consider checking for updates or logging an issue.");
+					}
 				}
 			}
 
@@ -126,6 +94,57 @@ namespace Resgrid.Audio.Relay.Console.Commands
 			}
 
 			return "";
+		}
+
+		private bool Run(Config config, Logger log)
+		{
+			System.Console.WriteLine($"Listening for Dispatches on Device: {config.InputDevice}");
+
+			audioStorage = new WatcherAudioStorage(log);
+			evaluator = new AudioEvaluator(log);
+			recorder = new AudioRecorder(evaluator, audioStorage);
+			processor = new AudioProcessor(recorder, evaluator, audioStorage);
+			com = new ComService(log, processor);
+			com.CallCreatedEvent += Com_CallCreatedEvent;
+
+			System.Console.WriteLine("Hooking into Events");
+			recorder.SampleAggregator.MaximumCalculated += SampleAggregator_MaximumCalculated;
+			recorder.SampleAggregator.WaveformCalculated += SampleAggregator_WaveformCalculated;
+
+			processor.TriggerProcessingStarted += Processor_TriggerProcessingStarted;
+			processor.TriggerProcessingFinished += Processor_TriggerProcessingFinished;
+
+			evaluator.WatcherTriggered += Evaluator_WatcherTriggered;
+
+			ResgridV3ApiClient.Init(config.ApiUrl, config.Username, config.Password);
+
+			System.Console.WriteLine(
+				$"Config Loaded with {config.Watchers.Count} watchers ({config.Watchers.Count(x => x.Active)} active)");
+
+			System.Console.WriteLine("Initializing Processor");
+			processor.Init(config);
+
+			System.Console.WriteLine("Starting Processor");
+			processor.Start();
+
+			System.Console.WriteLine("Starting Communiation Service");
+			com.Init(config);
+			System.Console.WriteLine("Communiation Service: Validating API Connection");
+
+			if (com.IsConnectionValid())
+				System.Console.WriteLine("Communiation Service: API Connection is Valid");
+			else
+				System.Console.WriteLine(
+					"Communiation Service: CANNOT TALK TO RESGRID API, CHECK YOUR CONFIG APIURL AND ENSURE YOUR COMPUTER CAN TALK TO THAT URL");
+
+			System.Console.WriteLine("Ready, Listening to Audio. Press Ctrl+C to exit.");
+
+			while (recorder.RecordingState == RecordingState.Monitoring || recorder.RecordingState == RecordingState.Recording)
+			{
+				Thread.Sleep(250);
+			}
+
+			return true;
 		}
 
 		private void Com_CallCreatedEvent(object sender, Core.Events.CallCreatedEventArgs e)
