@@ -10,6 +10,7 @@ namespace Resgrid.Audio.Core
 		void FinishWatcher(Guid watcherId);
 		void AddAudio(Guid watcherId, byte[] audio);
 		byte[] GetAudio(Guid watcherId);
+		void Clear();
 	}
 
 	public class WatcherAudioStorage : IWatcherAudioStorage
@@ -61,6 +62,11 @@ namespace Resgrid.Audio.Core
 			}
 
 			return null;
+		}
+
+		public void Clear()
+		{
+			_watcherAudio = new Dictionary<Guid, List<byte>>();
 		}
 	}
 }

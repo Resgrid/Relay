@@ -213,7 +213,10 @@ namespace Resgrid.Audio.Core
 			if (_checkCount >= 60)
 			{
 				if (_startedWatchers == null || _startedWatchers.Count <= 0)
+				{
 					_audioEvaluator.CleanUpTones();
+					_watcherAudioStorage.Clear();
+				}
 
 				_checkCount = 0;
 			}
