@@ -124,8 +124,7 @@ namespace Resgrid.Audio.Core
 					var savedCall = AsyncHelpers.RunSync<Call>(() => CallsApi.AddNewCall(newCall));
 
 					if (savedCall != null)
-						CallCreatedEvent?.Invoke(this,
-							new CallCreatedEventArgs(e.Watcher.Name, savedCall.CallId, savedCall.Number, DateTime.Now));
+						CallCreatedEvent?.Invoke(this, new CallCreatedEventArgs(e.Watcher.Name, savedCall.CallId, savedCall.Number, DateTime.Now));
 				}
 				catch (Exception ex)
 				{

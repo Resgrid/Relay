@@ -15,6 +15,7 @@ namespace Resgrid.Audio.Core
 
 	public class WatcherAudioStorage : IWatcherAudioStorage
 	{
+		private static Object _lock = new Object();
 		private readonly Logger _logger;
 		private static Dictionary<Guid, List<byte>> _watcherAudio;
 
@@ -28,12 +29,15 @@ namespace Resgrid.Audio.Core
 		{
 			if (!_watcherAudio.ContainsKey(watcherId))
 			{
-				if (initalAudio != null && initalAudio.Length > 0)
-					_watcherAudio.Add(watcherId, new List<byte>(initalAudio));
-				else
-					_watcherAudio.Add(watcherId, new List<byte>());
+				lock (_lock)
+				{
+					if (initalAudio != null && initalAudio.Length > 0)
+						_watcherAudio.Add(watcherId, new List<byte>(initalAudio));
+					else
+						_watcherAudio.Add(watcherId, new List<byte>());
 
-				_logger.Information($"Adding watcher data collection with Id of {watcherId}, total of {_watcherAudio.Count} watchers awaiting data.");
+					_logger.Information($"Adding watcher data collection with Id of {watcherId}, total of {_watcherAudio.Count} watchers awaiting data.");
+				}
 			}
 		}
 
@@ -41,8 +45,11 @@ namespace Resgrid.Audio.Core
 		{
 			if (_watcherAudio.ContainsKey(watcherId))
 			{
-				_watcherAudio.Remove(watcherId);
-				_logger.Information($"Removed watcher with Id of {watcherId} leaving {_watcherAudio.Count} watchers awaiting data.");
+				lock (_lock)
+				{
+					_watcherAudio.Remove(watcherId);
+					_logger.Information($"Removed watcher with Id of {watcherId} leaving {_watcherAudio.Count} watchers awaiting data.");
+				}
 			}
 		}
 
@@ -50,7 +57,10 @@ namespace Resgrid.Audio.Core
 		{
 			if (_watcherAudio.ContainsKey(watcherId))
 			{
-				_watcherAudio[watcherId].AddRange(audio);
+				lock (_lock)
+				{
+					_watcherAudio[watcherId].AddRange(audio);
+				}
 			}
 		}
 
@@ -58,7 +68,10 @@ namespace Resgrid.Audio.Core
 		{
 			if (_watcherAudio.ContainsKey(watcherId))
 			{
-				return _watcherAudio[watcherId].ToArray();
+				lock (_lock)
+				{
+					return _watcherAudio[watcherId].ToArray();
+				}
 			}
 
 			return null;
@@ -66,7 +79,10 @@ namespace Resgrid.Audio.Core
 
 		public void Clear()
 		{
-			_watcherAudio = new Dictionary<Guid, List<byte>>();
+			lock (_lock)
+			{
+				_watcherAudio = new Dictionary<Guid, List<byte>>();
+			}
 		}
 	}
 }
