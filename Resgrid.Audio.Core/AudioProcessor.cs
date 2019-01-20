@@ -84,24 +84,12 @@ namespace Resgrid.Audio.Core
 						{
 							var watcher = _startedWatchers[id];
 
-							//IEnumerable<Tuple<long, byte>> lastAudioSlice = null;
-							//lock (_lock)
-							//{
-							//	lastAudioSlice = _buffer.ToArray().TakeLast(_config.AudioLength * ONE_SEC);
-							//}
-
-							//if (lastAudioSlice != null)
-							//{
-							//byte[] watcherAudioOnly = lastAudioSlice.Where(x => x.Item1 >= watcher.TriggerFiredTimestamp.Ticks).Select(y => y.Item2).ToArray();
-
-							//watcher.AddAudio(watcherAudioOnly);
 							var mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
 							_watcherAudioStorage.FinishWatcher(watcher.Id);
 							TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
 
 							_startedWatchers.Remove(id);
 							_audioEvaluator.RemoveActiveWatcher(id);
-							//}
 						}
 
 						//_audioEvaluator.ClearTones();
@@ -191,14 +179,6 @@ namespace Resgrid.Audio.Core
 					watcher.TriggerFiredTimestamp = timeStamp;
 					watcher.LastCheckedTimestamp = timeStamp;
 					watcher.SetFiredTrigger(trigger);
-
-					//IEnumerable<byte> lastAudioSlice = null;
-					//lock (_lock)
-					//{
-					//	lastAudioSlice = _buffer.ToArray().TakeLast(15 * ONE_SEC);
-					//}
-
-					//watcher.InitBuffer(_config.AudioLength * ONE_SEC, );
 
 					_watcherAudioStorage.StartNewAudio(watcher.Id, null);
 					_startedWatchers.Add(watcher.Id, watcher);
