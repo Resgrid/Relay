@@ -98,9 +98,9 @@ namespace Resgrid.Audio.Core
 				}
 
 				newCall.NatureOfCall =
-					$"Audio import from a radio dispatch. Listen to attached audio for call information. Watchers Toned: {watchersToned}";
+					$"Relay import, listen to audio for call info. Toned: {watchersToned}";
 				newCall.Notes =
-					$"Audio import from a radio dispatch. Listen to attached audio for call information. Call was created on {DateTime.Now.ToString("F")}. Was an AllCall: {newCall.AllCall}. Watchers Toned: {watchersToned}";
+					$"Audio importted call from a radio dispatch using the Resgrid Relay app. Listen to attached audio for call information. Call was created on {DateTime.Now.ToString("F")}. Was an AllCall: {newCall.AllCall}. Watchers Toned: {watchersToned}";
 
 				if (e.Watcher.Type == 1)
 					newCall.AllCall = true;
