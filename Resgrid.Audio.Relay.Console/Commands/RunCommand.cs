@@ -65,7 +65,7 @@ namespace Resgrid.Audio.Relay.Console.Commands
 					configuration.TelemetryInitializers.Add(new HttpDependenciesParsingTelemetryInitializer());
 					telemetryClient = new TelemetryClient();
 
-					System.Console.WriteLine("Application Insights Debug Key Detected and AppInsights Initalized");
+					System.Console.WriteLine("Application Insights Debug Key Detected and AppInsights Initialized");
 				}
 				catch { }
 			}
@@ -82,7 +82,7 @@ namespace Resgrid.Audio.Relay.Console.Commands
 					catch (Exception ex)
 					{
 						log.Fatal(ex.ToString());
-						System.Console.WriteLine($"Restarting listener due to an error, if this keeps ocurring consider checking for updates or logging an issue.");
+						System.Console.WriteLine($"Restarting listener due to an error, if this keeps occurring consider checking for updates or logging an issue.");
 					}
 				}
 			}
@@ -127,15 +127,15 @@ namespace Resgrid.Audio.Relay.Console.Commands
 			System.Console.WriteLine("Starting Processor");
 			processor.Start();
 
-			System.Console.WriteLine("Starting Communiation Service");
+			System.Console.WriteLine("Starting Communication Service");
 			com.Init(config);
-			System.Console.WriteLine("Communiation Service: Validating API Connection");
+			System.Console.WriteLine("Communication Service: Validating API Connection");
 
 			if (com.IsConnectionValid())
-				System.Console.WriteLine("Communiation Service: API Connection is Valid");
+				System.Console.WriteLine("Communication Service: API Connection is Valid");
 			else
 				System.Console.WriteLine(
-					"Communiation Service: CANNOT TALK TO RESGRID API, CHECK YOUR CONFIG APIURL AND ENSURE YOUR COMPUTER CAN TALK TO THAT URL");
+					"Communication Service: CANNOT TALK TO RESGRID API, CHECK YOUR CONFIG APIURL AND ENSURE YOUR COMPUTER CAN TALK TO THAT URL");
 
 			System.Console.WriteLine("Ready, Listening to Audio. Press Ctrl+C to exit.");
 
