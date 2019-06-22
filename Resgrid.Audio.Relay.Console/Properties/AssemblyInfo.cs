@@ -5,12 +5,12 @@ using System.Runtime.InteropServices;
 // General Information about an assembly is controlled through the following
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("Resgrid.Audio.Relay.Console")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyTitle("Resgrid Relay Audio Console")]
+[assembly: AssemblyDescription("Dispatch first responders and personnel or units from audio feeds")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("Resgrid.Audio.Relay.Console")]
-[assembly: AssemblyCopyright("Copyright ©  2018")]
+[assembly: AssemblyCompany("Resgrid, LLC")]
+[assembly: AssemblyProduct("Resgrid Relay")]
+[assembly: AssemblyCopyright("Copyright © 2018 Resgrid, LLC")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 

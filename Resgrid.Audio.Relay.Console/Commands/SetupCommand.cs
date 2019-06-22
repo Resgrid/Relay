@@ -63,6 +63,8 @@ namespace Resgrid.Audio.Relay.Console.Commands
 
 			SaveSettingsFromFile(config);
 
+			System.Console.WriteLine("Your options have been written to the settings.json in this directory. You can also edit the file manually in a text editor.");
+
 			return "";
 		}
 
