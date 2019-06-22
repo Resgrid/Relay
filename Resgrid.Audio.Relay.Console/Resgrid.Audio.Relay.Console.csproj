@@ -108,6 +108,7 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Args\SetupArgs.cs" />
     <Compile Include="Args\MonitorArgs.cs" />
     <Compile Include="Args\RunArgs.cs" />
     <Compile Include="Args\HelpArgs.cs" />

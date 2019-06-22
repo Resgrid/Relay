@@ -11,7 +11,7 @@ namespace Resgrid.Audio.Relay.Console.Commands
 {
 	public class SetupCommand : Command
 	{
-		public string Execute(HelpArgs args)
+		public string Execute(SetupArgs args)
 		{
 			System.Console.WriteLine("Resgrid Audio Setup");
 			System.Console.WriteLine("-----------------------------------------");
@@ -93,6 +93,7 @@ namespace Resgrid.Audio.Relay.Console.Commands
 			var triggers = ProcessTriggers(1);
 
 			watcher.Id = Guid.NewGuid();
+			watcher.Active = true;
 			watcher.Name = watcherName.Trim();
 			watcher.Code = dispatchCode;
 			watcher.Type = type;
