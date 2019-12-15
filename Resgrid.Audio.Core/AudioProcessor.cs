@@ -85,11 +85,11 @@ namespace Resgrid.Audio.Core
 							var watcher = _startedWatchers[id];
 
 							var mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
-							_watcherAudioStorage.FinishWatcher(watcher.Id);
 							TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
 
 							_startedWatchers.Remove(id);
 							_audioEvaluator.RemoveActiveWatcher(id);
+							_watcherAudioStorage.FinishWatcher(watcher.Id);
 						}
 
 						//_audioEvaluator.ClearTones();

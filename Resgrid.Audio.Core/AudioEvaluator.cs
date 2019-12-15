@@ -101,7 +101,7 @@ namespace Resgrid.Audio.Core
 
 		public void ClearTones()
 		{
-			_logger.Debug("AudioEvaluator->Clearning Tones");
+			_logger.Debug("AudioEvaluator->Clearing Tones");
 
 			_finishedTones.Clear();
 		}
@@ -143,7 +143,7 @@ namespace Resgrid.Audio.Core
 				{
 					_logger.Debug($"AudioEvaluator->Finished Tones: {_finishedTones.Count}");
 
-					_logger.Debug($"AudioEvaluator->Curent Finished Tones:");
+					_logger.Debug($"AudioEvaluator->Current Finished Tones:");
 					_logger.Debug($"----------------------------------------------------------");
 
 					lock (_lock)
@@ -151,7 +151,7 @@ namespace Resgrid.Audio.Core
 						foreach (var tone in _finishedTones)
 						{
 							_logger.Debug(
-								$"AudioEvaluator->Finished Tone: {tone.DtmfTone.HighTone} fnished in {tone.Duration.TotalMilliseconds}ms");
+								$"AudioEvaluator->Finished Tone: {tone.DtmfTone.HighTone} finished in {tone.Duration.TotalMilliseconds}ms");
 						}
 					}
 
@@ -255,7 +255,7 @@ namespace Resgrid.Audio.Core
 								if (triggers != null && triggers.Any())
 								{
 									var tones = triggers.SelectMany(x => x.Item2).Distinct().ToList();
-									_logger.Debug($"AudioEvaluator->CheckFinishedTonesForTriggers: Watcher {watcher.Name} had {tones.Count} tiggers match");
+									_logger.Debug($"AudioEvaluator->CheckFinishedTonesForTriggers: Watcher {watcher.Name} had {tones.Count} triggers match");
 
 									_finishedTones.RemoveAll(x => tones.Select(y => y.Id).ToList().Contains(x.Id));
 

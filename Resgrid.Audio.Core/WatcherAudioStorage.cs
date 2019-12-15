@@ -36,8 +36,12 @@ namespace Resgrid.Audio.Core
 					else
 						_watcherAudio.Add(watcherId, new List<byte>());
 
-					_logger.Information($"Adding watcher data collection with Id of {watcherId}, total of {_watcherAudio.Count} watchers awaiting data.");
+					_logger.Debug($"Adding watcher data collection with Id of {watcherId}, total of {_watcherAudio.Count} watchers awaiting data.");
 				}
+			}
+			else
+			{
+				_logger.Debug($"Trying to add watcher audio with Id of {watcherId} but it already exists, total of {_watcherAudio.Count} watchers awaiting data.");
 			}
 		}
 
@@ -48,8 +52,12 @@ namespace Resgrid.Audio.Core
 				lock (_lock)
 				{
 					_watcherAudio.Remove(watcherId);
-					_logger.Information($"Removed watcher with Id of {watcherId} leaving {_watcherAudio.Count} watchers awaiting data.");
+					_logger.Debug($"Removed watcher with Id of {watcherId} leaving {_watcherAudio.Count} watchers awaiting data.");
 				}
+			}
+			else
+			{
+				_logger.Debug($"Unable to finish watcher with Id of {watcherId}.");
 			}
 		}
 
@@ -61,6 +69,12 @@ namespace Resgrid.Audio.Core
 				{
 					_watcherAudio[watcherId].AddRange(audio);
 				}
+
+				_logger.Debug($"Added watch audio for watcher with Id of {watcherId} with size of {GetNonZeroArrayLength(audio)}.");
+			}
+			else
+			{
+				_logger.Debug($"Unable to add watch audio for watcher with Id of {watcherId} with size of {GetNonZeroArrayLength(audio)}.");
 			}
 		}
 
@@ -73,6 +87,10 @@ namespace Resgrid.Audio.Core
 					return _watcherAudio[watcherId].ToArray();
 				}
 			}
+			else
+			{
+				_logger.Debug($"Unable to get watcher audio with a watcher Id of {watcherId}.");
+			}
 
 			return null;
 		}
@@ -83,6 +101,20 @@ namespace Resgrid.Audio.Core
 			{
 				_watcherAudio = new Dictionary<Guid, List<byte>>();
 			}
+
+			_logger.Debug($"Clearing all watcher audio.");
+		}
+
+		private int GetNonZeroArrayLength(byte[] array)
+		{
+			int count = 0;
+			for (int i = 0; i < array.Length; i++)
+			{
+				if (array[i] > 0)
+					count++;
+			}
+			return count;
+
 		}
 	}
 }
