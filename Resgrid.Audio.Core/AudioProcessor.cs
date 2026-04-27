@@ -25,8 +25,6 @@ namespace Resgrid.Audio.Core
 
 		private bool _initialized = false;
 		private CircularBuffer<byte> _buffer;
-		private Settings _settings;
-
 		private Config _config;
 		private Dictionary<Guid, Watcher> _startedWatchers;
 
@@ -119,7 +117,7 @@ namespace Resgrid.Audio.Core
 
 				_audioEvaluator.Init(_config);
 
-				_timer.Interval = config.AudioLength;
+				_timer.Interval = 1000;
 				_timer.Enabled = true;
 
 				_initialized = true;

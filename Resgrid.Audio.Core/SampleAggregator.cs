@@ -9,7 +9,6 @@ namespace Resgrid.Audio.Core
 {
 	public class SampleAggregator
 	{
-		private int RATE = 44100; // sample rate of the sound card
 		private int BUFFERSIZE = (int)Math.Pow(2, 11); // must be a multiple of 2
 
 		public event EventHandler<DataAvailableArgs> DataAvailable;

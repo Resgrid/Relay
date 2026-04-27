@@ -88,7 +88,7 @@ namespace Resgrid.Audio.Core
 			System.IO.FileStream WaveFile = System.IO.File.OpenRead(wavePath);
 			wave = new byte[WaveFile.Length];
 			data = new double[(wave.Length - 44) / 4];//shifting the headers out of the PCM data;
-			WaveFile.Read(wave, 0, Convert.ToInt32(WaveFile.Length));//read the wave file into the wave variable
+			WaveFile.ReadExactly(wave, 0, Convert.ToInt32(WaveFile.Length));//read the wave file into the wave variable
 																	 /***********Converting and PCM accounting***************/
 			for (int i = 0; i < data.Length - i * 4; i++)
 			{

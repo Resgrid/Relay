@@ -1,226 +1,268 @@
-Resgrid Relay
-===========================
+# Resgrid Relay
 
-Resgrid Relay is a desktop and CLI application for creating calls in the Resgrid system based on watchers (audio, file, database, etc).
+Resgrid Relay is a .NET 10 solution for creating Resgrid calls from either:
 
-*********
+1. Windows audio tone monitoring
+2. Direct SMTP ingestion for emails sent to Resgrid dispatch addresses
 
-[![Build status](https://ci.appveyor.com/api/projects/status/github/resgrid/relay?svg=true)](https://ci.appveyor.com/api/projects/status/github/resgrid/relay)
+The project now uses the **Resgrid v4 API** and **OpenID Connect refresh-token authentication** instead of the legacy v3 username/password flow.
 
-About Resgrid
--------------
-Resgrid is a software as a service (SaaS) logistics, management and communications platform for first responders, volunteer fire departments, career fire, EMS, Search and Rescue (SAR), public safety, HAZMAT, CERT, disaster response, etc.
+## Solution layout
 
-[Sign up for your free Resgrid Account Today!](https://resgrid.com)
+| Project | Target | Purpose |
+| --- | --- | --- |
+| `Providers\Resgrid.Providers.ApiClient` | `net10.0` | Resgrid v4 API + OIDC refresh-token client |
+| `Resgrid.Audio.Core` | `net10.0-windows` | Windows audio detection, recording, and audio-call submission |
+| `Resgrid.Audio.Relay.Console` | `net10.0`, `net10.0-windows` | Main worker/CLI entry point for SMTP and audio modes |
+| `Resgrid.Audio.Relay` | `net10.0-windows` | Lightweight Windows monitoring UI |
+| `Resgrid.Audio.Tests` | `net10.0-windows` | Audio, dispatch-list, and SMTP routing tests |
 
-## System Requirements ##
+## Modes
 
-* Windows 7 or newer
-* .Net Framework 4.6.2
-* 1.8Ghz Single Core Processor
-* 8GB of RAM
-* 2GB of Free Disk Space
-* For Scanner audio a Scanner with an Audio Line Out i.e. [WS1065](https://amzn.to/2Kuck8k) is needed
+### SMTP mode
 
-## Configuration
+- Cross-platform
+- Intended for Linux/Docker deployments
+- Runs an SMTP listener and creates Resgrid calls from inbound mail
+- Replaces the old Postmark SMTP email API path
+
+### Audio mode
+
+- Windows only
+- Uses the existing DTMF/audio watcher flow
+- Creates a call in Resgrid and uploads captured dispatch audio as a separate v4 call file
+
+## Requirements
+
+### Development
+
+- .NET SDK **10.0.202** or newer compatible .NET 10 SDK
+- Windows for the WPF app, tests, and audio mode
+
+### Runtime
+
+- **SMTP mode:** any platform with .NET 10 runtime
+- **Audio mode:** Windows with an accessible audio input device
+
+## Authentication
+
+Relay authenticates to Resgrid through the v4 OIDC token endpoint:
+
+- Discovery: `https://api.resgrid.com/.well-known/openid-configuration`
+- Token endpoint: `https://api.resgrid.com/api/v4/connect/token`
+- Grant type: `refresh_token`
+
+You must provide:
+
+- `ClientId`
+- `ClientSecret`
+- `RefreshToken`
+
+Relay keeps the latest rotated refresh/access token state in a configurable token cache file.
+
+## Worker configuration (`appsettings.json` / environment variables)
+
+The console worker reads `appsettings.json` plus environment variables prefixed with `RELAY_`.
 
 ```json
-// settings.json
+{
+  "Mode": "smtp",
+  "AudioConfigPath": "settings.json",
+  "Resgrid": {
+    "BaseUrl": "https://api.resgrid.com",
+    "ApiVersion": "4",
+    "ClientId": "YOUR_CLIENT_ID",
+    "ClientSecret": "YOUR_CLIENT_SECRET",
+    "RefreshToken": "YOUR_REFRESH_TOKEN",
+    "Scope": "openid profile email offline_access mobile",
+    "TokenCachePath": ".\\data\\resgrid-token.json"
+  },
+  "Telemetry": {
+    "Environment": "production",
+    "Sentry": {
+      "Dsn": "YOUR_SENTRY_DSN",
+      "Release": "resgrid-relay@1.0.0",
+      "SendDefaultPii": true
+    },
+    "Countly": {
+      "Url": "https://countly.example.com",
+      "AppKey": "YOUR_COUNTLY_APP_KEY",
+      "DeviceId": "resgrid-relay-prod-01",
+      "RequestTimeoutSeconds": 5
+    }
+  },
+  "Smtp": {
+    "ServerName": "resgrid-relay",
+    "Port": 2525,
+    "DataDirectory": ".\\data",
+    "DuplicateWindowHours": 72,
+    "DefaultCallPriority": 1,
+    "MaxAttachmentBytes": 10485760,
+    "SaveRawMessages": true,
+    "DepartmentDispatchPrefix": "G",
+    "DepartmentAddressDomains": [ "dispatch.resgrid.com" ],
+    "GroupAddressDomains": [ "groups.resgrid.com" ]
+  }
+}
+```
+
+### Environment variable example
+
+```powershell
+$env:RELAY_Mode = "smtp"
+$env:RELAY_Resgrid__ClientId = "YOUR_CLIENT_ID"
+$env:RELAY_Resgrid__ClientSecret = "YOUR_CLIENT_SECRET"
+$env:RELAY_Resgrid__RefreshToken = "YOUR_REFRESH_TOKEN"
+$env:RELAY_Telemetry__Sentry__Dsn = "YOUR_SENTRY_DSN"
+$env:RELAY_Telemetry__Countly__Url = "https://countly.example.com"
+$env:RELAY_Telemetry__Countly__AppKey = "YOUR_COUNTLY_APP_KEY"
+$env:RELAY_Smtp__Port = "2525"
+```
+
+### SMTP observability
+
+SMTP mode now emits structured logging for:
+
+- connection open / close / fault events
+- sender and recipient acceptance or rejection
+- message receipt, duplicate suppression, routing resolution, and processing lifecycle
+- Resgrid call creation, attachment handling, and processing failures
+
+Optional integrations:
+
+- **Sentry** captures SMTP processing and connection exceptions with message/session context attached.
+- **Countly** records custom events such as `smtp_connection_started`, `smtp_connection_completed`, `smtp_message_processed`, and `smtp_message_failed`.
+
+Notes:
+
+- Relay logs message metadata such as sender, recipients, subject, message ids, dispatch targets, and attachment names.
+- Relay intentionally does **not** mirror full email bodies into logs; the imported call note and optional raw `.eml` retention remain the system-of-record for message content.
+- If `Telemetry:Countly:DeviceId` is blank, Relay derives a stable device id from the machine name and SMTP server name.
+
+## Audio configuration (`settings.json`)
+
+Audio mode continues to use `settings.json`, but now stores Resgrid OIDC settings instead of username/password.
+
+```json
 {
   "InputDevice": 0,
-  "AudioLength": 60,
-  "ApiUrl": "https://api.resgrid.com",
-  "Username": "TEST",
-  "Password": "TEST",
+  "AudioLength": 120,
   "Multiple": false,
   "Tolerance": 100,
-  "Threshold": -40,
+  "Threshold": -50,
+  "EnableSilenceDetection": false,
+  "Debug": false,
+  "DebugKey": "",
+  "Resgrid": {
+    "BaseUrl": "https://api.resgrid.com",
+    "ApiVersion": "4",
+    "ClientId": "YOUR_CLIENT_ID",
+    "ClientSecret": "YOUR_CLIENT_SECRET",
+    "RefreshToken": "YOUR_REFRESH_TOKEN",
+    "Scope": "openid profile email offline_access mobile",
+    "TokenCachePath": ".\\data\\resgrid-token.json"
+  },
+  "DispatchMapping": {
+    "GroupDispatchPrefix": "G",
+    "DepartmentDispatchPrefix": "G"
+  },
   "Watchers": [
     {
-	  "Id": "ee188c37-09f4-47c0-9ff1-fe34c9d6a5f1",
+      "Id": "ee188c37-09f4-47c0-9ff1-fe34c9d6a5f1",
       "Name": "Station 1",
       "Active": true,
-      "Code": null,
-      "Type": 0,
-      "Eval": 0,
+      "Code": "ABC123",
+      "AdditionalCodes": "",
+      "Type": 2,
       "Triggers": [
         {
           "Frequency1": 524.0,
           "Frequency2": 794.0,
-          "Time": 500,
+          "Time1": 500,
+          "Time2": 500,
           "Count": 2
         }
       ]
-    },
-	...
+    }
   ]
 }
 ```
 
-## Settings
+### Audio watcher notes
 
-### Settings.json Values
-<table>
-  <tr>
-    <th>Setting</th>
-    <th>Description</th>
-  </tr>
-  <tr>
-    <td>InputDevice</td>
-    <td>
-      The Audio Input device that system will listen to. It's recommend this is a hard Line In or Stereo Mix input and not a Mic input
-    </td>
-  </tr>
-  <tr>
-    <td>AudioLength</td>
-    <td>
-      Time of time in SECONDS to record the dispatch audio for
-    </td>
-  </tr>
-  <tr>
-    <td>ApiUrl</td>
-    <td>
-      The URL to talk to the Resgrid API (Services) for our hosted production system this is "https://api.resgrid.com"
-    </td>
-  </tr>
-  <tr>
-    <td>Username</td>
-    <td>
-      Resgrid system login Username that can create calls
-    </td>
-  </tr>
-  <tr>
-    <td>Password</td>
-    <td>
-      Resgrid system login Password for the Username above
-    </td>
-  </tr>
-  <tr>
-    <td>Multiple</td>
-    <td>
-      Once a tone is Detected, do you want 1 call created and the Groups dispatched for it, or a call created in Resgrid for each watcher. If Multiple is false, one call will only be created and each Group (per watcher) will be dispatched as part of that call, if Multiple is true each watcher creates a call in Resgrid.
-    </td>
-  </tr>
-  <tr>
-    <td>Tolerance</td>
-    <td>
-      The relative power of the tone frequency to trigger. This value should be between 50 and 250, ideally at or around 100 (the default). If your getting false triggers try increasing this value.
-    </td>
-  </tr>
-  <tr>
-    <td>Threshold</td>
-    <td>
-      Decibel dB value for silence detection, default is -40. Depending on how loud the background audio or static is this value may need to be raised to cut out the static.
-    </td>
-  </tr>
-  <tr>
-    <td>Debug</td>
-    <td>
-      Enable or Disable debug mode. Debug should only be enabled when trying to analyze an issue.
-    </td>
-  </tr>
-  <tr>
-    <td>Watchers</td>
-    <td>
-      <a href="https://github.com/Resgrid/Relay#watcher-settings-values">An Array of Watcher Objects</a>
-    </td>
-  </tr>
-</table>
+- `Type = 1` means **department** dispatch code
+- `Type = 2` means **group** dispatch code
+- `AdditionalCodes` is treated as extra **group** dispatch codes
 
-### Watcher Settings Values
-<table>
-  <tr>
-    <th>Setting</th>
-    <th>Description</th>
-  </tr>
-  <tr>
-    <td>Id</td>
-    <td>
-      Unique GUID\UUID for the watcher, this value is used to queue and dequeue watchers and verify if one is already running. This value must be unique for every Watcher in the array.
-    </td>
-  </tr>
-  <tr>
-    <td>Name</td>
-    <td>
-      Name of the group that this watcher is for. Seeming Watchers are tied to Resgrid groups it's usually best to just put the group name in here.
-    </td>
-  </tr>
-  <tr>
-    <td>Active</td>
-    <td>
-      Can be true or false. Determines if this watcher is active and it's triggers should be monitored. 
-    </td>
-  </tr>
-  <tr>
-    <td>Code</td>
-    <td>
-      Your department groups dispatch code. For a Type of 2 (Group) You get this value from the Stations & Groups section of the website, and it's the alphanumeric code in front of @groups.resgrid.com. For a Type of 1 (Department) you get this from the Calls Import Settings screen excluding @dispatch.resgrid.com. Do not include anything other then the 6 character code.
-    </td>
-  </tr>
-  <tr>
-    <td>Type</td>
-    <td>
-      1 = Department, 2 = Group
-    </td>
-  </tr>
-  <tr>
-    <td>Triggers</td>
-    <td>
-      <a href="https://github.com/Resgrid/Relay#triggers-settings-values">Array of triggers</a>
-    </td>
-  </tr>
-</table>
+## SMTP routing behavior
 
-### Triggers Settings Values
-<table>
-  <tr>
-    <th>Setting</th>
-    <th>Description</th>
-  </tr>
-  <tr>
-    <td>Frequency1</td>
-    <td>
-      The first (or only) tone frequency to monitor
-    </td>
-  </tr>
-  <tr>
-    <td>Frequency2</td>
-    <td>
-      The second tone frequency to monitor
-    </td>
-  </tr>
-  <tr>
-    <td>Time</td>
-    <td>
-      Time in milliseconds the tone need to run for to be triggered. If your tones run for 1 second (1000 milliseconds) each you should set this value to 750 or 500. If your getting false positives increase this value a bit. But tone length detection can be difficult if there is competing traffic or noise. So a lower value is 'safer'.
-    </td>
-  </tr>
-  <tr>
-    <td>Count</td>
-    <td>
-      1 or 2, the number of distinct tones your trigger has.
-    </td>
-  </tr>
-</table>
+Relay accepts inbound SMTP messages for configured Resgrid-style dispatch domains and converts recipient addresses into v4 `DispatchList` entries.
 
-## Installation ##
+Examples:
 
-You should download the latest sable release from our <a href="https://github.com/Resgrid/Relay/releases">Release page</a>. It's recommend that you use the setup\installer based option. 
+| Recipient | Routing |
+| --- | --- |
+| `abc123@dispatch.resgrid.com` | Department dispatch code |
+| `station7@groups.resgrid.com` | Group dispatch code |
 
-## Notes ##
+Notes:
 
+- Duplicate messages are suppressed using a persisted message-id store
+- Raw `.eml` files can be saved for traceability
+- Attachments are uploaded to the created call through `CallFiles/SaveCallFile`
+- Structured logs, Sentry exception capture, and Countly custom events are available for SMTP operations
+- If your Resgrid department-dispatch code requires a prefix other than `G`, set `Smtp:DepartmentDispatchPrefix`
 
-## Author's ##
-* Shawn Jackson (Twitter: @DesignLimbo Blog: http://designlimbo.com)
-* Jason Jarrett (Twitter: @staxmanade Blog: http://staxmanade.com)
+## Commands
 
-## License ##
-[Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0)
+From `Resgrid.Audio.Relay.Console`:
 
-## Acknowledgments
+```powershell
+dotnet run --project .\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj -- run
+dotnet run --project .\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj -- setup
+dotnet run --project .\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj -- devices
+dotnet run --project .\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj -- monitor 0
+dotnet run --project .\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj -- version
+```
 
-Resgrid Relay makes use of the following OSS projects:
+## Docker
 
-- Consolas released under the BSD 2-Clause license: https://github.com/rickardn/Consolas/blob/develop/LICENSE
-- NAudio released under the Microsoft Public License: https://github.com/naudio/NAudio/blob/master/license.txt
-- DtmfDetection released under the GNU Lesser GPL v3.0 License: https://github.com/Resgrid/DtmfDetection/blob/master/LICENSE
+Build the Linux SMTP worker image:
+
+```powershell
+docker build -t resgrid-relay .
+```
+
+Run it:
+
+```powershell
+docker run --rm -p 2525:2525 `
+  -e RELAY_Mode=smtp `
+  -e RELAY_Resgrid__ClientId=YOUR_CLIENT_ID `
+  -e RELAY_Resgrid__ClientSecret=YOUR_CLIENT_SECRET `
+  -e RELAY_Resgrid__RefreshToken=YOUR_REFRESH_TOKEN `
+  resgrid-relay
+```
+
+## Build and test
+
+```powershell
+dotnet build "Resgrid Audio.sln"
+dotnet test "Resgrid Audio.sln"
+```
+
+## Notes
+
+- The worker now creates calls through `Calls/SaveCall`
+- Audio and SMTP attachments are uploaded through `CallFiles/SaveCallFile`
+- The worker derives the current Resgrid user id from the OIDC access token `sub` claim for file uploads
+- The Windows audio path intentionally keeps the legacy DTMF assemblies isolated to the Windows-only project boundary
+
+## Authors
+
+- Shawn Jackson
+- Jason Jarrett
+
+## License
+
+[Apache 2.0](LICENSE.txt)
