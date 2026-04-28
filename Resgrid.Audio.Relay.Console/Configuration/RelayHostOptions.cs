@@ -41,6 +41,7 @@ namespace Resgrid.Audio.Relay.Console.Configuration
 		public int DuplicateWindowHours { get; set; } = 72;
 		public int DefaultCallPriority { get; set; } = 1;
 		public int MaxAttachmentBytes { get; set; } = 10485760;
+		public int MaxMessageBytes { get; set; } = 26214400; // 25 MB
 		public bool SaveRawMessages { get; set; } = true;
 		public string DepartmentDispatchPrefix { get; set; } = "G";
 		public string[] DepartmentAddressDomains { get; set; } = new[] { "dispatch.resgrid.com" };

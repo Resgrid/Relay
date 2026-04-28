@@ -37,6 +37,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 			var smtpServerOptions = new SmtpServerOptionsBuilder()
 				.ServerName(options.ServerName)
 				.Port(options.Port)
+				.MaxMessageSize(options.MaxMessageBytes, MaxMessageSizeHandling.Strict)
 				.Build();
 
 			var smtpServer = new SmtpServer.SmtpServer(smtpServerOptions, serviceProvider);
@@ -121,6 +122,9 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 
 		public override async Task<SmtpResponse> SaveAsync(ISessionContext context, IMessageTransaction transaction, ReadOnlySequence<byte> buffer, CancellationToken cancellationToken)
 		{
+			if (buffer.Length > _options.MaxMessageBytes)
+				return SmtpResponse.SizeLimitExceeded;
+
 			await using var stream = new MemoryStream();
 			var position = buffer.GetPosition(0);
 			while (buffer.TryGet(ref position, out var memory))
