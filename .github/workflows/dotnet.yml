@@ -18,8 +18,9 @@ on:
 
 env:
   DOTNET_VERSION: "10.0.x"
-  RELEASE_VERSION: "v${{ github.run_number }}"
+  RELEASE_VERSION: "2.0.${{ github.run_number }}"
   DOCKER_IMAGE_NAME: "resgridrelay"
+  DOCKER_IMAGE: "resgridllc/resgridrelay"
 
 jobs:
   build-and-test:
@@ -154,7 +155,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}
+          images: ${{ env.DOCKER_IMAGE }}
           tags: |
             type=raw,value=${{ env.RELEASE_VERSION }}
             type=raw,value=latest
@@ -177,7 +178,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/docker-release"
           {
             echo "Docker image:"
-            echo "${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}"
+            echo "${{ env.DOCKER_IMAGE }}"
             echo
             echo "Tags:"
             printf '%s\n' "${{ steps.meta.outputs.tags }}"
@@ -198,6 +199,7 @@ jobs:
 
     permissions:
       contents: write
+      pull-requests: read
 
     steps:
       - name: Download app release assets
@@ -212,28 +214,33 @@ jobs:
           name: docker-release-metadata
           path: ${{ runner.temp }}/docker-release
 
-      - name: Prepare release notes
+      - name: Get merged PR info
+        id: pr-info
         uses: actions/github-script@v7
-        env:
-          DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}
-          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         with:
           script: |
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+            });
+            const pr = prs.data.find(p => p.merged_at);
             const fs = require('fs');
-            const pr = context.payload.pull_request;
-            const cleanedBody = (pr.body || '')
-              .replace(/##\s*Summary by CodeRabbit[\s\S]*/i, '')
-              .trim();
-
-            const notes = [
-              cleanedBody || 'No release notes provided.',
-              '',
-              '## Docker image',
-              `- \`${process.env.DOCKER_IMAGE}:${process.env.RELEASE_VERSION}\``,
-              `- \`${process.env.DOCKER_IMAGE}:latest\``
-            ].join('\n');
-
-            fs.writeFileSync('release_notes.md', notes);
+            if (pr) {
+              const body = (pr.body || '')
+                .replace(/##\s*Summary by CodeRabbit[\s\S]*/i, '')
+                .trim() || 'No release notes provided.';
+              const notes = [
+                body,
+                '',
+                '## Docker image',
+                `- \`${{ env.DOCKER_IMAGE }}:${{ env.RELEASE_VERSION }}\``,
+                `- \`${{ env.DOCKER_IMAGE }}:latest\``
+              ].join('\n');
+              fs.writeFileSync('release_notes.md', notes);
+            } else {
+              fs.writeFileSync('release_notes.md', 'No release notes provided.');
+            }
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
