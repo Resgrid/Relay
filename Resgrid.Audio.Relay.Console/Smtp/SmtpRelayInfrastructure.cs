@@ -499,12 +499,22 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 			if (!File.Exists(_path))
 				return new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
 
-			var payload = await File.ReadAllTextAsync(_path, cancellationToken).ConfigureAwait(false);
-			if (String.IsNullOrWhiteSpace(payload))
-				return new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+			try
+			{
+				var payload = await File.ReadAllTextAsync(_path, cancellationToken).ConfigureAwait(false);
+				if (String.IsNullOrWhiteSpace(payload))
+					return new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
 
-			var items = JsonSerializer.Deserialize<Dictionary<string, DateTimeOffset>>(payload);
-			return items ?? new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+				var items = JsonSerializer.Deserialize<Dictionary<string, DateTimeOffset>>(payload);
+				if (items == null)
+					return new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+
+				return new Dictionary<string, DateTimeOffset>(items, StringComparer.OrdinalIgnoreCase);
+			}
+			catch (Exception ex) when (ex is JsonException || ex is IOException)
+			{
+				return new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+			}
 		}
 
 		private async Task SaveAsync(Dictionary<string, DateTimeOffset> entries, CancellationToken cancellationToken)

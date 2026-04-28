@@ -219,28 +219,18 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: context.sha,
-            });
-            const pr = prs.data.find(p => p.merged_at);
             const fs = require('fs');
-            if (pr) {
-              const body = (pr.body || '')
-                .replace(/##\s*Summary by CodeRabbit[\s\S]*/i, '')
-                .trim() || 'No release notes provided.';
-              const notes = [
-                body,
-                '',
-                '## Docker image',
-                `- \`${{ env.DOCKER_IMAGE }}:${{ env.RELEASE_VERSION }}\``,
-                `- \`${{ env.DOCKER_IMAGE }}:latest\``
-              ].join('\n');
-              fs.writeFileSync('release_notes.md', notes);
-            } else {
-              fs.writeFileSync('release_notes.md', 'No release notes provided.');
-            }
+            const body = (context.payload.pull_request.body || '')
+              .replace(/##\s*Summary by CodeRabbit[\s\S]*/i, '')
+              .trim() || 'No release notes provided.';
+            const notes = [
+              body,
+              '',
+              '## Docker image',
+              `- \`${{ env.DOCKER_IMAGE }}:${{ env.RELEASE_VERSION }}\``,
+              `- \`${{ env.DOCKER_IMAGE }}:latest\``
+            ].join('\n');
+            fs.writeFileSync('release_notes.md', notes);
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

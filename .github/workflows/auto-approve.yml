@@ -11,16 +11,15 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-    - uses: actions/github-script@v6
+    - uses: actions/github-script@v9.0.0
       name: Approve LGTM Review
-      if: github.actor == 'ucswift' &&  contains(github.event.comment.body, 'Approve')
+      if: github.event.issue.pull_request && github.event.comment.user.login == 'ucswift' && contains(github.event.comment.body, 'Approve')
       with:
         script: |
           github.rest.pulls.createReview({
             owner: context.repo.owner,
             repo: context.repo.repo,
             pull_number: context.issue.number,
-            review_id: 1,
             event: 'APPROVE',
             body: 'This PR is approved.'
           })
