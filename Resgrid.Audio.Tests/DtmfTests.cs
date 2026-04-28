@@ -12,8 +12,8 @@ namespace Resgrid.Audio.Tests
 		[Test]
 		public void DTMF_ShouldBeAbleToReadWavFile()
 		{
-			var path = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().CodeBase).Replace("file:\\", "");
-			using (var waveFile = new WaveFileReader(path + "\\Data\\TestAudio.wav"))
+			var path = System.IO.Path.Combine(System.AppContext.BaseDirectory, "Data", "TestAudio.wav");
+			using (var waveFile = new WaveFileReader(path))
 			{
 				var actualTones = waveFile.DtmfTones(false).ToArray();
 

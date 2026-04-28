@@ -185,7 +185,7 @@ namespace Resgrid.Audio.Core
 
 			var tone = _dtmfTone.FirstOrDefault(x => x.HighTone == frequency);
 
-			if (tone == null || tone == DtmfTone.None)
+			if (tone == DtmfTone.None)
 			{
 				tone = new DtmfTone(frequency, 0, (PhoneKey)(_dtmfTone.Count() + (int)PhoneKey.Custom1));
 				DtmfClassification.AddCustomTone(tone);

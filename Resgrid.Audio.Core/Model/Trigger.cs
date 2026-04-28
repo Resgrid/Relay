@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using DtmfDetection;
 using DtmfDetection.NAudio;
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
 
 namespace Resgrid.Audio.Core.Model
 {

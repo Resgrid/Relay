@@ -1,15 +1,25 @@
 {
   "InputDevice": 0,
   "AudioLength": 120,
-  "ApiUrl": "https://api.resgrid.com",
-  "Username": "TEST",
-  "Password": "TEST",
   "Multiple": false,
   "Tolerance": 100,
   "Threshold": -50,
   "EnableSilenceDetection": false,
   "Debug": false,
   "DebugKey": "",
+  "Resgrid": {
+    "BaseUrl": "https://api.resgrid.com",
+    "ApiVersion": "4",
+    "ClientId": "YOUR_CLIENT_ID",
+    "ClientSecret": "YOUR_CLIENT_SECRET",
+    "RefreshToken": "YOUR_REFRESH_TOKEN",
+    "Scope": "openid profile email offline_access mobile",
+    "TokenCachePath": ".\\data\\resgrid-token.json"
+  },
+  "DispatchMapping": {
+    "GroupDispatchPrefix": "G",
+    "DepartmentDispatchPrefix": "G"
+  },
   "Watchers": [
     {
       "Name": "Station 2",

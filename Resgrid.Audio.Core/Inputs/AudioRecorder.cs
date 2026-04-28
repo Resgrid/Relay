@@ -1,11 +1,10 @@
 ﻿// https://github.com/markheath/voicerecorder
 
-using NAudio.Mixer;
+using NAudio.MediaFoundation;
 using NAudio.Wave;
 using System;
 using System.IO;
 using System.Linq;
-using NAudio.Lame;
 using Resgrid.Audio.Core.Model;
 
 namespace Resgrid.Audio.Core
@@ -28,21 +27,20 @@ namespace Resgrid.Audio.Core
 	{
 		WaveInEvent waveIn;
 		private SampleAggregator _sampleAggregator;
-		double desiredVolume = 100;
 		RecordingState recordingState;
 		WaveFileWriter writer;
 		WaveFormat recordingFormat;
 		BufferedWaveProvider bwp;
 
-		private AudioEvaluator _audioEvaluator;
-		private IWatcherAudioStorage _audioStorage;
+		private readonly IAudioEvaluator _audioEvaluator;
+		private readonly IWatcherAudioStorage _audioStorage;
 
 		public event EventHandler Stopped = delegate { };
 
 		private int RATE = 44100; // 44100 is a pretty standard rate, but for Speech-to-Text they almost always want 16000
 		private int BUFFERSIZE = (int)Math.Pow(2, 11); // must be a multiple of 2
 
-		public AudioRecorder(AudioEvaluator audioEvaluator, IWatcherAudioStorage audioStorage)
+		public AudioRecorder(IAudioEvaluator audioEvaluator, IWatcherAudioStorage audioStorage)
 		{
 			_audioEvaluator = audioEvaluator;
 			_audioStorage = audioStorage;
@@ -114,10 +112,10 @@ namespace Resgrid.Audio.Core
 
 		public void Stop()
 		{
-			if (recordingState == RecordingState.Recording)
+			if (recordingState == RecordingState.Monitoring || recordingState == RecordingState.Recording)
 			{
 				recordingState = RecordingState.RequestedStop;
-				waveIn.StopRecording();
+				waveIn?.StopRecording();
 			}
 		}
 
@@ -182,22 +180,39 @@ namespace Resgrid.Audio.Core
 
 		public byte[] SaveWatcherAudio(Watcher watcher)
 		{
-			var path = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().CodeBase).Replace("file:\\", "");
-			var fileName = $"{path}\\DispatchAudio\\RelayAudio_{DateTime.Now.ToString("s").Replace(":", "_")}.wav";
-
-			var waveWriter = new WaveFileWriter(fileName, recordingFormat);
-
 			var buffer = _audioStorage.GetAudio(watcher.Id);
-			waveWriter.Write(buffer, 0, buffer.Length);
-			waveWriter.Dispose();
+			if (buffer == null || buffer.Length == 0)
+				return Array.Empty<byte>();
 
-			using (var retMs = new MemoryStream())
-			using (var ms = new MemoryStream())
-			using (var rdr = new WaveFileReader(fileName))
-			using (var wtr = new LameMP3FileWriter(retMs, rdr.WaveFormat, RATE / 10))
+			var directory = Path.Combine(AppContext.BaseDirectory, "DispatchAudio");
+			Directory.CreateDirectory(directory);
+
+			var fileRoot = Path.Combine(directory, $"RelayAudio_{DateTime.Now:s}".Replace(":", "_"));
+			var waveFilePath = $"{fileRoot}.wav";
+			var mp3FilePath = $"{fileRoot}.mp3";
+
+			try
 			{
-				rdr.CopyTo(wtr);
-				return retMs.ToArray();
+				using (var waveWriter = new WaveFileWriter(waveFilePath, recordingFormat))
+				{
+					waveWriter.Write(buffer, 0, buffer.Length);
+				}
+
+				MediaFoundationApi.Startup();
+				using (var waveReader = new WaveFileReader(waveFilePath))
+				{
+					MediaFoundationEncoder.EncodeToMp3(waveReader, mp3FilePath, 128000);
+				}
+
+				return File.ReadAllBytes(mp3FilePath);
+			}
+			finally
+			{
+				if (File.Exists(waveFilePath))
+					File.Delete(waveFilePath);
+
+				if (File.Exists(mp3FilePath))
+					File.Delete(mp3FilePath);
 			}
 		}
 	}

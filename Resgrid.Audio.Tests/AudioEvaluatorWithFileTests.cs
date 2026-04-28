@@ -15,11 +15,10 @@ namespace Resgrid.Audio.Tests
 		//[Test]
 		public void EvaluateAudioTrigger_BasicShouldReturnTrue()
 		{
-			var path = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().CodeBase).Replace("file:\\", "");
+			var path = System.AppContext.BaseDirectory;
 
 			//System.IO.FileStream WaveFile = System.IO.File.OpenRead(path + "\\Data\\TestAudio.wav");
 			//byte[] data = new byte[WaveFile.Length];
-			int sampleRate;
 			//double[] fileData = Functions.WaveFileDataPrepare(path + "\\Data\\TestAudio.wav", out sampleRate);''
 
 			List<double> fftData = new List<double>();

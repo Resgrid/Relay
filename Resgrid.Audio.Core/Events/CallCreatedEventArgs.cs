@@ -6,7 +6,7 @@ namespace Resgrid.Audio.Core.Events
 	public class CallCreatedEventArgs
 	{
 		[DebuggerStepThrough]
-		public CallCreatedEventArgs(string watcherName, int callId, string callNumber, DateTime timestamp)
+		public CallCreatedEventArgs(string watcherName, string callId, string callNumber, DateTime timestamp)
 		{
 			WatcherName = watcherName;
 			CallId = callId;
@@ -15,7 +15,7 @@ namespace Resgrid.Audio.Core.Events
 		}
 
 		public string WatcherName { get; set; }
-		public int CallId { get; private set; }
+		public string CallId { get; private set; }
 		public string CallNumber { get; private set; }
 		public DateTime Timestamp { get; private set; }
 	}

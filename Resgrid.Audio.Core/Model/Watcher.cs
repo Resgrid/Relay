@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using DtmfDetection;
 using DtmfDetection.NAudio;
+using System.Text.Json.Serialization;
 
 namespace Resgrid.Audio.Core.Model
 {
@@ -10,7 +11,6 @@ namespace Resgrid.Audio.Core.Model
 	{
 		private Guid _id;
 		private Trigger _trigger;
-		private int _audioCount;
 		private List<Watcher> _additionalWatchers;
 
 		public string Name { get; set; }
@@ -20,17 +20,17 @@ namespace Resgrid.Audio.Core.Model
 		public int Type { get; set; } // 1 Department, 2 Group
 		public List<Trigger> Triggers { get; set; }
 
-		[Newtonsoft.Json.JsonIgnore]
+		[JsonIgnore]
 		public DateTime TriggerFiredTimestamp { get; set; }
 
-		[Newtonsoft.Json.JsonIgnore]
+		[JsonIgnore]
 		public DateTime LastCheckedTimestamp { get; set; }
 
 		public Guid Id
 		{
 			get
 			{
-				if (_id == null)
+				if (_id == Guid.Empty)
 					_id = Guid.NewGuid();
 
 				return _id;

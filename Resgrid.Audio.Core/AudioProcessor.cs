@@ -25,8 +25,6 @@ namespace Resgrid.Audio.Core
 
 		private bool _initialized = false;
 		private CircularBuffer<byte> _buffer;
-		private Settings _settings;
-
 		private Config _config;
 		private Dictionary<Guid, Watcher> _startedWatchers;
 
@@ -72,7 +70,7 @@ namespace Resgrid.Audio.Core
 					{
 						startedWatcher.Value.LastCheckedTimestamp = DateTime.UtcNow;
 
-						if ((DateTime.UtcNow - startedWatcher.Value.TriggerFiredTimestamp).TotalSeconds >= _config.AudioLength)
+						if ((DateTime.UtcNow - startedWatcher.Value.TriggerFiredTimestamp).TotalSeconds >= _config.AudioLength + 5)
 						{
 							watchersToRemove.Add(startedWatcher.Value.Id);
 						}
@@ -82,23 +80,28 @@ namespace Resgrid.Audio.Core
 					{
 						foreach (var id in watchersToRemove)
 						{
-							var watcher = _startedWatchers[id];
+							lock (_lock)
+							{
+								var watcher = _startedWatchers[id];
 
-							var mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
-							TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
+								var mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
+								_watcherAudioStorage.FinishWatcher(watcher.Id);
+								TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
 
-							_startedWatchers.Remove(id);
-							_audioEvaluator.RemoveActiveWatcher(id);
-							_watcherAudioStorage.FinishWatcher(watcher.Id);
+								_startedWatchers.Remove(id);
+								_audioEvaluator.RemoveActiveWatcher(id);
+							}
 						}
 
 						//_audioEvaluator.ClearTones();
 						watchersToRemove.Clear();
-
 					}
 				}
+				else
+				{
+					CleanUpCheck();
+				}
 
-				CleanUpCheck();
 				_timerProcessing = false;
 			}
 		}
@@ -114,7 +117,7 @@ namespace Resgrid.Audio.Core
 
 				_audioEvaluator.Init(_config);
 
-				_timer.Interval = config.AudioLength;
+				_timer.Interval = 1000;
 				_timer.Enabled = true;
 
 				_initialized = true;

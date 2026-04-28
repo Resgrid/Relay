@@ -1,0 +1,248 @@
+# This workflow runs build and tests on every pull request and every direct push
+# to master. It also publishes artifacts and creates a GitHub Release only after
+# a pull request is successfully merged to master.
+#
+# Required Docker Hub secrets:
+# - DOCKERHUB_USERNAME
+# - DOCKERHUB_TOKEN
+
+name: Build and publish
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  RELEASE_VERSION: "2.0.${{ github.run_number }}"
+  DOCKER_IMAGE_NAME: "resgridrelay"
+  DOCKER_IMAGE: "resgridllc/resgridrelay"
+
+jobs:
+  build-and-test:
+    name: Build and test
+    if: |
+      github.event_name == 'push' ||
+      github.event.action != 'closed' ||
+      (github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master')
+    runs-on: windows-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.action == 'closed' && github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore "Resgrid Audio.sln"
+
+      - name: Build
+        run: dotnet build "Resgrid Audio.sln" --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test "Resgrid Audio.sln" --configuration Release --no-build --verbosity normal
+
+  publish-apps:
+    name: Publish app assets
+    needs: build-and-test
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
+    runs-on: windows-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore "Resgrid Audio.sln"
+
+      - name: Publish application outputs
+        shell: pwsh
+        run: |
+          $publishRoot = Join-Path $env:RUNNER_TEMP "publish"
+          $consoleLinux = Join-Path $publishRoot "relay-console-net10.0"
+          $consoleWindows = Join-Path $publishRoot "relay-console-net10.0-windows"
+          $monitorWindows = Join-Path $publishRoot "relay-monitor-net10.0-windows"
+
+          dotnet publish ".\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj" --configuration Release --framework net10.0 --no-restore --output $consoleLinux /p:UseAppHost=false
+          dotnet publish ".\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj" --configuration Release --framework net10.0-windows --no-restore --output $consoleWindows
+          dotnet publish ".\Resgrid.Audio.Relay\Resgrid.Audio.Relay.csproj" --configuration Release --framework net10.0-windows --no-restore --output $monitorWindows
+
+      - name: Package release assets
+        shell: pwsh
+        run: |
+          $publishRoot = Join-Path $env:RUNNER_TEMP "publish"
+          $assetRoot = Join-Path $env:RUNNER_TEMP "release-assets"
+
+          New-Item -ItemType Directory -Path $assetRoot -Force | Out-Null
+
+          $assets = @(
+            @{ Source = Join-Path $publishRoot "relay-console-net10.0"; File = Join-Path $assetRoot "resgridrelay-console-net10.0-$env:RELEASE_VERSION.zip" },
+            @{ Source = Join-Path $publishRoot "relay-console-net10.0-windows"; File = Join-Path $assetRoot "resgridrelay-console-net10.0-windows-$env:RELEASE_VERSION.zip" },
+            @{ Source = Join-Path $publishRoot "relay-monitor-net10.0-windows"; File = Join-Path $assetRoot "resgridrelay-monitor-net10.0-windows-$env:RELEASE_VERSION.zip" }
+          )
+
+          foreach ($asset in $assets)
+          {
+            if (Test-Path $asset.File)
+            {
+              Remove-Item $asset.File -Force
+            }
+
+            Compress-Archive -Path (Join-Path $asset.Source '*') -DestinationPath $asset.File
+          }
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}\release-assets\*.zip
+          if-no-files-found: error
+
+  docker-build-and-push:
+    name: Publish Docker image
+    needs: build-and-test
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - name: Validate Docker Hub configuration
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ]; then
+            echo "DOCKERHUB_USERNAME secret is required."
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=raw,value=${{ env.RELEASE_VERSION }}
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create Docker release metadata
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/docker-release"
+          {
+            echo "Docker image:"
+            echo "${{ env.DOCKER_IMAGE }}"
+            echo
+            echo "Tags:"
+            printf '%s\n' "${{ steps.meta.outputs.tags }}"
+          } > "$RUNNER_TEMP/docker-release/docker-image-tags.txt"
+
+      - name: Upload Docker release metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-release-metadata
+          path: ${{ runner.temp }}/docker-release/docker-image-tags.txt
+          if-no-files-found: error
+
+  github-release:
+    name: Create GitHub release
+    needs: [publish-apps, docker-build-and-push]
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: read
+
+    steps:
+      - name: Download app release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Download Docker release metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-release-metadata
+          path: ${{ runner.temp }}/docker-release
+
+      - name: Get merged PR info
+        id: pr-info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = (context.payload.pull_request.body || '')
+              .replace(/##\s*Summary by CodeRabbit[\s\S]*/i, '')
+              .trim() || 'No release notes provided.';
+            const notes = [
+              body,
+              '',
+              '## Docker image',
+              `- \`${{ env.DOCKER_IMAGE }}:${{ env.RELEASE_VERSION }}\``,
+              `- \`${{ env.DOCKER_IMAGE }}:latest\``
+            ].join('\n');
+            fs.writeFileSync('release_notes.md', notes);
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: ${{ env.RELEASE_VERSION }}
+          body_path: release_notes.md
+          target_commitish: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          files: |
+            ${{ runner.temp }}/release-assets/*.zip
+            ${{ runner.temp }}/docker-release/docker-image-tags.txt
+          draft: false
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
