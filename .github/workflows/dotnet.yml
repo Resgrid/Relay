@@ -30,6 +30,7 @@ jobs:
       github.event.action != 'closed' ||
       (github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master')
     runs-on: windows-latest
+    environment: BuildEnv
 
     permissions:
       contents: read
@@ -58,6 +59,7 @@ jobs:
     needs: build-and-test
     if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
     runs-on: windows-latest
+    environment: BuildEnv
 
     permissions:
       contents: read
@@ -123,6 +125,7 @@ jobs:
     needs: build-and-test
     if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
     runs-on: ubuntu-latest
+    environment: BuildEnv
 
     permissions:
       contents: read
@@ -196,6 +199,7 @@ jobs:
     needs: [publish-apps, docker-build-and-push]
     if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
     runs-on: ubuntu-latest
+    environment: BuildEnv
 
     permissions:
       contents: write
