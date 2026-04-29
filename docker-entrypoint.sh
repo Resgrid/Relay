@@ -31,7 +31,8 @@ if [ "${LOCLX_ENABLED:-false}" = "true" ]; then
 
   if [ -n "${LOCLX_TOKEN}" ]; then
     echo "[localxpose] Authenticating..."
-    loclx auth login --token "${LOCLX_TOKEN}"
+    export LX_ACCESS_TOKEN="${LOCLX_TOKEN}"
+    loclx auth login
   else
     echo "[localxpose] WARNING: LOCLX_TOKEN is not set; tunnel may fail to authenticate."
   fi
