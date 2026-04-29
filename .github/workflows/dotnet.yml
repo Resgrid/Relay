@@ -54,9 +54,34 @@ jobs:
       - name: Test
         run: dotnet test "Resgrid Audio.sln" --configuration Release --no-build --verbosity normal
 
+  check-approval:
+    name: Verify PR was approved
+    needs: build-and-test
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
+    runs-on: ubuntu-latest
+    environment: BuildEnv
+
+    permissions:
+      pull-requests: read
+
+    steps:
+      - name: Verify at least one approved review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+            const approved = reviews.some(r => r.state === 'APPROVED');
+            if (!approved) {
+              core.setFailed('PR must have at least one approved review before publishing.');
+            }
+
   publish-apps:
     name: Publish app assets
-    needs: build-and-test
+    needs: check-approval
     if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
     runs-on: windows-latest
     environment: BuildEnv
@@ -122,7 +147,7 @@ jobs:
 
   docker-build-and-push:
     name: Publish Docker image
-    needs: build-and-test
+    needs: check-approval
     if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
     runs-on: ubuntu-latest
     environment: BuildEnv
