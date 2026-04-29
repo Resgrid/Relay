@@ -110,3 +110,4 @@ Web/Resgrid.Services/App_Data/Resgrid.Web.Services.XML
 #Common/AssemblyInfo.cs
 /node_modules
 .vs/
+/.idea
