@@ -97,7 +97,7 @@ namespace Resgrid.Providers.ApiClient.V4
 				return null;
 
 			var tokens = dispatchCodes
-				.Where(x => x != null && !String.IsNullOrWhiteSpace(x.Code) && x.Type != DispatchCodeType.Department && x.Type != DispatchCodeType.DistributionList)
+				.Where(x => x != null && !String.IsNullOrWhiteSpace(x.Code) && x.Type != DispatchCodeType.Department && x.Type != DispatchCodeType.DistributionList && x.Type != DispatchCodeType.GroupMessage)
 				.Select(x => Format(x, departmentDispatchPrefix))
 				.Distinct(StringComparer.OrdinalIgnoreCase)
 				.ToArray();

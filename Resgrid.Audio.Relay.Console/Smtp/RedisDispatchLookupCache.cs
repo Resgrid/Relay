@@ -3,6 +3,7 @@ using Resgrid.Providers.ApiClient.V4.Models;
 using StackExchange.Redis;
 using System;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Resgrid.Audio.Relay.Console.Smtp
@@ -25,6 +26,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 		};
 
 		private readonly RedisCacheOptions _options;
+		private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
 		private ConnectionMultiplexer _redis;
 		private IDatabase _db;
 
@@ -38,9 +40,20 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 			if (_db != null)
 				return _db;
 
-			_redis = await ConnectionMultiplexer.ConnectAsync(_options.ConnectionString).ConfigureAwait(false);
-			_db = _redis.GetDatabase();
-			return _db;
+			await _lock.WaitAsync().ConfigureAwait(false);
+			try
+			{
+				if (_db != null)
+					return _db;
+
+				_redis = await ConnectionMultiplexer.ConnectAsync(_options.ConnectionString).ConfigureAwait(false);
+				_db = _redis.GetDatabase();
+				return _db;
+			}
+			finally
+			{
+				_lock.Release();
+			}
 		}
 
 		public async ValueTask DisposeAsync()
@@ -52,6 +65,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 				_redis = null;
 				_db = null;
 			}
+			_lock.Dispose();
 		}
 
 		private TimeSpan Ttl => TimeSpan.FromMinutes(_options.TtlMinutes > 0 ? _options.TtlMinutes : 60);

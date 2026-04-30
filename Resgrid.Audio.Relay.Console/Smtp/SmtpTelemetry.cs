@@ -36,6 +36,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 		void MessageReceived(ISessionContext context, SmtpMessageSummary message);
 		void DuplicateMessage(ISessionContext context, SmtpMessageSummary message);
 		void UnroutableMessage(ISessionContext context, SmtpMessageSummary message);
+		void UnsupportedTarget(ISessionContext context, SmtpMessageSummary message);
 		void MessageProcessingStarted(ISessionContext context, SmtpMessageSummary message);
 		void MessageProcessed(ISessionContext context, SmtpMessageSummary message, TimeSpan duration);
 		void MessageFailed(ISessionContext context, SmtpMessageSummary message, Exception exception, TimeSpan duration);
@@ -325,6 +326,25 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 				new Dictionary<string, string>
 				{
 					["route_kind"] = "none"
+				}));
+		}
+
+		public void UnsupportedTarget(ISessionContext context, SmtpMessageSummary message)
+		{
+			var state = SmtpSessionStateAccessor.GetOrCreate(context);
+			_logger.Information(
+				"SMTP message contained a dispatch target type that is not yet supported. SessionId={SessionId} StableMessageId={StableMessageId} RouteKind={RouteKind} DispatchTargets={@DispatchTargets} Subject={Subject}",
+				state.SessionId,
+				message.StableMessageId,
+				message.RouteKind,
+				message.DispatchTargets,
+				message.Subject);
+
+			_countlyClient.TrackEvent("smtp_message_unsupported_target", MergeSegmentations(
+				BuildMessageSegmentation(state, message),
+				new Dictionary<string, string>
+				{
+					["route_kind"] = message.RouteKind
 				}));
 		}
 

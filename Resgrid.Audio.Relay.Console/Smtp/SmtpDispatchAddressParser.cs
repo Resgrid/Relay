@@ -39,9 +39,24 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 
 			foreach (var address in addresses)
 			{
-				if (TryParse(address, out var dispatchCode, out var departmentId) &&
-					result.DispatchCodes.All(x => !String.Equals(x.Code, dispatchCode.Code, StringComparison.OrdinalIgnoreCase)))
+				if (TryParse(address, out var dispatchCode, out var departmentId))
 				{
+					// Reject entries that are duplicates on (departmentId, Type, Code)
+					// rather than just Code alone — same code with a different type
+					// or from a different department is a distinct dispatch target.
+					if (result.DispatchCodes.Any(x =>
+						String.Equals(x.Code, dispatchCode.Code, StringComparison.OrdinalIgnoreCase) &&
+						x.Type == dispatchCode.Type &&
+						String.Equals(departmentId, result.DepartmentId, StringComparison.OrdinalIgnoreCase)))
+						continue;
+
+					// In hosted mode, reject entries that target a different department
+					// than what has already been resolved for this message.
+					if (!String.IsNullOrWhiteSpace(departmentId) &&
+						!String.IsNullOrWhiteSpace(result.DepartmentId) &&
+						!String.Equals(departmentId, result.DepartmentId, StringComparison.OrdinalIgnoreCase))
+						continue;
+
 					result.DispatchCodes.Add(dispatchCode);
 
 					if (!String.IsNullOrWhiteSpace(departmentId) && String.IsNullOrWhiteSpace(result.DepartmentId))

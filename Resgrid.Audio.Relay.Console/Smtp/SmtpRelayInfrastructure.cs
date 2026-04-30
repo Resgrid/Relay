@@ -187,10 +187,10 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 				// Group messages (Type 4) and distribution list messages (Type 2)
 				// are not yet handled by the SMTP relay — log and skip.
 				if (dispatchResult.HasGroupMessageTargets)
-					_telemetry.MessageProcessingStarted(context, messageSummary);
+					_telemetry.UnsupportedTarget(context, messageSummary);
 
 				if (dispatchResult.HasDistributionListTargets)
-					_telemetry.MessageProcessingStarted(context, messageSummary);
+					_telemetry.UnsupportedTarget(context, messageSummary);
 
 				if (!dispatchResult.HasCallTargets)
 				{

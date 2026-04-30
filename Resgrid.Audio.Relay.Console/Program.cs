@@ -157,6 +157,9 @@ namespace Resgrid.Audio.Relay.Console
 
 				if (!hasDomains)
 					errors.Add("At least one dispatch domain must be configured. Set RESGRID__RELAY__Smtp__DepartmentAddressDomains__0, RESGRID__RELAY__Smtp__GroupAddressDomains__0, etc.");
+
+				if (options.Smtp.RedisCache is { Enabled: true } && String.IsNullOrWhiteSpace(options.Smtp.RedisCache.ConnectionString))
+					errors.Add("Redis cache enabled but RESGRID__RELAY__Smtp__RedisCache__ConnectionString is not set.");
 			}
 
 			if (errors.Count > 0)

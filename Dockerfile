@@ -51,16 +51,23 @@ RUN chmod +x /docker-entrypoint.sh
 ENV RESGRID__RELAY__Mode=smtp
 
 # Resgrid API (v4)
-ENV RESGRID__RELAY__Resgrid__BaseUrl=                  # [REQUIRED] e.g. https://api.resgrid.com
+# [REQUIRED] e.g. https://api.resgrid.com
+ENV RESGRID__RELAY__Resgrid__BaseUrl=""
 ENV RESGRID__RELAY__Resgrid__ApiVersion=4
-ENV RESGRID__RELAY__Resgrid__ClientId=                 # [REQUIRED]
-ENV RESGRID__RELAY__Resgrid__ClientSecret=             # [REQUIRED]
-ENV RESGRID__RELAY__Resgrid__RefreshToken=             # required when GrantType=RefreshToken
+# [REQUIRED]
+ENV RESGRID__RELAY__Resgrid__ClientId=""
+# [REQUIRED]
+ENV RESGRID__RELAY__Resgrid__ClientSecret=""
+# Required when GrantType=RefreshToken
+ENV RESGRID__RELAY__Resgrid__RefreshToken=""
 ENV RESGRID__RELAY__Resgrid__Scope=openid profile email offline_access mobile
 ENV RESGRID__RELAY__Resgrid__TokenCachePath=./data/resgrid-token.json
-ENV RESGRID__RELAY__Resgrid__GrantType=RefreshToken    # RefreshToken | ClientCredentials | SystemApiKey
-ENV RESGRID__RELAY__Resgrid__SystemApiKey=             # required when GrantType=SystemApiKey
-ENV RESGRID__RELAY__Resgrid__DepartmentId=             # optional, used as fallback in hosted mode
+# RefreshToken | ClientCredentials | SystemApiKey
+ENV RESGRID__RELAY__Resgrid__GrantType=RefreshToken
+# Required when GrantType=SystemApiKey
+ENV RESGRID__RELAY__Resgrid__SystemApiKey=""
+# Optional, used as fallback in hosted mode
+ENV RESGRID__RELAY__Resgrid__DepartmentId=""
 
 # Telemetry (optional — telemetry is disabled when these are left empty)
 ENV RESGRID__RELAY__Telemetry__Environment=
@@ -92,10 +99,13 @@ ENV RESGRID__RELAY__Smtp__DepartmentDispatchPrefix=G
 #   RESGRID__RELAY__Smtp__ListAddressDomains__0=lists.resgrid.com
 
 # Hosted (multi-department) mode
-ENV RESGRID__RELAY__Smtp__HostedMode=false            # true when running for Resgrid Hosted
+# true when running for Resgrid Hosted
+ENV RESGRID__RELAY__Smtp__HostedMode=false
 ENV RESGRID__RELAY__Smtp__DepartmentDomainSeparator=.
-ENV RESGRID__RELAY__Smtp__DefaultDepartmentId=         # optional department override
-ENV RESGRID__RELAY__Smtp__ResolveDispatchCodes=true    # resolve code names to numeric IDs via lookup API
+# Optional department override
+ENV RESGRID__RELAY__Smtp__DefaultDepartmentId=""
+# Resolve code names to numeric IDs via lookup API
+ENV RESGRID__RELAY__Smtp__ResolveDispatchCodes=true
 
 # Redis cache for dispatch lookups (optional — disabled by default)
 # When enabled, group/unit/role lookup results are cached in Redis to
@@ -108,8 +118,10 @@ ENV RESGRID__RELAY__Smtp__RedisCache__Enabled=false
 # ─── LocalXpose tunnel ─────────────────────────────────────────────────
 # All optional — tunnel is disabled by default.
 ENV LOCLX_ENABLED=false
-# ENV LOCLX_TOKEN=                           # LocalXpose access token
-# ENV LOCLX_RESERVED_ENDPOINT=               # e.g. smtp.loclx.io:25
+# LocalXpose access token
+# ENV LOCLX_TOKEN=""
+# e.g. smtp.loclx.io:25
+# ENV LOCLX_RESERVED_ENDPOINT=""
 
 EXPOSE 2525
 

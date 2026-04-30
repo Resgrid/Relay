@@ -22,15 +22,17 @@ namespace Resgrid.Audio.Tests
 		}
 
 		[Test]
-		public void Build_Should_Format_Group_And_GroupMessage_Dispatch_Codes()
+		public void Build_Should_Exclude_GroupMessage_Codes_Because_They_Produce_Messages_Not_Calls()
 		{
+			// GroupMessage codes produce messages, not calls — they should
+			// NOT appear in the DispatchList sent to SaveCall.
 			var result = DispatchListBuilder.Build(new[]
 			{
 				new DispatchCode { Code = "GRP001", Type = DispatchCodeType.Group },
 				new DispatchCode { Code = "MSG001", Type = DispatchCodeType.GroupMessage }
 			}, "G");
 
-			result.Should().Be("G:GRP001|G:MSG001");
+			result.Should().Be("G:GRP001");
 		}
 
 		[Test]
@@ -64,7 +66,8 @@ namespace Resgrid.Audio.Tests
 			var result = DispatchListBuilder.Build(new[]
 			{
 				new DispatchCode { Code = "DEPT01", Type = DispatchCodeType.Department },
-				new DispatchCode { Code = "LIST01", Type = DispatchCodeType.DistributionList }
+				new DispatchCode { Code = "LIST01", Type = DispatchCodeType.DistributionList },
+				new DispatchCode { Code = "MSG001", Type = DispatchCodeType.GroupMessage }
 			}, "G");
 
 			result.Should().BeNull();

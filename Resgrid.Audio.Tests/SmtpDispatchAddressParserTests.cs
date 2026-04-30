@@ -124,5 +124,54 @@ namespace Resgrid.Audio.Tests
 			result.DispatchCodes.Should().Contain(x => x.Type == DispatchCodeType.Department);
 			result.DispatchCodes.Should().Contain(x => x.Type == DispatchCodeType.Group);
 		}
+
+		[Test]
+		public void ParseRecipients_Should_Keep_Same_Code_When_Types_Differ()
+		{
+			// station5 as a Group dispatch code AND as a GroupMessage code
+			// are distinct targets — both should be kept.
+			var options = new SmtpRelayOptions
+			{
+				GroupAddressDomains = new[] { "groups.resgrid.com" },
+				GroupMessageAddressDomains = new[] { "gm.resgrid.com" },
+				DepartmentAddressDomains = Array.Empty<string>(),
+				ListAddressDomains = Array.Empty<string>()
+			};
+			var parser = new SmtpDispatchAddressParser(options);
+
+			var result = parser.ParseRecipients(new[]
+			{
+				"station5@groups.resgrid.com",
+				"station5@gm.resgrid.com"
+			});
+
+			result.DispatchCodes.Should().HaveCount(2);
+			result.DispatchCodes.Should().Contain(x => x.Type == DispatchCodeType.Group);
+			result.DispatchCodes.Should().Contain(x => x.Type == DispatchCodeType.GroupMessage);
+		}
+
+		[Test]
+		public void ParseRecipients_Should_Reject_Cross_Department_Entries_In_HostedMode()
+		{
+			// A single inbound email must target only one department.
+			// Entries belonging to a different department are silently dropped.
+			var options = new SmtpRelayOptions
+			{
+				HostedMode = true,
+				DepartmentAddressDomains = new[] { "dispatch.resgrid.com" },
+				DepartmentDomainSeparator = "."
+			};
+			var parser = new SmtpDispatchAddressParser(options);
+
+			var result = parser.ParseRecipients(new[]
+			{
+				"station5@dept123.dispatch.resgrid.com",
+				"engine2@dept456.dispatch.resgrid.com"
+			});
+
+			result.DepartmentId.Should().Be("dept123");
+			result.DispatchCodes.Should().HaveCount(1);
+			result.DispatchCodes[0].Code.Should().Be("station5");
+		}
 	}
 }

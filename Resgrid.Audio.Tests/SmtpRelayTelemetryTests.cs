@@ -264,6 +264,10 @@ namespace Resgrid.Audio.Tests
 				UnroutableMessages.Add(message);
 			}
 
+			public void UnsupportedTarget(ISessionContext context, SmtpMessageSummary message)
+			{
+			}
+
 			public void MessageProcessingStarted(ISessionContext context, SmtpMessageSummary message)
 			{
 			}
