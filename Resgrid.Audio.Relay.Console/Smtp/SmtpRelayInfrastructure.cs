@@ -103,14 +103,18 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 		private readonly ProcessedMessageStore _processedMessageStore;
 		private readonly ISmtpTelemetry _telemetry;
 		private readonly IResgridCallsClient _callsClient;
+		private readonly CachedLookupsService _lookupService;
+		private readonly IDispatchLookupCache _lookupCache;
 		private readonly string _dataDirectory;
 		private readonly string _messageDirectory;
 
-		public RelayMessageStore(SmtpRelayOptions options, ISmtpTelemetry telemetry, IResgridCallsClient callsClient = null)
+		public RelayMessageStore(SmtpRelayOptions options, ISmtpTelemetry telemetry, IResgridCallsClient callsClient = null, IDispatchLookupCache lookupCache = null)
 		{
 			_options = options ?? throw new ArgumentNullException(nameof(options));
 			_telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
 			_callsClient = callsClient ?? new ResgridCallsClient();
+			_lookupCache = lookupCache ?? CreateLookupCache(options);
+			_lookupService = new CachedLookupsService(_lookupCache);
 			_dispatchAddressParser = new SmtpDispatchAddressParser(options);
 			_dataDirectory = ResolvePath(options.DataDirectory);
 			_messageDirectory = Path.Combine(_dataDirectory, "messages");
@@ -118,6 +122,14 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 
 			Directory.CreateDirectory(_dataDirectory);
 			Directory.CreateDirectory(_messageDirectory);
+		}
+
+		private static IDispatchLookupCache CreateLookupCache(SmtpRelayOptions options)
+		{
+			if (options.RedisCache?.Enabled == true && !String.IsNullOrWhiteSpace(options.RedisCache.ConnectionString))
+				return new RedisDispatchLookupCache(options.RedisCache);
+
+			return new NullDispatchLookupCache();
 		}
 
 		public override async Task<SmtpResponse> SaveAsync(ISessionContext context, IMessageTransaction transaction, ReadOnlySequence<byte> buffer, CancellationToken cancellationToken)
@@ -297,7 +309,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 
 					case DispatchCodeType.Group:
 					{
-						var group = await LookupsApi.LookupGroupByDispatchCodeAsync(
+						var group = await _lookupService.LookupGroupByDispatchCodeAsync(
 							code.Code, dispatchResult.DepartmentId, cancellationToken).ConfigureAwait(false);
 
 						if (group != null && !String.IsNullOrWhiteSpace(group.GroupId))
@@ -308,7 +320,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 
 					case DispatchCodeType.GroupMessage:
 					{
-						var group = await LookupsApi.LookupGroupByMessageCodeAsync(
+						var group = await _lookupService.LookupGroupByMessageCodeAsync(
 							code.Code, dispatchResult.DepartmentId, cancellationToken).ConfigureAwait(false);
 
 						if (group != null && !String.IsNullOrWhiteSpace(group.GroupId))

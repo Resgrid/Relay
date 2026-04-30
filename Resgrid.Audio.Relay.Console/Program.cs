@@ -209,6 +209,9 @@ namespace Resgrid.Audio.Relay.Console
 			Cli.WriteLine("  RESGRID__RELAY__Smtp__GroupAddressDomains__0=groups.resgrid.com");
 			Cli.WriteLine("  RESGRID__RELAY__Smtp__GroupMessageAddressDomains__0=gm.resgrid.com");
 			Cli.WriteLine("  RESGRID__RELAY__Smtp__ListAddressDomains__0=lists.resgrid.com");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__RedisCache__Enabled=true|false");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__RedisCache__ConnectionString=redis:6379,abortConnect=false");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__RedisCache__TtlMinutes=60");
 		}
 
 #if NET10_0_WINDOWS

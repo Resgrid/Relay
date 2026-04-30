@@ -21,6 +21,10 @@ echo "[relay] Mode: ${RESGRID__RELAY__Mode:-smtp}"
 echo "[relay] API:   ${RESGRID__RELAY__Resgrid__BaseUrl:-(NOT SET — required)}"
 echo "[relay] Port:  ${RESGRID__RELAY__Smtp__Port:-2525}"
 
+if [ "${RESGRID__RELAY__Smtp__RedisCache__Enabled:-false}" = "true" ]; then
+  echo "[relay] Redis: ${RESGRID__RELAY__Smtp__RedisCache__ConnectionString:-not set}"
+fi
+
 if [ -z "${RESGRID__RELAY__Resgrid__BaseUrl}" ]; then
   echo "[relay] ERROR: RESGRID__RELAY__Resgrid__BaseUrl is required."
   exit 1

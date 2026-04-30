@@ -133,5 +133,43 @@ namespace Resgrid.Audio.Relay.Console.Configuration
 		/// names).
 		/// </summary>
 		public bool ResolveDispatchCodes { get; set; } = true;
+
+		// ─── Redis Lookup Cache ───
+
+		/// <summary>
+		/// Redis-backed cache for dispatch lookup API results.
+		/// Department, group, unit, and role data is relatively static,
+		/// so caching lookups dramatically reduces API traffic in hosted
+		/// mode where the relay handles emails for many departments.
+		/// </summary>
+		public RedisCacheOptions RedisCache { get; set; } = new RedisCacheOptions();
+	}
+
+	/// <summary>
+	/// Configuration for the Redis-backed dispatch lookup cache.
+	/// When <see cref="Enabled"/> is false (the default), lookups
+	/// go directly to the Resgrid API with no caching.
+	/// </summary>
+	public sealed class RedisCacheOptions
+	{
+		/// <summary>
+		/// When true, dispatch code lookups are cached in Redis.
+		/// Requires a Redis server reachable at <see cref="ConnectionString"/>.
+		/// Default: false (no caching).
+		/// </summary>
+		public bool Enabled { get; set; }
+
+		/// <summary>
+		/// Redis connection string (StackExchange.Redis format).
+		/// Example: "redis:6379,abortConnect=false"
+		/// </summary>
+		public string ConnectionString { get; set; } = "";
+
+		/// <summary>
+		/// How long cached lookup results remain valid (in minutes).
+		/// Default: 60 minutes. Set higher for very static deployments,
+		/// lower for environments where groups/units change frequently.
+		/// </summary>
+		public int TtlMinutes { get; set; } = 60;
 	}
 }

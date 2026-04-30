@@ -97,6 +97,14 @@ ENV RESGRID__RELAY__Smtp__DepartmentDomainSeparator=.
 ENV RESGRID__RELAY__Smtp__DefaultDepartmentId=         # optional department override
 ENV RESGRID__RELAY__Smtp__ResolveDispatchCodes=true    # resolve code names to numeric IDs via lookup API
 
+# Redis cache for dispatch lookups (optional — disabled by default)
+# When enabled, group/unit/role lookup results are cached in Redis to
+# reduce API traffic. This is especially beneficial in hosted mode where
+# the relay handles emails for many departments.
+ENV RESGRID__RELAY__Smtp__RedisCache__Enabled=false
+# ENV RESGRID__RELAY__Smtp__RedisCache__ConnectionString=redis:6379,abortConnect=false
+# ENV RESGRID__RELAY__Smtp__RedisCache__TtlMinutes=60
+
 # ─── LocalXpose tunnel ─────────────────────────────────────────────────
 # All optional — tunnel is disabled by default.
 ENV LOCLX_ENABLED=false
