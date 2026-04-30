@@ -686,23 +686,29 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 		public int BodyLength { get; private set; }
 		public int DepartmentDispatchCount { get; private set; }
 		public int GroupDispatchCount { get; private set; }
+		public int GroupMessageDispatchCount { get; private set; }
+		public int DistributionListDispatchCount { get; private set; }
 		public int AttachmentCount => AttachmentNames.Length;
 		public int OversizedAttachmentCount => OversizedAttachmentNames.Length;
-		public int DispatchTargetCount => DepartmentDispatchCount + GroupDispatchCount;
+		public int DispatchTargetCount => DepartmentDispatchCount + GroupDispatchCount + GroupMessageDispatchCount + DistributionListDispatchCount;
 		public string SenderDomain => GetDomain(FromAddresses.FirstOrDefault());
 
 		public string RouteKind
 		{
 			get
 			{
-				if (DepartmentDispatchCount > 0 && GroupDispatchCount > 0)
-					return "mixed";
-				if (DepartmentDispatchCount > 0)
-					return "department";
-				if (GroupDispatchCount > 0)
-					return "group";
+				var kinds = new List<string>(4);
+				if (DepartmentDispatchCount > 0) kinds.Add("department");
+				if (GroupDispatchCount > 0) kinds.Add("group");
+				if (GroupMessageDispatchCount > 0) kinds.Add("groupmessage");
+				if (DistributionListDispatchCount > 0) kinds.Add("distributionlist");
 
-				return "none";
+				return kinds.Count switch
+				{
+					0 => "none",
+					1 => kinds[0],
+					_ => "mixed"
+				};
 			}
 		}
 
@@ -729,7 +735,9 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 			var items = dispatchTargets?.ToList() ?? new List<DispatchCode>();
 			DepartmentDispatchCount = items.Count(x => x.Type == DispatchCodeType.Department);
 			GroupDispatchCount = items.Count(x => x.Type == DispatchCodeType.Group);
-			DispatchTargets = items.Select(x => $"{x.Type}:{x.Code}").ToArray();
+			GroupMessageDispatchCount = items.Count(x => x.Type == DispatchCodeType.GroupMessage);
+			DistributionListDispatchCount = items.Count(x => x.Type == DispatchCodeType.DistributionList);
+			DispatchTargets = items.Select(x => $"{(int)x.Type}:{x.Code}").ToArray();
 		}
 
 		public void SetAttachments(IEnumerable<AttachmentPayload> attachments, int maxAttachmentBytes)

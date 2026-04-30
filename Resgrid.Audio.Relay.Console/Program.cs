@@ -64,6 +64,10 @@ namespace Resgrid.Audio.Relay.Console
 			var hostOptions = LoadHostOptions();
 			var mode = (hostOptions.Mode ?? "smtp").Trim().ToLowerInvariant();
 
+			// Validate required settings before starting (fail fast with clear messages).
+			if (!ValidateOptions(hostOptions))
+				return 1;
+
 			using var cancellationTokenSource = new CancellationTokenSource();
 			ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
 			{
@@ -102,7 +106,7 @@ namespace Resgrid.Audio.Relay.Console
 			var configuration = new ConfigurationBuilder()
 				.SetBasePath(AppContext.BaseDirectory)
 				.AddJsonFile("appsettings.json", optional: true)
-				.AddEnvironmentVariables("RELAY_")
+				.AddEnvironmentVariables("RESGRID__RELAY__")
 				.Build();
 
 			var options = new RelayHostOptions();
@@ -115,6 +119,58 @@ namespace Resgrid.Audio.Relay.Console
 				options.Resgrid.TokenCachePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, options.Resgrid.TokenCachePath));
 
 			return options;
+		}
+
+		private static bool ValidateOptions(RelayHostOptions options)
+		{
+			var errors = new System.Collections.Generic.List<string>();
+
+			if (String.IsNullOrWhiteSpace(options.Resgrid.BaseUrl))
+				errors.Add("RESGRID__RELAY__Resgrid__BaseUrl is required. Set it to your Resgrid API URL (e.g. https://api.resgrid.com).");
+
+			if (String.IsNullOrWhiteSpace(options.Resgrid.ClientId))
+				errors.Add("RESGRID__RELAY__Resgrid__ClientId is required. Set it to your OIDC client ID.");
+
+			if (String.IsNullOrWhiteSpace(options.Resgrid.ClientSecret))
+				errors.Add("RESGRID__RELAY__Resgrid__ClientSecret is required. Set it to your OIDC client secret.");
+
+			var grantType = options.Resgrid.GrantType;
+
+			switch (grantType)
+			{
+				case ResgridAuthGrantType.RefreshToken:
+					if (String.IsNullOrWhiteSpace(options.Resgrid.RefreshToken))
+						errors.Add("RESGRID__RELAY__Resgrid__RefreshToken is required when GrantType is RefreshToken.");
+					break;
+				case ResgridAuthGrantType.SystemApiKey:
+					if (String.IsNullOrWhiteSpace(options.Resgrid.SystemApiKey))
+						errors.Add("RESGRID__RELAY__Resgrid__SystemApiKey is required when GrantType is SystemApiKey.");
+					break;
+			}
+
+			if (options.Mode == "smtp")
+			{
+				var hasDomains = (options.Smtp.DepartmentAddressDomains?.Length ?? 0) > 0
+					|| (options.Smtp.GroupAddressDomains?.Length ?? 0) > 0
+					|| (options.Smtp.GroupMessageAddressDomains?.Length ?? 0) > 0
+					|| (options.Smtp.ListAddressDomains?.Length ?? 0) > 0;
+
+				if (!hasDomains)
+					errors.Add("At least one dispatch domain must be configured. Set RESGRID__RELAY__Smtp__DepartmentAddressDomains__0, RESGRID__RELAY__Smtp__GroupAddressDomains__0, etc.");
+			}
+
+			if (errors.Count > 0)
+			{
+				foreach (var error in errors)
+					Cli.Error.WriteLine($"Configuration error: {error}");
+
+				Cli.Error.WriteLine();
+				Cli.Error.WriteLine("All settings are driven by environment variables prefixed with RESGRID__RELAY__.");
+				Cli.Error.WriteLine("Run 'Resgrid.Audio.Relay.Console help' for the full list.");
+				return false;
+			}
+
+			return true;
 		}
 
 		private static void ShowVersion()
@@ -135,14 +191,24 @@ namespace Resgrid.Audio.Relay.Console
 			Cli.WriteLine("  version   Prints the application version");
 			Cli.WriteLine();
 			Cli.WriteLine("Environment variables:");
-			Cli.WriteLine("  RELAY_Mode=smtp|audio");
-			Cli.WriteLine("  RELAY_Resgrid__ClientId=...");
-			Cli.WriteLine("  RELAY_Resgrid__ClientSecret=...");
-			Cli.WriteLine("  RELAY_Resgrid__RefreshToken=...");
-			Cli.WriteLine("  RELAY_Telemetry__Sentry__Dsn=...");
-			Cli.WriteLine("  RELAY_Telemetry__Countly__Url=https://countly.example.com");
-			Cli.WriteLine("  RELAY_Telemetry__Countly__AppKey=...");
-			Cli.WriteLine("  RELAY_Smtp__Port=2525");
+			Cli.WriteLine("  RESGRID__RELAY__Mode=smtp|audio");
+			Cli.WriteLine("  RESGRID__RELAY__Resgrid__ClientId=...");
+			Cli.WriteLine("  RESGRID__RELAY__Resgrid__ClientSecret=...");
+			Cli.WriteLine("  RESGRID__RELAY__Resgrid__RefreshToken=...");
+			Cli.WriteLine("  RESGRID__RELAY__Resgrid__GrantType=RefreshToken|ClientCredentials|SystemApiKey");
+			Cli.WriteLine("  RESGRID__RELAY__Resgrid__SystemApiKey=...");
+			Cli.WriteLine("  RESGRID__RELAY__Resgrid__DepartmentId=...");
+			Cli.WriteLine("  RESGRID__RELAY__Telemetry__Sentry__Dsn=...");
+			Cli.WriteLine("  RESGRID__RELAY__Telemetry__Countly__Url=https://countly.example.com");
+			Cli.WriteLine("  RESGRID__RELAY__Telemetry__Countly__AppKey=...");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__Port=2525");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__HostedMode=false");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__DefaultDepartmentId=...");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__ResolveDispatchCodes=true|false");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__DepartmentAddressDomains__0=dispatch.resgrid.com");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__GroupAddressDomains__0=groups.resgrid.com");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__GroupMessageAddressDomains__0=gm.resgrid.com");
+			Cli.WriteLine("  RESGRID__RELAY__Smtp__ListAddressDomains__0=lists.resgrid.com");
 		}
 
 #if NET10_0_WINDOWS

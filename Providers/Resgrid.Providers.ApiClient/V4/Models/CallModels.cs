@@ -30,6 +30,13 @@ namespace Resgrid.Providers.ApiClient.V4.Models
 		public DateTimeOffset? DispatchOn { get; set; }
 		public string CallFormData { get; set; }
 		public bool? CheckInTimersEnabled { get; set; }
+
+		/// <summary>
+		/// When set, scopes the call to a specific department.
+		/// Required in hosted (multi-department) mode where the system-level
+		/// API key can create calls for any department.
+		/// </summary>
+		public string DepartmentId { get; set; }
 	}
 
 	public sealed class SaveCallFileInput
@@ -42,6 +49,13 @@ namespace Resgrid.Providers.ApiClient.V4.Models
 		public string Latitude { get; set; }
 		public string Longitude { get; set; }
 		public string Note { get; set; }
+
+		/// <summary>
+		/// When set, scopes the file upload to a specific department.
+		/// Required in hosted (multi-department) mode where the system-level
+		/// API key can upload files for any department.
+		/// </summary>
+		public string DepartmentId { get; set; }
 	}
 
 	public sealed class SaveOperationResult

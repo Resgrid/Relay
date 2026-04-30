@@ -163,12 +163,35 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 					messageSummary.RawMessagePath = rawMessagePath;
 				}
 
-				var dispatchTargets = GetDispatchTargets(message);
-				messageSummary.SetDispatchTargets(dispatchTargets);
-				if (dispatchTargets.Count == 0)
+				var dispatchResult = ParseDispatchTargets(message);
+				messageSummary.SetDispatchTargets(dispatchResult.DispatchCodes);
+
+				if (!dispatchResult.HasTargets)
 				{
 					_telemetry.UnroutableMessage(context, messageSummary);
 					return SmtpResponse.Ok;
+				}
+
+				// Group messages (Type 4) and distribution list messages (Type 2)
+				// are not yet handled by the SMTP relay — log and skip.
+				if (dispatchResult.HasGroupMessageTargets)
+					_telemetry.MessageProcessingStarted(context, messageSummary);
+
+				if (dispatchResult.HasDistributionListTargets)
+					_telemetry.MessageProcessingStarted(context, messageSummary);
+
+				if (!dispatchResult.HasCallTargets)
+				{
+					_telemetry.UnroutableMessage(context, messageSummary);
+					return SmtpResponse.Ok;
+				}
+
+				// Resolve dispatch code names to numeric IDs required by SaveCall.
+				// Department-type codes are excluded from DispatchList by
+				// DispatchListBuilder (they dispatch to the entire department).
+				if (_options.ResolveDispatchCodes)
+				{
+					await ResolveDispatchCodesAsync(dispatchResult, cancellationToken).ConfigureAwait(false);
 				}
 
 				var fromMailbox = message.From.Mailboxes.FirstOrDefault();
@@ -188,11 +211,12 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 					Name = Trim(subject, 200),
 					Nature = Trim(nature, 500),
 					Note = BuildNote(message, messageBody, skippedAttachments),
-					DispatchList = DispatchListBuilder.Build(dispatchTargets, _options.DepartmentDispatchPrefix),
+					DispatchList = DispatchListBuilder.Build(dispatchResult.DispatchCodes, _options.DepartmentDispatchPrefix),
 					ContactName = fromMailbox == null ? null : Trim(String.IsNullOrWhiteSpace(fromMailbox.Name) ? fromMailbox.Address : fromMailbox.Name, 200),
 					ContactInfo = fromMailbox?.Address,
 					ExternalId = stableMessageId,
-					ReferenceId = message.MessageId
+					ReferenceId = message.MessageId,
+					DepartmentId = dispatchResult.DepartmentId
 				}, cancellationToken).ConfigureAwait(false);
 
 				messageSummary.CallId = callId;
@@ -201,7 +225,10 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 				if (uploadableAttachments.Count > 0)
 				{
 					var userId = ResgridV4ApiClient.CurrentUserId;
-					if (String.IsNullOrWhiteSpace(userId))
+					// In SystemApiKey (hosted) mode the department ID serves as
+					// the user identifier for file uploads.  In token-based modes
+					// the user id must come from the access token JWT.
+					if (String.IsNullOrWhiteSpace(userId) && String.IsNullOrWhiteSpace(dispatchResult.DepartmentId))
 						throw new InvalidOperationException("The Resgrid access token did not contain a user id required to upload SMTP message attachments.");
 
 					foreach (var attachment in uploadableAttachments)
@@ -209,11 +236,12 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 						await _callsClient.SaveCallFileAsync(new SaveCallFileInput
 						{
 							CallId = callId,
-							UserId = userId,
+							UserId = String.IsNullOrWhiteSpace(userId) ? dispatchResult.DepartmentId : userId,
 							Type = (int)attachment.Type,
 							Name = attachment.Name,
 							Data = Convert.ToBase64String(attachment.Data),
-							Note = $"SMTP attachment imported from message {stableMessageId}"
+							Note = $"SMTP attachment imported from message {stableMessageId}",
+							DepartmentId = dispatchResult.DepartmentId
 						}, cancellationToken).ConfigureAwait(false);
 					}
 				}
@@ -241,7 +269,72 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 			}
 		}
 
+		/// <summary>
+		/// Resolves dispatch code names (like "STATION5") to numeric entity IDs
+		/// by calling the v4 lookup APIs. Updates each <see cref="DispatchCode.ResolvedId"/>
+		/// in place so that <see cref="DispatchListBuilder.Build"/> emits the
+		/// correct numeric IDs required by SaveCall.
+		/// 
+		/// Resolution strategy:
+		///   Department   → No lookup (excluded from DispatchList)
+		///   Group        → GET /Groups/GetGroupByDispatchCode
+		///   GroupMessage → GET /Groups/GetGroupByMessageCode
+		/// 
+		/// Lookups that fail (404 or API not deployed yet) are logged and
+		/// the code falls back to its raw Code value.
+		/// </summary>
+		private async Task ResolveDispatchCodesAsync(DispatchParseResult dispatchResult, CancellationToken cancellationToken)
+		{
+			foreach (var code in dispatchResult.DispatchCodes)
+			{
+				switch (code.Type)
+				{
+					case DispatchCodeType.Department:
+						// Department dispatch codes identify the department itself,
+						// not a specific group. They are excluded from DispatchList
+						// by DispatchListBuilder — no lookup needed here.
+						break;
+
+					case DispatchCodeType.Group:
+					{
+						var group = await LookupsApi.LookupGroupByDispatchCodeAsync(
+							code.Code, dispatchResult.DepartmentId, cancellationToken).ConfigureAwait(false);
+
+						if (group != null && !String.IsNullOrWhiteSpace(group.GroupId))
+							code.ResolvedId = group.GroupId;
+
+						break;
+					}
+
+					case DispatchCodeType.GroupMessage:
+					{
+						var group = await LookupsApi.LookupGroupByMessageCodeAsync(
+							code.Code, dispatchResult.DepartmentId, cancellationToken).ConfigureAwait(false);
+
+						if (group != null && !String.IsNullOrWhiteSpace(group.GroupId))
+							code.ResolvedId = group.GroupId;
+
+						break;
+					}
+
+					case DispatchCodeType.DistributionList:
+						// Distribution list codes are not resolved via API lookups yet.
+						break;
+				}
+			}
+		}
+
 		private List<DispatchCode> GetDispatchTargets(MimeMessage message)
+		{
+			var parseResult = _dispatchAddressParser.ParseRecipients(
+				message.To.Mailboxes
+					.Concat(message.Cc.Mailboxes)
+					.Select(x => x.Address));
+
+			return parseResult.DispatchCodes;
+		}
+
+		private DispatchParseResult ParseDispatchTargets(MimeMessage message)
 		{
 			return _dispatchAddressParser.ParseRecipients(
 				message.To.Mailboxes
@@ -400,9 +493,29 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 
 		public Task<bool> CanDeliverToAsync(ISessionContext context, IMailbox to, IMailbox from, CancellationToken token)
 		{
+			var host = to.Host;
 			var accepted =
-				(_options.DepartmentAddressDomains ?? Array.Empty<string>()).Any(x => String.Equals(x, to.Host, StringComparison.OrdinalIgnoreCase)) ||
-				(_options.GroupAddressDomains ?? Array.Empty<string>()).Any(x => String.Equals(x, to.Host, StringComparison.OrdinalIgnoreCase));
+				IsConfiguredDomain(host, _options.DepartmentAddressDomains) ||
+				IsConfiguredDomain(host, _options.GroupAddressDomains) ||
+				IsConfiguredDomain(host, _options.GroupMessageAddressDomains) ||
+				IsConfiguredDomain(host, _options.ListAddressDomains);
+
+			if (!accepted && _options.HostedMode)
+			{
+				// In hosted mode, the recipient domain follows the pattern
+				// {departmentId}.{baseDomain} (e.g. dept123.dispatch.resgrid.com).
+				// Strip the leading segment and check against the configured domains.
+				var parts = host.Split(new[] { _options.DepartmentDomainSeparator }, StringSplitOptions.RemoveEmptyEntries);
+				if (parts.Length >= 3)
+				{
+					var baseDomain = String.Join(_options.DepartmentDomainSeparator, parts.Skip(1));
+					accepted =
+						IsConfiguredDomain(baseDomain, _options.DepartmentAddressDomains) ||
+						IsConfiguredDomain(baseDomain, _options.GroupAddressDomains) ||
+						IsConfiguredDomain(baseDomain, _options.GroupMessageAddressDomains) ||
+						IsConfiguredDomain(baseDomain, _options.ListAddressDomains);
+				}
+			}
 
 			_telemetry.RecipientEvaluated(
 				context,
@@ -412,6 +525,11 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 				accepted ? null : "recipient domain is not configured for Resgrid dispatch routing");
 
 			return Task.FromResult(accepted);
+		}
+
+		private static bool IsConfiguredDomain(string host, string[] domains)
+		{
+			return (domains ?? Array.Empty<string>()).Any(x => String.Equals(x, host, StringComparison.OrdinalIgnoreCase));
 		}
 
 		public IMailboxFilter CreateInstance(ISessionContext context)
