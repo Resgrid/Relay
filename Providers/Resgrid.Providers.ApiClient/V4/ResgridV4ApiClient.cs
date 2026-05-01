@@ -17,6 +17,8 @@ namespace Resgrid.Providers.ApiClient.V4
 {
 	public static class ResgridV4ApiClient
 	{
+		private const string SystemApiKeyHeaderName = "X-Resgrid-SystemApiKey";
+
 		private static readonly SemaphoreSlim AuthLock = new SemaphoreSlim(1, 1);
 		private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions()
 		{
@@ -30,7 +32,16 @@ namespace Resgrid.Providers.ApiClient.V4
 		private static ResgridApiClientOptions _options = new ResgridApiClientOptions();
 		private static ResgridApiTokenState _tokenState = new ResgridApiTokenState();
 
-		public static string CurrentUserId => _tokenState?.UserId;
+		public static string CurrentUserId
+		{
+			get
+			{
+				if (_options.GrantType == ResgridAuthGrantType.SystemApiKey && !String.IsNullOrWhiteSpace(_options.DepartmentId))
+					return _options.DepartmentId;
+
+				return _tokenState?.UserId;
+			}
+		}
 
 		public static void Init(ResgridApiClientOptions options)
 		{
@@ -82,7 +93,9 @@ namespace Resgrid.Providers.ApiClient.V4
 			var relativeUrl = BuildRelativeApiPath(url);
 			var response = await SendAuthorizedRequestAsync(method, relativeUrl, data, _tokenState.AccessToken, cancellationToken).ConfigureAwait(false);
 
-			if (response.StatusCode == HttpStatusCode.Unauthorized)
+			// 401 retry is only meaningful for token-based auth flows.
+			// SystemApiKey mode uses a static key — retrying would just fail again.
+			if (response.StatusCode == HttpStatusCode.Unauthorized && _options.GrantType != ResgridAuthGrantType.SystemApiKey)
 			{
 				response.Dispose();
 				_tokenState.AccessToken = null;
@@ -98,7 +111,15 @@ namespace Resgrid.Providers.ApiClient.V4
 		private static async Task<HttpResponseMessage> SendAuthorizedRequestAsync(HttpMethod method, string url, object data, string accessToken, CancellationToken cancellationToken)
 		{
 			var request = new HttpRequestMessage(method, url);
-			request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+			if (_options.GrantType == ResgridAuthGrantType.SystemApiKey)
+			{
+				request.Headers.Add(SystemApiKeyHeaderName, _options.SystemApiKey);
+			}
+			else
+			{
+				request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+			}
 
 			if (data != null)
 			{
@@ -129,6 +150,11 @@ namespace Resgrid.Providers.ApiClient.V4
 
 		private static async Task EnsureAuthenticatedAsync(CancellationToken cancellationToken)
 		{
+			// SystemApiKey mode does not use OAuth tokens — the key is
+			// attached directly to every request.
+			if (_options.GrantType == ResgridAuthGrantType.SystemApiKey)
+				return;
+
 			if (HasValidAccessToken())
 				return;
 
@@ -139,17 +165,36 @@ namespace Resgrid.Providers.ApiClient.V4
 					return;
 
 				_openIdConfiguration ??= await GetOpenIdConfigurationAsync(cancellationToken).ConfigureAwait(false);
-				var refreshToken = ResolveRefreshToken();
-				if (String.IsNullOrWhiteSpace(refreshToken))
-					throw new InvalidOperationException("No Resgrid refresh token is available.");
 
 				var formData = new Dictionary<string, string>()
 				{
-					["grant_type"] = "refresh_token",
-					["refresh_token"] = refreshToken,
 					["client_id"] = _options.ClientId,
 					["client_secret"] = _options.ClientSecret
 				};
+
+				switch (_options.GrantType)
+				{
+					case ResgridAuthGrantType.RefreshToken:
+					{
+						var refreshToken = ResolveRefreshToken();
+						if (String.IsNullOrWhiteSpace(refreshToken))
+							throw new InvalidOperationException("No Resgrid refresh token is available.");
+
+						formData["grant_type"] = "refresh_token";
+						formData["refresh_token"] = refreshToken;
+						break;
+					}
+
+					case ResgridAuthGrantType.ClientCredentials:
+					{
+						formData["grant_type"] = "client_credentials";
+						break;
+					}
+
+					default:
+						throw new InvalidOperationException(
+							$"The Resgrid authentication grant type '{_options.GrantType}' requires an OAuth token but no supported grant flow is defined.");
+				}
 
 				if (!String.IsNullOrWhiteSpace(_options.Scope))
 					formData["scope"] = _options.Scope;
@@ -159,19 +204,31 @@ namespace Resgrid.Providers.ApiClient.V4
 				if (!response.IsSuccessStatusCode)
 				{
 					throw new HttpRequestException(
-						$"The Resgrid token refresh request failed with status code {(int)response.StatusCode} ({response.ReasonPhrase}). Response: {payload}",
+						$"The Resgrid token request failed with status code {(int)response.StatusCode} ({response.ReasonPhrase}). Response: {payload}",
 						null,
 						response.StatusCode);
 				}
 
 				var tokenResponse = JsonSerializer.Deserialize<OAuthTokenResponse>(payload, JsonOptions);
 				if (tokenResponse == null || String.IsNullOrWhiteSpace(tokenResponse.AccessToken))
-					throw new InvalidOperationException("The Resgrid token refresh response did not include an access token.");
+					throw new InvalidOperationException("The Resgrid token response did not include an access token.");
 
 				_tokenState.AccessToken = tokenResponse.AccessToken;
-				_tokenState.RefreshToken = String.IsNullOrWhiteSpace(tokenResponse.RefreshToken)
-					? refreshToken
-					: tokenResponse.RefreshToken;
+
+				if (_options.GrantType == ResgridAuthGrantType.RefreshToken)
+				{
+					// Refresh token rotation: use the new refresh token if provided,
+					// otherwise retain the existing one.
+					_tokenState.RefreshToken = String.IsNullOrWhiteSpace(tokenResponse.RefreshToken)
+						? ResolveRefreshToken()
+						: tokenResponse.RefreshToken;
+				}
+				else
+				{
+					// client_credentials typically does not return a refresh token.
+					_tokenState.RefreshToken = tokenResponse.RefreshToken;
+				}
+
 				_tokenState.ExpiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(tokenResponse.ExpiresIn > 0 ? tokenResponse.ExpiresIn : 300);
 				_tokenState.UserId = TryReadUserId(tokenResponse.AccessToken);
 
