@@ -1,3 +1,4 @@
+using Resgrid.Audio.Voice.ToneOut;
 using Resgrid.Providers.ApiClient.V4;
 
 namespace Resgrid.Audio.Relay.Console.Configuration
@@ -9,6 +10,13 @@ namespace Resgrid.Audio.Relay.Console.Configuration
 		public ResgridApiClientOptions Resgrid { get; set; } = new ResgridApiClientOptions();
 		public RelayTelemetryOptions Telemetry { get; set; } = new RelayTelemetryOptions();
 		public SmtpRelayOptions Smtp { get; set; } = new SmtpRelayOptions();
+
+		// ─── LiveKit voice modes (radio / record / dispatch) ───
+		public VoiceConnectionOptions Voice { get; set; } = new VoiceConnectionOptions();
+		public RadioModeOptions Radio { get; set; } = new RadioModeOptions();
+		public RecorderModeOptions Recorder { get; set; } = new RecorderModeOptions();
+		public DispatchVoiceOptions DispatchVoice { get; set; } = new DispatchVoiceOptions();
+		public TtsSettings Tts { get; set; } = new TtsSettings();
 	}
 
 	public sealed class RelayTelemetryOptions

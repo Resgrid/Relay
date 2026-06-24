@@ -114,6 +114,27 @@ jobs:
           dotnet publish ".\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj" --configuration Release --framework net10.0-windows --no-restore --output $consoleWindows
           dotnet publish ".\Resgrid.Audio.Relay\Resgrid.Audio.Relay.csproj" --configuration Release --framework net10.0-windows --no-restore --output $monitorWindows
 
+      - name: Bundle LiveKit FFI native library
+        shell: pwsh
+        # The LiveKit Rust FFI native lib isn't in the NuGet, so ship it next to the
+        # console so 'radio'/'record'/'dispatch' modes work. (The Docker image fetches
+        # its own linux build — see Dockerfile.) Must match Livekit.Rtc.Dotnet.
+        run: |
+          $ffiVersion = "livekit-ffi/v0.12.65"
+          $enc = $ffiVersion.Replace("/", "%2F")
+          $publishRoot = Join-Path $env:RUNNER_TEMP "publish"
+          function Add-Ffi($asset, $lib, $dest) {
+            $url = "https://github.com/livekit/rust-sdks/releases/download/$enc/$asset.zip"
+            $zip = Join-Path $env:RUNNER_TEMP "$asset.zip"
+            $ex = Join-Path $env:RUNNER_TEMP $asset
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            Expand-Archive -Path $zip -DestinationPath $ex -Force
+            $src = Get-ChildItem -Path $ex -Recurse -Filter $lib | Select-Object -First 1
+            Copy-Item $src.FullName (Join-Path $dest $lib) -Force
+          }
+          Add-Ffi "ffi-windows-x86_64" "livekit_ffi.dll" (Join-Path $publishRoot "relay-console-net10.0-windows")
+          Add-Ffi "ffi-linux-x86_64" "liblivekit_ffi.so" (Join-Path $publishRoot "relay-console-net10.0")
+
       - name: Package release assets
         shell: pwsh
         run: |

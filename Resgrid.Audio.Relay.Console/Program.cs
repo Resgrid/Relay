@@ -16,6 +16,8 @@ using Cli = System.Console;
 using NAudio.Wave;
 using Resgrid.Audio.Core;
 using Resgrid.Audio.Core.Model;
+using System.IO.Ports;
+using HidSharp;
 #endif
 
 namespace Resgrid.Audio.Relay.Console
@@ -42,6 +44,8 @@ namespace Resgrid.Audio.Relay.Console
 					return ShowDevices();
 				case "monitor":
 					return await MonitorAsync(args.Skip(1).ToArray()).ConfigureAwait(false);
+				case "tune":
+					return await TuneAsync(args.Skip(1).ToArray()).ConfigureAwait(false);
 				case "version":
 				case "--version":
 				case "-v":
@@ -68,6 +72,10 @@ namespace Resgrid.Audio.Relay.Console
 			if (!ValidateOptions(hostOptions))
 				return 1;
 
+			// Optional LocalXpose tunnel (replaces the old shell entrypoint logic so the
+			// container can run on a shell-less hardened base image).
+			using var loclxTunnel = LoclxTunnel.StartIfEnabled(hostOptions);
+
 			using var cancellationTokenSource = new CancellationTokenSource();
 			ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
 			{
@@ -90,8 +98,14 @@ namespace Resgrid.Audio.Relay.Console
 					}
 					case "audio":
 						return await RunAudioModeAsync(hostOptions, cancellationTokenSource.Token).ConfigureAwait(false);
+					case "radio":
+						return await RunRadioModeAsync(hostOptions, cancellationTokenSource.Token).ConfigureAwait(false);
+					case "record":
+						return await Voice.RecordMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationTokenSource.Token).ConfigureAwait(false);
+					case "dispatch":
+						return await Voice.DispatchVoiceMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationTokenSource.Token).ConfigureAwait(false);
 					default:
-						Cli.Error.WriteLine($"Unsupported relay mode '{hostOptions.Mode}'. Supported modes are 'smtp' and 'audio'.");
+						Cli.Error.WriteLine($"Unsupported relay mode '{hostOptions.Mode}'. Supported modes are 'smtp', 'audio', 'radio', 'record' and 'dispatch'.");
 						return 1;
 				}
 			}
@@ -189,12 +203,39 @@ namespace Resgrid.Audio.Relay.Console
 			Cli.WriteLine("Commands:");
 			Cli.WriteLine("  run       Starts the relay in the configured mode (default)");
 			Cli.WriteLine("  setup     Creates or updates the Windows audio settings.json file");
-			Cli.WriteLine("  devices   Lists Windows audio input devices");
+			Cli.WriteLine("  devices   Lists audio in/out devices, serial ports and CM108 HID (radio mode)");
 			Cli.WriteLine("  monitor   Monitors a Windows audio device without dispatching calls");
+			Cli.WriteLine("  tune      Live receive-level meter + squelch state to tune anti-static (radio mode)");
 			Cli.WriteLine("  version   Prints the application version");
 			Cli.WriteLine();
+			Cli.WriteLine("Modes (RESGRID__RELAY__Mode):");
+			Cli.WriteLine("  smtp      SMTP dispatch relay (default, cross-platform)");
+			Cli.WriteLine("  audio     Windows tone-detect dispatch importer");
+			Cli.WriteLine("  radio     Bidirectional radio <-> Resgrid PTT (LiveKit) bridge (Windows)");
+			Cli.WriteLine("  record    Record PTT channel transmissions to disk/S3 + metadata log (any OS)");
+			Cli.WriteLine("  dispatch  Tone out new calls (tones + Resgrid TTS) to a PTT channel (any OS)");
+			Cli.WriteLine();
 			Cli.WriteLine("Environment variables:");
-			Cli.WriteLine("  RESGRID__RELAY__Mode=smtp|audio");
+			Cli.WriteLine("  RESGRID__RELAY__Mode=smtp|audio|radio|record|dispatch");
+			Cli.WriteLine("  # Voice (radio/record/dispatch):");
+			Cli.WriteLine("  RESGRID__RELAY__Voice__Channel=default|<name>|<channelId>");
+			Cli.WriteLine("  RESGRID__RELAY__Voice__DepartmentId=...   (hosted/system-key)");
+			Cli.WriteLine("  # Radio bridge (Windows):");
+			Cli.WriteLine("  RESGRID__RELAY__Radio__InputDevice=0   RESGRID__RELAY__Radio__OutputDevice=-1");
+			Cli.WriteLine("  RESGRID__RELAY__Radio__PttMethod=Vox|SerialRts|SerialDtr|Cm108");
+			Cli.WriteLine("  RESGRID__RELAY__Radio__SerialPort=COM3   RESGRID__RELAY__Radio__Cm108GpioPin=3");
+			Cli.WriteLine("  RESGRID__RELAY__Radio__Squelch__Mode=Vox|Carrier|Ctcss|Off");
+			Cli.WriteLine("  RESGRID__RELAY__Radio__Squelch__OpenDbfs=-38  ...__CloseDbfs=-45  ...__HangMs=600");
+			Cli.WriteLine("  RESGRID__RELAY__Radio__Emergency__DetectMdc1200=true  ...__DetectTones=true");
+			Cli.WriteLine("  # Recorder (record mode / RecordWhileBridging):");
+			Cli.WriteLine("  RESGRID__RELAY__Recorder__Channel=all|<name>   ...__Store=local|s3|both");
+			Cli.WriteLine("  RESGRID__RELAY__Recorder__Log=jsonl|sqlite|none   ...__LocalPath=./recordings");
+			Cli.WriteLine("  RESGRID__RELAY__Recorder__S3__Bucket=...  ...__S3__Region=...  ...__S3__AccessKey=...");
+			Cli.WriteLine("  # Dispatch tone-out:");
+			Cli.WriteLine("  RESGRID__RELAY__Tts__ServiceBaseUrl=https://tts.resgrid.com");
+			Cli.WriteLine("  RESGRID__RELAY__DispatchVoice__Channel=default   ...__PollSeconds=15");
+			Cli.WriteLine();
+			Cli.WriteLine("  # SMTP mode:");
 			Cli.WriteLine("  RESGRID__RELAY__Resgrid__ClientId=...");
 			Cli.WriteLine("  RESGRID__RELAY__Resgrid__ClientSecret=...");
 			Cli.WriteLine("  RESGRID__RELAY__Resgrid__RefreshToken=...");
@@ -349,13 +390,68 @@ namespace Resgrid.Audio.Relay.Console
 
 		private static int ShowDevices()
 		{
+			Cli.WriteLine("Audio input devices (radio receive):");
 			for (var waveInDevice = 0; waveInDevice < WaveIn.DeviceCount; waveInDevice++)
 			{
 				var deviceInfo = WaveIn.GetCapabilities(waveInDevice);
-				Cli.WriteLine($"Device {waveInDevice}: {deviceInfo.ProductName}, {deviceInfo.Channels} channels");
+				Cli.WriteLine($"  In  {waveInDevice}: {deviceInfo.ProductName}, {deviceInfo.Channels} channels");
 			}
 
+			Cli.WriteLine("Audio output devices (radio transmit):");
+			Cli.WriteLine("  Out -1: System default");
+			for (var waveOutDevice = 0; waveOutDevice < WaveOut.DeviceCount; waveOutDevice++)
+			{
+				var deviceInfo = WaveOut.GetCapabilities(waveOutDevice);
+				Cli.WriteLine($"  Out {waveOutDevice}: {deviceInfo.ProductName}, {deviceInfo.Channels} channels");
+			}
+
+			Cli.WriteLine("Serial ports (PTT / carrier detect):");
+			var ports = SerialPort.GetPortNames();
+			if (ports.Length == 0)
+				Cli.WriteLine("  (none)");
+			foreach (var port in ports)
+				Cli.WriteLine($"  {port}");
+
+			Cli.WriteLine("CM108-class USB HID devices (PTT GPIO):");
+			var hids = DeviceList.Local.GetHidDevices(0x0D8C, null).ToList();
+			if (hids.Count == 0)
+				Cli.WriteLine("  (none found at VID 0x0D8C)");
+			foreach (var hid in hids)
+				Cli.WriteLine($"  VID=0x{hid.VendorID:X4} PID=0x{hid.ProductID:X4} {SafeName(hid)}");
+
 			return 0;
+		}
+
+		private static string SafeName(HidDevice device)
+		{
+			try { return device.GetFriendlyName(); }
+			catch { return "(unnamed)"; }
+		}
+
+		private static Task<int> RunRadioModeAsync(RelayHostOptions hostOptions, CancellationToken cancellationToken)
+			=> Voice.RadioMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationToken);
+
+		private static async Task<int> TuneAsync(string[] args)
+		{
+			var hostOptions = LoadHostOptions();
+			if (args.Length > 0 && Int32.TryParse(args[0], out var device))
+				hostOptions.Radio.InputDevice = device;
+
+			using var cancellationTokenSource = new CancellationTokenSource();
+			ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+			{
+				eventArgs.Cancel = true;
+				cancellationTokenSource.Cancel();
+			};
+			Cli.CancelKeyPress += cancelHandler;
+			try
+			{
+				return await Voice.RadioMode.RunTuneAsync(hostOptions, cancellationTokenSource.Token).ConfigureAwait(false);
+			}
+			finally
+			{
+				Cli.CancelKeyPress -= cancelHandler;
+			}
 		}
 
 		private static async Task<int> MonitorAsync(string[] args)
@@ -470,6 +566,18 @@ namespace Resgrid.Audio.Relay.Console
 		private static Task<int> MonitorAsync(string[] args)
 		{
 			Cli.Error.WriteLine("Audio monitoring is only available in the net10.0-windows build.");
+			return Task.FromResult(1);
+		}
+
+		private static Task<int> RunRadioModeAsync(RelayHostOptions hostOptions, CancellationToken cancellationToken)
+		{
+			Cli.Error.WriteLine("Radio bridge mode is only available in the net10.0-windows build (it needs physical audio devices).");
+			return Task.FromResult(1);
+		}
+
+		private static Task<int> TuneAsync(string[] args)
+		{
+			Cli.Error.WriteLine("Tune is only available in the net10.0-windows build.");
 			return Task.FromResult(1);
 		}
 #endif
