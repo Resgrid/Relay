@@ -15,17 +15,32 @@ namespace Resgrid.Providers.ApiClient.V4
 	/// in the Resgrid API project. Until they exist, callers should handle the
 	/// expected 404 gracefully and fall back to code-based DispatchList values.
 	/// </summary>
-	public static class LookupsApi
+	public interface IResgridLookupsApi
 	{
+		Task<GroupLookupResult> LookupGroupByDispatchCodeAsync(string code, string departmentId, CancellationToken cancellationToken = default);
+		Task<GroupLookupResult> LookupGroupByMessageCodeAsync(string code, string departmentId, CancellationToken cancellationToken = default);
+		Task<UnitLookupResult> LookupUnitByNameAsync(string name, string departmentId, CancellationToken cancellationToken = default);
+		Task<RoleLookupResult> LookupRoleByNameAsync(string name, string departmentId, CancellationToken cancellationToken = default);
+	}
+
+	public sealed class LookupsApi : IResgridLookupsApi
+	{
+		private readonly IResgridApiClient _client;
+
+		public LookupsApi(IResgridApiClient client)
+		{
+			_client = client ?? throw new ArgumentNullException(nameof(client));
+		}
+
 		/// <summary>
 		/// Resolves a group dispatch email code to its numeric group ID.
 		/// Maps to: GET /api/v4/Groups/GetGroupByDispatchCode?code={code}&amp;departmentId={departmentId}
-		/// 
+		///
 		/// Behind the scenes this queries DepartmentGroups.DispatchEmail.
 		/// Returns null when the endpoint returns 404 (group not found or API
 		/// endpoint not yet deployed).
 		/// </summary>
-		public static async Task<GroupLookupResult> LookupGroupByDispatchCodeAsync(
+		public async Task<GroupLookupResult> LookupGroupByDispatchCodeAsync(
 			string code,
 			string departmentId,
 			CancellationToken cancellationToken = default)
@@ -48,7 +63,7 @@ namespace Resgrid.Providers.ApiClient.V4
 		/// Behind the scenes this queries DepartmentGroups.MessageEmail.
 		/// Returns null when the endpoint returns 404.
 		/// </summary>
-		public static async Task<GroupLookupResult> LookupGroupByMessageCodeAsync(
+		public async Task<GroupLookupResult> LookupGroupByMessageCodeAsync(
 			string code,
 			string departmentId,
 			CancellationToken cancellationToken = default)
@@ -71,7 +86,7 @@ namespace Resgrid.Providers.ApiClient.V4
 		/// Behind the scenes this queries Units.UnitName.
 		/// Returns null when the endpoint returns 404.
 		/// </summary>
-		public static async Task<UnitLookupResult> LookupUnitByNameAsync(
+		public async Task<UnitLookupResult> LookupUnitByNameAsync(
 			string name,
 			string departmentId,
 			CancellationToken cancellationToken = default)
@@ -94,7 +109,7 @@ namespace Resgrid.Providers.ApiClient.V4
 		/// Behind the scenes this queries PersonnelRoles.Name.
 		/// Returns null when the endpoint returns 404.
 		/// </summary>
-		public static async Task<RoleLookupResult> LookupRoleByNameAsync(
+		public async Task<RoleLookupResult> LookupRoleByNameAsync(
 			string name,
 			string departmentId,
 			CancellationToken cancellationToken = default)
@@ -110,11 +125,11 @@ namespace Resgrid.Providers.ApiClient.V4
 			return await TryGetAsync<RoleLookupResult>(url, cancellationToken).ConfigureAwait(false);
 		}
 
-		private static async Task<T> TryGetAsync<T>(string url, CancellationToken cancellationToken) where T : class
+		private async Task<T> TryGetAsync<T>(string url, CancellationToken cancellationToken) where T : class
 		{
 			try
 			{
-				var response = await ResgridV4ApiClient.GetAsync<LookupResponse<T>>(url, cancellationToken).ConfigureAwait(false);
+				var response = await _client.GetAsync<LookupResponse<T>>(url, cancellationToken).ConfigureAwait(false);
 				return response?.Data;
 			}
 			catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)

@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Linq;
 
 namespace Resgrid.Providers.ApiClient.V4
 {
@@ -62,6 +64,54 @@ namespace Resgrid.Providers.ApiClient.V4
 		/// dispatch address.
 		/// </summary>
 		public string DepartmentId { get; set; }
+
+		/// <summary>
+		/// Returns a shallow copy of these options whose <see cref="TokenCachePath"/>
+		/// is rewritten to a per-<paramref name="discriminator"/> location so that
+		/// concurrently running relay modes do not share (and clobber) a single
+		/// on-disk token cache. The discriminator is sanitized and inserted as a
+		/// subfolder of the configured cache path's directory
+		/// (e.g. <c>./data/resgrid-token.json</c> becomes
+		/// <c>./data/&lt;discriminator&gt;/resgrid-token.json</c>).
+		///
+		/// When no discriminator is supplied or no <see cref="TokenCachePath"/> is
+		/// configured, the original options instance is returned unchanged.
+		/// </summary>
+		public ResgridApiClientOptions WithIsolatedTokenCache(string discriminator)
+		{
+			if (String.IsNullOrWhiteSpace(discriminator) || String.IsNullOrWhiteSpace(TokenCachePath))
+				return this;
+
+			var sanitized = SanitizeDiscriminator(discriminator);
+			if (String.IsNullOrWhiteSpace(sanitized))
+				return this;
+
+			var directory = Path.GetDirectoryName(TokenCachePath);
+			var fileName = Path.GetFileName(TokenCachePath);
+			var isolatedPath = String.IsNullOrWhiteSpace(directory)
+				? Path.Combine(sanitized, fileName)
+				: Path.Combine(directory, sanitized, fileName);
+
+			return new ResgridApiClientOptions
+			{
+				BaseUrl = BaseUrl,
+				ApiVersion = ApiVersion,
+				ClientId = ClientId,
+				ClientSecret = ClientSecret,
+				RefreshToken = RefreshToken,
+				Scope = Scope,
+				TokenCachePath = isolatedPath,
+				GrantType = GrantType,
+				SystemApiKey = SystemApiKey,
+				DepartmentId = DepartmentId
+			};
+		}
+
+		private static string SanitizeDiscriminator(string discriminator)
+		{
+			var invalid = Path.GetInvalidFileNameChars();
+			return new string(discriminator.Trim().Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+		}
 
 		public void Validate()
 		{

@@ -111,3 +111,6 @@ Web/Resgrid.Services/App_Data/Resgrid.Web.Services.XML
 /node_modules
 .vs/
 /.idea
+/.dual-graph-pro
+.mcp.json
+/.claude

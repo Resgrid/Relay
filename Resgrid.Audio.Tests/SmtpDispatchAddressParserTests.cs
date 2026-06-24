@@ -1,7 +1,7 @@
 using FluentAssertions;
 using NUnit.Framework;
-using Resgrid.Audio.Relay.Console.Configuration;
-using Resgrid.Audio.Relay.Console.Smtp;
+using Resgrid.Relay.Engine.Configuration;
+using Resgrid.Relay.Engine.Smtp;
 using Resgrid.Providers.ApiClient.V4;
 using System;
 

@@ -15,11 +15,11 @@ using System.Threading.Tasks;
 
 namespace Resgrid.Providers.ApiClient.V4
 {
-	public static class ResgridV4ApiClient
+	public sealed class ResgridV4ApiClient : IResgridApiClient, IDisposable
 	{
 		private const string SystemApiKeyHeaderName = "X-Resgrid-SystemApiKey";
 
-		private static readonly SemaphoreSlim AuthLock = new SemaphoreSlim(1, 1);
+		private readonly SemaphoreSlim AuthLock = new SemaphoreSlim(1, 1);
 		private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions()
 		{
 			DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -27,23 +27,12 @@ namespace Resgrid.Providers.ApiClient.V4
 			WriteIndented = true
 		};
 
-		private static HttpClient _client = CreateClient("https://api.resgrid.com");
-		private static OpenIdConfiguration _openIdConfiguration;
-		private static ResgridApiClientOptions _options = new ResgridApiClientOptions();
-		private static ResgridApiTokenState _tokenState = new ResgridApiTokenState();
+		private HttpClient _client;
+		private OpenIdConfiguration _openIdConfiguration;
+		private ResgridApiClientOptions _options;
+		private ResgridApiTokenState _tokenState;
 
-		public static string CurrentUserId
-		{
-			get
-			{
-				if (_options.GrantType == ResgridAuthGrantType.SystemApiKey && !String.IsNullOrWhiteSpace(_options.DepartmentId))
-					return _options.DepartmentId;
-
-				return _tokenState?.UserId;
-			}
-		}
-
-		public static void Init(ResgridApiClientOptions options)
+		public ResgridV4ApiClient(ResgridApiClientOptions options)
 		{
 			if (options == null)
 				throw new ArgumentNullException(nameof(options));
@@ -54,26 +43,42 @@ namespace Resgrid.Providers.ApiClient.V4
 			_openIdConfiguration = null;
 			_tokenState = LoadTokenState(options);
 
-			_client.Dispose();
 			_client = CreateClient(options.BaseUrl);
 		}
 
-		public static async Task<bool> IsHealthyAsync(CancellationToken cancellationToken = default)
+		public string CurrentUserId
+		{
+			get
+			{
+				if (_options.GrantType == ResgridAuthGrantType.SystemApiKey && !String.IsNullOrWhiteSpace(_options.DepartmentId))
+					return _options.DepartmentId;
+
+				return _tokenState?.UserId;
+			}
+		}
+
+		public async Task<bool> IsHealthyAsync(CancellationToken cancellationToken = default)
 		{
 			using var response = await SendRawAsync(HttpMethod.Get, "Health/GetCurrent", null, cancellationToken).ConfigureAwait(false);
 			return response.IsSuccessStatusCode;
 		}
 
-		public static async Task<T> GetAsync<T>(string url, CancellationToken cancellationToken = default) where T : class
+		public async Task<T> GetAsync<T>(string url, CancellationToken cancellationToken = default) where T : class
 		{
 			using var response = await SendRawAsync(HttpMethod.Get, url, null, cancellationToken).ConfigureAwait(false);
 			return await ReadResponseAsync<T>(response, cancellationToken).ConfigureAwait(false);
 		}
 
-		public static async Task<T> PostAsync<T>(string url, object data, CancellationToken cancellationToken = default) where T : class
+		public async Task<T> PostAsync<T>(string url, object data, CancellationToken cancellationToken = default) where T : class
 		{
 			using var response = await SendRawAsync(HttpMethod.Post, url, data, cancellationToken).ConfigureAwait(false);
 			return await ReadResponseAsync<T>(response, cancellationToken).ConfigureAwait(false);
+		}
+
+		public void Dispose()
+		{
+			_client?.Dispose();
+			AuthLock?.Dispose();
 		}
 
 		private static HttpClient CreateClient(string baseUrl)
@@ -86,7 +91,7 @@ namespace Resgrid.Providers.ApiClient.V4
 			return client;
 		}
 
-		private static async Task<HttpResponseMessage> SendRawAsync(HttpMethod method, string url, object data, CancellationToken cancellationToken)
+		private async Task<HttpResponseMessage> SendRawAsync(HttpMethod method, string url, object data, CancellationToken cancellationToken)
 		{
 			await EnsureAuthenticatedAsync(cancellationToken).ConfigureAwait(false);
 
@@ -108,7 +113,7 @@ namespace Resgrid.Providers.ApiClient.V4
 			return response;
 		}
 
-		private static async Task<HttpResponseMessage> SendAuthorizedRequestAsync(HttpMethod method, string url, object data, string accessToken, CancellationToken cancellationToken)
+		private async Task<HttpResponseMessage> SendAuthorizedRequestAsync(HttpMethod method, string url, object data, string accessToken, CancellationToken cancellationToken)
 		{
 			var request = new HttpRequestMessage(method, url);
 
@@ -130,7 +135,7 @@ namespace Resgrid.Providers.ApiClient.V4
 			return await _client.SendAsync(request, cancellationToken).ConfigureAwait(false);
 		}
 
-		private static async Task<T> ReadResponseAsync<T>(HttpResponseMessage response, CancellationToken cancellationToken) where T : class
+		private async Task<T> ReadResponseAsync<T>(HttpResponseMessage response, CancellationToken cancellationToken) where T : class
 		{
 			var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 			if (!response.IsSuccessStatusCode)
@@ -148,7 +153,7 @@ namespace Resgrid.Providers.ApiClient.V4
 			return result;
 		}
 
-		private static async Task EnsureAuthenticatedAsync(CancellationToken cancellationToken)
+		private async Task EnsureAuthenticatedAsync(CancellationToken cancellationToken)
 		{
 			// SystemApiKey mode does not use OAuth tokens — the key is
 			// attached directly to every request.
@@ -240,13 +245,13 @@ namespace Resgrid.Providers.ApiClient.V4
 			}
 		}
 
-		private static bool HasValidAccessToken()
+		private bool HasValidAccessToken()
 		{
 			return !String.IsNullOrWhiteSpace(_tokenState?.AccessToken) &&
 				   _tokenState.ExpiresAtUtc > DateTimeOffset.UtcNow.AddMinutes(1);
 		}
 
-		private static async Task<OpenIdConfiguration> GetOpenIdConfigurationAsync(CancellationToken cancellationToken)
+		private async Task<OpenIdConfiguration> GetOpenIdConfigurationAsync(CancellationToken cancellationToken)
 		{
 			var discoveryUri = new Uri(_client.BaseAddress, ".well-known/openid-configuration");
 			using var response = await _client.GetAsync(discoveryUri, cancellationToken).ConfigureAwait(false);
@@ -266,7 +271,7 @@ namespace Resgrid.Providers.ApiClient.V4
 			return configuration;
 		}
 
-		private static string BuildRelativeApiPath(string url)
+		private string BuildRelativeApiPath(string url)
 		{
 			var relativeUrl = url?.TrimStart('/') ?? String.Empty;
 			return $"api/v{_options.ApiVersion}/{relativeUrl}";
@@ -277,7 +282,7 @@ namespace Resgrid.Providers.ApiClient.V4
 			return baseUrl.TrimEnd('/') + "/";
 		}
 
-		private static string ResolveRefreshToken()
+		private string ResolveRefreshToken()
 		{
 			if (!String.IsNullOrWhiteSpace(_tokenState?.RefreshToken))
 				return _tokenState.RefreshToken;
@@ -316,7 +321,7 @@ namespace Resgrid.Providers.ApiClient.V4
 			return cachedState;
 		}
 
-		private static async Task PersistTokenStateAsync(ResgridApiTokenState tokenState, CancellationToken cancellationToken)
+		private async Task PersistTokenStateAsync(ResgridApiTokenState tokenState, CancellationToken cancellationToken)
 		{
 			if (String.IsNullOrWhiteSpace(_options.TokenCachePath))
 				return;

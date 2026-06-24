@@ -1,20 +1,30 @@
-# This workflow runs build and tests on every pull request and every direct push
-# to master. It also publishes artifacts and creates a GitHub Release only after
-# a pull request is successfully merged to master.
+# CI/CD for Resgrid Relay.
 #
-# Required Docker Hub secrets:
+#   * Pull requests  -> build the solution and run all unit tests (no publish,
+#     no release). Runs on every push to an open PR.
+#   * Push to master/main (i.e. once a PR is merged) -> re-run build + tests,
+#     then publish the app artifacts (zipped), build & push the Docker image,
+#     and create an auto-incrementing GitHub Release — all at the SAME version.
+#
+# Approval is enforced by branch protection on master/main: require a pull
+# request with an approving review before merging, and disallow direct pushes.
+# That way the release jobs (which trigger on push to master) only ever run for
+# a reviewed, merged PR. The "BuildEnv" environment can additionally require
+# reviewers as a deployment gate.
+#
+# Required Docker Hub secrets (on the BuildEnv environment):
 # - DOCKERHUB_USERNAME
 # - DOCKERHUB_TOKEN
 
 name: Build and publish
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
   push:
     branches:
       - master
       - main
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
 
 env:
   DOTNET_VERSION: "10.0.x"
@@ -23,22 +33,17 @@ env:
   DOCKER_IMAGE: "resgridllc/resgridrelay"
 
 jobs:
+  # Runs on every PR push (CI) and on every push to master/main, where it also
+  # gates the release jobs below — they will not run unless this succeeds.
   build-and-test:
     name: Build and test
-    if: |
-      github.event_name == 'push' ||
-      github.event.action != 'closed' ||
-      (github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master')
     runs-on: windows-latest
-    environment: BuildEnv
 
     permissions:
       contents: read
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.action == 'closed' && github.event.pull_request.merge_commit_sha || github.sha }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -54,35 +59,12 @@ jobs:
       - name: Test
         run: dotnet test "Resgrid Audio.sln" --configuration Release --no-build --verbosity normal
 
-  check-approval:
-    name: Verify PR was approved
-    needs: build-and-test
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
-    runs-on: ubuntu-latest
-    environment: BuildEnv
-
-    permissions:
-      pull-requests: read
-
-    steps:
-      - name: Verify at least one approved review
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data: reviews } = await github.rest.pulls.listReviews({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-            });
-            const approved = reviews.some(r => r.state === 'APPROVED');
-            if (!approved) {
-              core.setFailed('PR must have at least one approved review before publishing.');
-            }
-
+  # ── Release pipeline: only on a push to master/main (a merged PR), and only
+  #    after build-and-test passes. ────────────────────────────────────────────
   publish-apps:
     name: Publish app assets
-    needs: check-approval
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
+    needs: build-and-test
+    if: github.event_name == 'push'
     runs-on: windows-latest
     environment: BuildEnv
 
@@ -91,8 +73,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -113,6 +93,35 @@ jobs:
           dotnet publish ".\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj" --configuration Release --framework net10.0 --no-restore --output $consoleLinux /p:UseAppHost=false
           dotnet publish ".\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj" --configuration Release --framework net10.0-windows --no-restore --output $consoleWindows
           dotnet publish ".\Resgrid.Audio.Relay\Resgrid.Audio.Relay.csproj" --configuration Release --framework net10.0-windows --no-restore --output $monitorWindows
+
+      - name: Bundle LiveKit FFI native library
+        shell: pwsh
+        # The LiveKit Rust FFI native lib isn't in the NuGet, so ship it next to the
+        # console so 'radio'/'record'/'dispatch' modes work. (The Docker image fetches
+        # its own linux build — see Dockerfile.) Must match Livekit.Rtc.Dotnet.
+        run: |
+          $ffiVersion = "livekit-ffi/v0.12.65"
+          $enc = $ffiVersion.Replace("/", "%2F")
+          $publishRoot = Join-Path $env:RUNNER_TEMP "publish"
+          function Add-Ffi($asset, $lib, $dest) {
+            $url = "https://github.com/livekit/rust-sdks/releases/download/$enc/$asset.zip"
+            $zip = Join-Path $env:RUNNER_TEMP "$asset.zip"
+            $ex = Join-Path $env:RUNNER_TEMP $asset
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            # Validate the download produced a non-empty archive before extracting
+            # (mirrors the Dockerfile ffi-download stage, which fails on a bad archive).
+            if (-not (Test-Path $zip) -or (Get-Item $zip).Length -eq 0) {
+              throw "LiveKit FFI download failed or produced an empty archive: $url"
+            }
+            Expand-Archive -Path $zip -DestinationPath $ex -Force
+            $src = Get-ChildItem -Path $ex -Recurse -Filter $lib | Select-Object -First 1
+            if (-not $src) {
+              throw "LiveKit FFI library '$lib' not found in '$asset.zip' from $url"
+            }
+            Copy-Item $src.FullName (Join-Path $dest $lib) -Force
+          }
+          Add-Ffi "ffi-windows-x86_64" "livekit_ffi.dll" (Join-Path $publishRoot "relay-console-net10.0-windows")
+          Add-Ffi "ffi-linux-x86_64" "liblivekit_ffi.so" (Join-Path $publishRoot "relay-console-net10.0")
 
       - name: Package release assets
         shell: pwsh
@@ -147,8 +156,8 @@ jobs:
 
   docker-build-and-push:
     name: Publish Docker image
-    needs: check-approval
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
+    needs: build-and-test
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: BuildEnv
 
@@ -157,8 +166,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
 
       - name: Validate Docker Hub configuration
         shell: bash
@@ -222,7 +229,7 @@ jobs:
   github-release:
     name: Create GitHub release
     needs: [publish-apps, docker-build-and-push]
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: BuildEnv
 
@@ -243,21 +250,34 @@ jobs:
           name: docker-release-metadata
           path: ${{ runner.temp }}/docker-release
 
-      - name: Get merged PR info
-        id: pr-info
+      - name: Build release notes from the merged PR
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const body = (context.payload.pull_request.body || '')
-              .replace(/##\s*Summary by CodeRabbit[\s\S]*/i, '')
+            // The release is triggered by the push of the merge commit, which has no
+            // PR payload — resolve the originating PR from the commit, then use its
+            // description (the PR write-up) as the release notes.
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+            });
+            const pr = prs.find(p => p.merged_at) || prs[0];
+            if (!pr) {
+              core.warning(`No pull request found for commit ${context.sha}; using a placeholder note.`);
+            }
+            const prBody = (pr && pr.body) || '';
+            // Strip the "Summary by CodeRabbit" section (its heading through the end).
+            const cleaned = prBody
+              .replace(/#{1,6}\s*Summary by CodeRabbit[\s\S]*/i, '')
               .trim() || 'No release notes provided.';
             const notes = [
-              body,
+              cleaned,
               '',
               '## Docker image',
               `- \`${{ env.DOCKER_IMAGE }}:${{ env.RELEASE_VERSION }}\``,
-              `- \`${{ env.DOCKER_IMAGE }}:latest\``
+              `- \`${{ env.DOCKER_IMAGE }}:latest\``,
             ].join('\n');
             fs.writeFileSync('release_notes.md', notes);
 
@@ -266,8 +286,8 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_VERSION }}
           name: ${{ env.RELEASE_VERSION }}
+          target_commitish: ${{ github.sha }}
           body_path: release_notes.md
-          target_commitish: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           files: |
             ${{ runner.temp }}/release-assets/*.zip
             ${{ runner.temp }}/docker-release/docker-image-tags.txt

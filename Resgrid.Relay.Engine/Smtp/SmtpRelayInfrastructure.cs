@@ -1,0 +1,669 @@
+using MimeKit;
+using Resgrid.Relay.Engine.Configuration;
+using Resgrid.Providers.ApiClient.V4;
+using Resgrid.Providers.ApiClient.V4.Models;
+using SmtpServer;
+using SmtpServer.ComponentModel;
+using SmtpServer.Mail;
+using SmtpServer.Protocol;
+using SmtpServer.Storage;
+using System;
+using System.Buffers;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace Resgrid.Relay.Engine.Smtp
+{
+	public static class SmtpRelayRunner
+	{
+		public static async Task RunAsync(SmtpRelayOptions options, ISmtpTelemetry telemetry, IResgridApiClient apiClient, CancellationToken cancellationToken)
+		{
+			if (options == null)
+				throw new ArgumentNullException(nameof(options));
+			if (telemetry == null)
+				throw new ArgumentNullException(nameof(telemetry));
+
+			var serviceProvider = new ServiceProvider();
+			serviceProvider.Add((IMailboxFilterFactory)new RelayMailboxFilter(options, telemetry));
+			serviceProvider.Add(new RelayMessageStore(options, telemetry, apiClient));
+
+			var smtpServerOptions = new SmtpServerOptionsBuilder()
+				.ServerName(options.ServerName)
+				.Port(options.Port)
+				.MaxMessageSize(options.MaxMessageBytes, MaxMessageSizeHandling.Strict)
+				.Build();
+
+			var smtpServer = new SmtpServer.SmtpServer(smtpServerOptions, serviceProvider);
+			smtpServer.SessionCreated += (_, eventArgs) => telemetry.SessionCreated(eventArgs.Context);
+			smtpServer.SessionCompleted += (_, eventArgs) => telemetry.SessionCompleted(eventArgs.Context);
+			smtpServer.SessionCancelled += (_, eventArgs) => telemetry.SessionCancelled(eventArgs.Context);
+			smtpServer.SessionFaulted += (_, eventArgs) => telemetry.SessionFaulted(eventArgs.Context, eventArgs.Exception);
+
+			telemetry.RelayStarting(options);
+
+			try
+			{
+				await smtpServer.StartAsync(cancellationToken).ConfigureAwait(false);
+				telemetry.RelayStopped(options);
+			}
+			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+			{
+				telemetry.RelayStopped(options);
+			}
+			catch (Exception ex)
+			{
+				telemetry.RelayFaulted(options, ex);
+				throw;
+			}
+		}
+	}
+
+	public interface IResgridCallsClient
+	{
+		string CurrentUserId { get; }
+		Task<string> SaveCallAsync(NewCallInput call, CancellationToken cancellationToken);
+		Task<string> SaveCallFileAsync(SaveCallFileInput file, CancellationToken cancellationToken);
+	}
+
+	internal sealed class ResgridCallsClient : IResgridCallsClient
+	{
+		private readonly IResgridApiClient _apiClient;
+		private readonly CallsApi _callsApi;
+
+		public ResgridCallsClient(IResgridApiClient apiClient)
+		{
+			_apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
+			_callsApi = new CallsApi(apiClient);
+		}
+
+		public string CurrentUserId => _apiClient.CurrentUserId;
+
+		public Task<string> SaveCallAsync(NewCallInput call, CancellationToken cancellationToken)
+		{
+			return _callsApi.SaveCallAsync(call, cancellationToken);
+		}
+
+		public Task<string> SaveCallFileAsync(SaveCallFileInput file, CancellationToken cancellationToken)
+		{
+			return _callsApi.SaveCallFileAsync(file, cancellationToken);
+		}
+	}
+
+	public sealed class AttachmentPayload
+	{
+		public string Name { get; set; }
+		public byte[] Data { get; set; }
+		public CallFileType Type { get; set; }
+	}
+
+	public sealed class RelayMessageStore : MessageStore
+	{
+		private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
+		{
+			WriteIndented = true
+		};
+
+		private readonly SmtpRelayOptions _options;
+		private readonly SmtpDispatchAddressParser _dispatchAddressParser;
+		private readonly ProcessedMessageStore _processedMessageStore;
+		private readonly ISmtpTelemetry _telemetry;
+		private readonly IResgridCallsClient _callsClient;
+		private readonly CachedLookupsService _lookupService;
+		private readonly IDispatchLookupCache _lookupCache;
+		private readonly string _dataDirectory;
+		private readonly string _messageDirectory;
+
+		public RelayMessageStore(SmtpRelayOptions options, ISmtpTelemetry telemetry, IResgridApiClient apiClient = null, IResgridCallsClient callsClient = null, IDispatchLookupCache lookupCache = null, IResgridLookupsApi lookupsApi = null)
+		{
+			_options = options ?? throw new ArgumentNullException(nameof(options));
+			_telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+			_callsClient = callsClient ?? new ResgridCallsClient(apiClient);
+			_lookupCache = lookupCache ?? CreateLookupCache(options);
+			lookupsApi ??= apiClient != null ? new LookupsApi(apiClient) : null;
+			_lookupService = new CachedLookupsService(_lookupCache, lookupsApi);
+			_dispatchAddressParser = new SmtpDispatchAddressParser(options);
+			_dataDirectory = ResolvePath(options.DataDirectory);
+			_messageDirectory = Path.Combine(_dataDirectory, "messages");
+			_processedMessageStore = new ProcessedMessageStore(Path.Combine(_dataDirectory, "processed-messages.json"), options.DuplicateWindowHours);
+
+			Directory.CreateDirectory(_dataDirectory);
+			Directory.CreateDirectory(_messageDirectory);
+		}
+
+		private static IDispatchLookupCache CreateLookupCache(SmtpRelayOptions options)
+		{
+			if (options.RedisCache?.Enabled == true && !String.IsNullOrWhiteSpace(options.RedisCache.ConnectionString))
+				return new RedisDispatchLookupCache(options.RedisCache);
+
+			return new NullDispatchLookupCache();
+		}
+
+		public override async Task<SmtpResponse> SaveAsync(ISessionContext context, IMessageTransaction transaction, ReadOnlySequence<byte> buffer, CancellationToken cancellationToken)
+		{
+			if (buffer.Length > _options.MaxMessageBytes)
+				return SmtpResponse.SizeLimitExceeded;
+
+			await using var stream = new MemoryStream();
+			var position = buffer.GetPosition(0);
+			while (buffer.TryGet(ref position, out var memory))
+			{
+				await stream.WriteAsync(memory, cancellationToken).ConfigureAwait(false);
+			}
+
+			stream.Position = 0;
+			var message = await MimeMessage.LoadAsync(stream, cancellationToken).ConfigureAwait(false);
+			var subject = String.IsNullOrWhiteSpace(message.Subject) ? "SMTP Email Import" : message.Subject.Trim();
+			var messageBody = GetMessageBody(message);
+			var nature = GetNature(messageBody, subject);
+			var stableMessageId = GetStableMessageId(message);
+			var messageSummary = SmtpMessageSummary.Create(message, stableMessageId, subject, nature, messageBody);
+			_telemetry.MessageReceived(context, messageSummary);
+
+			var messageRegistered = false;
+			var processingStopwatch = Stopwatch.StartNew();
+
+			try
+			{
+				if (!await _processedMessageStore.TryRegisterAsync(stableMessageId, cancellationToken).ConfigureAwait(false))
+				{
+					_telemetry.DuplicateMessage(context, messageSummary);
+					return SmtpResponse.Ok;
+				}
+
+				messageRegistered = true;
+
+				if (_options.SaveRawMessages)
+				{
+					stream.Position = 0;
+					var rawMessagePath = Path.Combine(_messageDirectory, $"{SanitizeFileName(stableMessageId)}.eml");
+					await using var fileStream = File.Create(rawMessagePath);
+					await stream.CopyToAsync(fileStream, cancellationToken).ConfigureAwait(false);
+					messageSummary.RawMessagePath = rawMessagePath;
+				}
+
+				var dispatchResult = ParseDispatchTargets(message);
+				messageSummary.SetDispatchTargets(dispatchResult.DispatchCodes);
+
+				if (!dispatchResult.HasTargets)
+				{
+					_telemetry.UnroutableMessage(context, messageSummary);
+					return SmtpResponse.Ok;
+				}
+
+				// Group messages (Type 4) and distribution list messages (Type 2)
+				// are not yet handled by the SMTP relay — log and skip.
+				if (dispatchResult.HasGroupMessageTargets)
+					_telemetry.UnsupportedTarget(context, messageSummary);
+
+				if (dispatchResult.HasDistributionListTargets)
+					_telemetry.UnsupportedTarget(context, messageSummary);
+
+				if (!dispatchResult.HasCallTargets)
+				{
+					_telemetry.UnroutableMessage(context, messageSummary);
+					return SmtpResponse.Ok;
+				}
+
+				// Resolve dispatch code names to numeric IDs required by SaveCall.
+				// Department-type codes are excluded from DispatchList by
+				// DispatchListBuilder (they dispatch to the entire department).
+				if (_options.ResolveDispatchCodes)
+				{
+					await ResolveDispatchCodesAsync(dispatchResult, cancellationToken).ConfigureAwait(false);
+				}
+
+				var fromMailbox = message.From.Mailboxes.FirstOrDefault();
+				var attachments = ExtractAttachments(message).ToList();
+				messageSummary.SetAttachments(attachments, _options.MaxAttachmentBytes);
+				_telemetry.MessageProcessingStarted(context, messageSummary);
+
+				var skippedAttachments = new List<string>();
+				foreach (var attachment in attachments.Where(x => x.Data.Length > _options.MaxAttachmentBytes))
+				{
+					skippedAttachments.Add($"{attachment.Name} skipped because it exceeded {_options.MaxAttachmentBytes} bytes.");
+				}
+
+				var callId = await _callsClient.SaveCallAsync(new NewCallInput
+				{
+					Priority = _options.DefaultCallPriority,
+					Name = Trim(subject, 200),
+					Nature = Trim(nature, 500),
+					Note = BuildNote(message, messageBody, skippedAttachments),
+					DispatchList = DispatchListBuilder.Build(dispatchResult.DispatchCodes, _options.DepartmentDispatchPrefix),
+					ContactName = fromMailbox == null ? null : Trim(String.IsNullOrWhiteSpace(fromMailbox.Name) ? fromMailbox.Address : fromMailbox.Name, 200),
+					ContactInfo = fromMailbox?.Address,
+					ExternalId = stableMessageId,
+					ReferenceId = message.MessageId,
+					DepartmentId = dispatchResult.DepartmentId
+				}, cancellationToken).ConfigureAwait(false);
+
+				messageSummary.CallId = callId;
+
+				var uploadableAttachments = attachments.Where(x => x.Data.Length <= _options.MaxAttachmentBytes).ToList();
+				if (uploadableAttachments.Count > 0)
+				{
+					var userId = _callsClient.CurrentUserId;
+					// In SystemApiKey (hosted) mode the department ID serves as
+					// the user identifier for file uploads.  In token-based modes
+					// the user id must come from the access token JWT.
+					if (String.IsNullOrWhiteSpace(userId) && String.IsNullOrWhiteSpace(dispatchResult.DepartmentId))
+						throw new InvalidOperationException("The Resgrid access token did not contain a user id required to upload SMTP message attachments.");
+
+					foreach (var attachment in uploadableAttachments)
+					{
+						await _callsClient.SaveCallFileAsync(new SaveCallFileInput
+						{
+							CallId = callId,
+							UserId = String.IsNullOrWhiteSpace(userId) ? dispatchResult.DepartmentId : userId,
+							Type = (int)attachment.Type,
+							Name = attachment.Name,
+							Data = Convert.ToBase64String(attachment.Data),
+							Note = $"SMTP attachment imported from message {stableMessageId}",
+							DepartmentId = dispatchResult.DepartmentId
+						}, cancellationToken).ConfigureAwait(false);
+					}
+				}
+
+				_telemetry.MessageProcessed(context, messageSummary, processingStopwatch.Elapsed);
+				return SmtpResponse.Ok;
+			}
+			catch (Exception ex)
+			{
+				_telemetry.MessageFailed(context, messageSummary, ex, processingStopwatch.Elapsed);
+
+				if (messageRegistered)
+				{
+					try
+					{
+						await _processedMessageStore.RemoveAsync(stableMessageId, cancellationToken).ConfigureAwait(false);
+					}
+					catch (Exception cleanupException)
+					{
+						throw new AggregateException("SMTP processing failed and the duplicate-message registration could not be rolled back.", ex, cleanupException);
+					}
+				}
+
+				throw;
+			}
+		}
+
+		/// <summary>
+		/// Resolves dispatch code names (like "STATION5") to numeric entity IDs
+		/// by calling the v4 lookup APIs. Updates each <see cref="DispatchCode.ResolvedId"/>
+		/// in place so that <see cref="DispatchListBuilder.Build"/> emits the
+		/// correct numeric IDs required by SaveCall.
+		/// 
+		/// Resolution strategy:
+		///   Department   → No lookup (excluded from DispatchList)
+		///   Group        → GET /Groups/GetGroupByDispatchCode
+		///   GroupMessage → GET /Groups/GetGroupByMessageCode
+		/// 
+		/// Lookups that fail (404 or API not deployed yet) are logged and
+		/// the code falls back to its raw Code value.
+		/// </summary>
+		private async Task ResolveDispatchCodesAsync(DispatchParseResult dispatchResult, CancellationToken cancellationToken)
+		{
+			foreach (var code in dispatchResult.DispatchCodes)
+			{
+				switch (code.Type)
+				{
+					case DispatchCodeType.Department:
+						// Department dispatch codes identify the department itself,
+						// not a specific group. They are excluded from DispatchList
+						// by DispatchListBuilder — no lookup needed here.
+						break;
+
+					case DispatchCodeType.Group:
+					{
+						var group = await _lookupService.LookupGroupByDispatchCodeAsync(
+							code.Code, dispatchResult.DepartmentId, cancellationToken).ConfigureAwait(false);
+
+						if (group != null && !String.IsNullOrWhiteSpace(group.GroupId))
+							code.ResolvedId = group.GroupId;
+
+						break;
+					}
+
+					case DispatchCodeType.GroupMessage:
+					{
+						var group = await _lookupService.LookupGroupByMessageCodeAsync(
+							code.Code, dispatchResult.DepartmentId, cancellationToken).ConfigureAwait(false);
+
+						if (group != null && !String.IsNullOrWhiteSpace(group.GroupId))
+							code.ResolvedId = group.GroupId;
+
+						break;
+					}
+
+					case DispatchCodeType.DistributionList:
+						// Distribution list codes are not resolved via API lookups yet.
+						break;
+				}
+			}
+		}
+
+		private List<DispatchCode> GetDispatchTargets(MimeMessage message)
+		{
+			var parseResult = _dispatchAddressParser.ParseRecipients(
+				message.To.Mailboxes
+					.Concat(message.Cc.Mailboxes)
+					.Select(x => x.Address));
+
+			return parseResult.DispatchCodes;
+		}
+
+		private DispatchParseResult ParseDispatchTargets(MimeMessage message)
+		{
+			return _dispatchAddressParser.ParseRecipients(
+				message.To.Mailboxes
+					.Concat(message.Cc.Mailboxes)
+					.Select(x => x.Address));
+		}
+
+		private string BuildNote(MimeMessage message, string messageBody, List<string> skippedAttachments)
+		{
+			var builder = new StringBuilder();
+			builder.AppendLine($"Imported from SMTP at {DateTimeOffset.UtcNow:O}");
+			builder.AppendLine($"From: {String.Join(", ", message.From.Mailboxes.Select(x => x.ToString()))}");
+			builder.AppendLine($"To: {String.Join(", ", message.To.Mailboxes.Select(x => x.ToString()))}");
+			if (message.Cc.Count > 0)
+				builder.AppendLine($"Cc: {String.Join(", ", message.Cc.Mailboxes.Select(x => x.ToString()))}");
+			builder.AppendLine($"Subject: {message.Subject}");
+			builder.AppendLine($"Message-Id: {message.MessageId}");
+			builder.AppendLine();
+			builder.AppendLine(Trim(messageBody, 8000));
+
+			if (skippedAttachments.Count > 0)
+			{
+				builder.AppendLine();
+				builder.AppendLine(String.Join(Environment.NewLine, skippedAttachments));
+			}
+
+			return builder.ToString();
+		}
+
+		private IEnumerable<AttachmentPayload> ExtractAttachments(MimeMessage message)
+		{
+			foreach (var attachment in message.Attachments)
+			{
+				switch (attachment)
+				{
+					case MimePart mimePart:
+						using (var attachmentStream = new MemoryStream())
+						{
+							mimePart.Content.DecodeTo(attachmentStream);
+							yield return new AttachmentPayload
+							{
+								Name = String.IsNullOrWhiteSpace(mimePart.FileName) ? "attachment.bin" : mimePart.FileName,
+								Data = attachmentStream.ToArray(),
+								Type = ResolveAttachmentType(mimePart.ContentType?.MimeType)
+							};
+						}
+						break;
+					case MessagePart messagePart:
+						using (var attachmentStream = new MemoryStream())
+						{
+							messagePart.Message.WriteTo(attachmentStream);
+							yield return new AttachmentPayload
+							{
+								Name = "attached-message.eml",
+								Data = attachmentStream.ToArray(),
+								Type = CallFileType.File
+							};
+						}
+						break;
+				}
+			}
+		}
+
+		private static CallFileType ResolveAttachmentType(string mimeType)
+		{
+			if (String.IsNullOrWhiteSpace(mimeType))
+				return CallFileType.File;
+
+			if (mimeType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
+				return CallFileType.Audio;
+
+			if (mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+				return CallFileType.Image;
+
+			if (mimeType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
+				return CallFileType.Video;
+
+			return CallFileType.File;
+		}
+
+		private static string GetMessageBody(MimeMessage message)
+		{
+			if (!String.IsNullOrWhiteSpace(message.TextBody))
+				return message.TextBody.Trim();
+
+			if (!String.IsNullOrWhiteSpace(message.HtmlBody))
+				return message.HtmlBody.Trim();
+
+			return "(No message body)";
+		}
+
+		private static string GetNature(string body, string fallback)
+		{
+			if (!String.IsNullOrWhiteSpace(body))
+			{
+				var firstLine = body
+					.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+					.Select(x => x.Trim())
+					.FirstOrDefault(x => !String.IsNullOrWhiteSpace(x));
+
+				if (!String.IsNullOrWhiteSpace(firstLine))
+					return firstLine;
+			}
+
+			return fallback;
+		}
+
+		private static string GetStableMessageId(MimeMessage message)
+		{
+			if (!String.IsNullOrWhiteSpace(message.MessageId))
+				return message.MessageId.Trim('<', '>', ' ');
+
+			var rawId = $"{message.Subject}|{String.Join(",", message.From.Mailboxes.Select(x => x.Address))}|{String.Join(",", message.To.Mailboxes.Select(x => x.Address))}|{GetMessageBody(message)}";
+			return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawId)));
+		}
+
+		private static string ResolvePath(string path)
+		{
+			if (Path.IsPathRooted(path))
+				return path;
+
+			return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
+		}
+
+		private static string SanitizeFileName(string value)
+		{
+			var invalidCharacters = Path.GetInvalidFileNameChars();
+			return new string(value.Select(x => invalidCharacters.Contains(x) ? '_' : x).ToArray());
+		}
+
+		private static string Trim(string value, int maxLength)
+		{
+			if (String.IsNullOrWhiteSpace(value))
+				return value;
+
+			return value.Length <= maxLength ? value : value.Substring(0, maxLength);
+		}
+	}
+
+	public sealed class RelayMailboxFilter : IMailboxFilter, IMailboxFilterFactory
+	{
+		private readonly SmtpRelayOptions _options;
+		private readonly ISmtpTelemetry _telemetry;
+
+		public RelayMailboxFilter(SmtpRelayOptions options, ISmtpTelemetry telemetry)
+		{
+			_options = options ?? throw new ArgumentNullException(nameof(options));
+			_telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+		}
+
+		public Task<bool> CanAcceptFromAsync(ISessionContext context, IMailbox from, int size, CancellationToken cancellationToken)
+		{
+			_telemetry.SenderAccepted(context, from, size);
+			return Task.FromResult(true);
+		}
+
+		public Task<bool> CanDeliverToAsync(ISessionContext context, IMailbox to, IMailbox from, CancellationToken token)
+		{
+			var host = to.Host;
+			var accepted =
+				IsConfiguredDomain(host, _options.DepartmentAddressDomains) ||
+				IsConfiguredDomain(host, _options.GroupAddressDomains) ||
+				IsConfiguredDomain(host, _options.GroupMessageAddressDomains) ||
+				IsConfiguredDomain(host, _options.ListAddressDomains);
+
+			if (!accepted && _options.HostedMode)
+			{
+				// In hosted mode, the recipient domain follows the pattern
+				// {departmentId}.{baseDomain} (e.g. dept123.dispatch.resgrid.com).
+				// Strip the leading segment and check against the configured domains.
+				var parts = host.Split(new[] { _options.DepartmentDomainSeparator }, StringSplitOptions.RemoveEmptyEntries);
+				if (parts.Length >= 3)
+				{
+					var baseDomain = String.Join(_options.DepartmentDomainSeparator, parts.Skip(1));
+					accepted =
+						IsConfiguredDomain(baseDomain, _options.DepartmentAddressDomains) ||
+						IsConfiguredDomain(baseDomain, _options.GroupAddressDomains) ||
+						IsConfiguredDomain(baseDomain, _options.GroupMessageAddressDomains) ||
+						IsConfiguredDomain(baseDomain, _options.ListAddressDomains);
+				}
+			}
+
+			_telemetry.RecipientEvaluated(
+				context,
+				to,
+				from,
+				accepted,
+				accepted ? null : "recipient domain is not configured for Resgrid dispatch routing");
+
+			return Task.FromResult(accepted);
+		}
+
+		private static bool IsConfiguredDomain(string host, string[] domains)
+		{
+			return (domains ?? Array.Empty<string>()).Any(x => String.Equals(x, host, StringComparison.OrdinalIgnoreCase));
+		}
+
+		public IMailboxFilter CreateInstance(ISessionContext context)
+		{
+			return this;
+		}
+	}
+
+	internal sealed class ProcessedMessageStore
+	{
+		private static readonly JsonSerializerOptions SerializerOptions = new JsonSerializerOptions
+		{
+			WriteIndented = true
+		};
+
+		private readonly SemaphoreSlim _gate = new SemaphoreSlim(1, 1);
+		private readonly string _path;
+		private readonly TimeSpan _retention;
+
+		public ProcessedMessageStore(string path, int duplicateWindowHours)
+		{
+			_path = path;
+			_retention = TimeSpan.FromHours(duplicateWindowHours <= 0 ? 72 : duplicateWindowHours);
+		}
+
+		public async Task<bool> TryRegisterAsync(string messageId, CancellationToken cancellationToken)
+		{
+			await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+			try
+			{
+				var entries = await LoadAsync(cancellationToken).ConfigureAwait(false);
+				var cutoff = DateTimeOffset.UtcNow.Subtract(_retention);
+				var expiredKeys = entries
+					.Where(x => x.Value < cutoff)
+					.Select(x => x.Key)
+					.ToArray();
+
+				foreach (var expiredKey in expiredKeys)
+				{
+					entries.Remove(expiredKey);
+				}
+
+				var changed = expiredKeys.Length > 0;
+				if (entries.ContainsKey(messageId))
+				{
+					if (changed)
+						await SaveAsync(entries, cancellationToken).ConfigureAwait(false);
+
+					return false;
+				}
+
+				entries[messageId] = DateTimeOffset.UtcNow;
+				await SaveAsync(entries, cancellationToken).ConfigureAwait(false);
+				return true;
+			}
+			finally
+			{
+				_gate.Release();
+			}
+		}
+
+		public async Task RemoveAsync(string messageId, CancellationToken cancellationToken)
+		{
+			await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+			try
+			{
+				var entries = await LoadAsync(cancellationToken).ConfigureAwait(false);
+				if (!entries.Remove(messageId))
+					return;
+
+				await SaveAsync(entries, cancellationToken).ConfigureAwait(false);
+			}
+			finally
+			{
+				_gate.Release();
+			}
+		}
+
+		private async Task<Dictionary<string, DateTimeOffset>> LoadAsync(CancellationToken cancellationToken)
+		{
+			var directory = Path.GetDirectoryName(_path);
+			if (!String.IsNullOrWhiteSpace(directory))
+				Directory.CreateDirectory(directory);
+
+			if (!File.Exists(_path))
+				return new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+
+			try
+			{
+				var payload = await File.ReadAllTextAsync(_path, cancellationToken).ConfigureAwait(false);
+				if (String.IsNullOrWhiteSpace(payload))
+					return new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+
+				var items = JsonSerializer.Deserialize<Dictionary<string, DateTimeOffset>>(payload);
+				if (items == null)
+					return new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+
+				return new Dictionary<string, DateTimeOffset>(items, StringComparer.OrdinalIgnoreCase);
+			}
+			catch (Exception ex) when (ex is JsonException || ex is IOException)
+			{
+				return new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+			}
+		}
+
+		private async Task SaveAsync(Dictionary<string, DateTimeOffset> entries, CancellationToken cancellationToken)
+		{
+			var payload = JsonSerializer.Serialize(entries, SerializerOptions);
+			await File.WriteAllTextAsync(_path, payload, cancellationToken).ConfigureAwait(false);
+		}
+	}
+}
