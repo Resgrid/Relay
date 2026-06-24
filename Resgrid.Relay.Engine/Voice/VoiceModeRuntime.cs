@@ -4,10 +4,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using Resgrid.Providers.ApiClient.V4.Models;
 
-namespace Resgrid.Audio.Relay.Console.Voice
+namespace Resgrid.Relay.Engine.Voice
 {
 	/// <summary>Shared helpers for the cross-platform voice modes.</summary>
-	internal static class VoiceModeRuntime
+	public static class VoiceModeRuntime
 	{
 		/// <summary>Awaits until cancellation without throwing.</summary>
 		public static async Task WaitForCancellationAsync(CancellationToken cancellationToken)

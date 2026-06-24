@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Resgrid.Audio.Relay.Console.Configuration;
+using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Audio.Voice;
 using Resgrid.Audio.Voice.Abstractions;
 using Resgrid.Audio.Voice.Connection;
@@ -11,24 +11,24 @@ using Resgrid.Audio.Voice.LiveKit;
 using Resgrid.Audio.Voice.Recording;
 using Resgrid.Providers.ApiClient.V4;
 using Serilog;
-using Cli = System.Console;
 
-namespace Resgrid.Audio.Relay.Console.Voice
+namespace Resgrid.Relay.Engine.Voice
 {
 	/// <summary>
 	/// 'record' mode: joins one or all PTT channels for a department and records every
 	/// transmission (audio + metadata) for compliance. Cross-platform — runs on the
 	/// desktop or in a Linux/Docker container.
 	/// </summary>
-	internal static class RecordMode
+	public static class RecordMode
 	{
 		public static async Task<int> RunAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken)
 		{
-			ResgridV4ApiClient.Init(options.Resgrid);
+			using var apiClient = new ResgridV4ApiClient(options.Resgrid);
+			var voiceApi = new VoiceApi(apiClient);
 
 			var deptId = FirstNonEmpty(options.Recorder.DepartmentId, options.Voice.DepartmentId);
 			var transport = new LiveKitVoiceTransport(logger, options.Voice.PublishQueueMs);
-			var provider = new ResgridVoiceChannelProvider(logger);
+			var provider = new ResgridVoiceChannelProvider(logger, voiceApi);
 			await using var manager = new VoiceRoomManager(transport, logger);
 
 			IReadOnlyList<VoiceChannel> channels;
@@ -41,23 +41,30 @@ namespace Resgrid.Audio.Relay.Console.Voice
 			var log = BuildLog(options.Recorder, logger);
 			var recorders = new List<TransmissionRecorder>();
 
-			foreach (var channel in channels)
+			try
 			{
-				var session = await manager.JoinAsync(channel, cancellationToken).ConfigureAwait(false);
-				var recorder = new TransmissionRecorder(session, options.Recorder.Segmentation, stores, log, logger);
-				recorder.Start();
-				recorders.Add(recorder);
+				foreach (var channel in channels)
+				{
+					var session = await manager.JoinAsync(channel, cancellationToken).ConfigureAwait(false);
+					var recorder = new TransmissionRecorder(session, options.Recorder.Segmentation, stores, log, logger);
+					recorder.Start();
+					recorders.Add(recorder);
+				}
+
+				logger.Information($"Recording {channels.Count} channel(s) to {options.Recorder.Store}. Press Ctrl+C to stop.");
+				await VoiceModeRuntime.WaitForCancellationAsync(cancellationToken).ConfigureAwait(false);
 			}
-
-			Cli.WriteLine($"Recording {channels.Count} channel(s) to {options.Recorder.Store}. Press Ctrl+C to stop.");
-			await VoiceModeRuntime.WaitForCancellationAsync(cancellationToken).ConfigureAwait(false);
-
-			foreach (var recorder in recorders)
-				await recorder.DisposeAsync().ConfigureAwait(false);
-			if (log != null)
-				await log.DisposeAsync().ConfigureAwait(false);
-			foreach (var disposable in disposableStores)
-				disposable.Dispose();
+			finally
+			{
+				// Always tear down so a mid-loop JoinAsync failure or cancellation does not
+				// leak already-created recorders, the metadata log, or disposable stores.
+				foreach (var recorder in recorders)
+					await recorder.DisposeAsync().ConfigureAwait(false);
+				if (log != null)
+					await log.DisposeAsync().ConfigureAwait(false);
+				foreach (var disposable in disposableStores)
+					disposable.Dispose();
+			}
 
 			return 0;
 		}

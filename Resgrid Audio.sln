@@ -19,6 +19,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Audio.Voice", "Resg
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Audio.Voice.Tests", "Resgrid.Audio.Voice.Tests\Resgrid.Audio.Voice.Tests.csproj", "{AB465E37-9A39-42EC-9E4D-A684F8513A1C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Resgrid.Relay.Engine", "Resgrid.Relay.Engine\Resgrid.Relay.Engine.csproj", "{CDCEC8D6-76CB-439A-95BA-31B401A83265}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -113,6 +115,18 @@ Global
 		{AB465E37-9A39-42EC-9E4D-A684F8513A1C}.Release|x86.Build.0 = Release|Any CPU
 		{AB465E37-9A39-42EC-9E4D-A684F8513A1C}.Release|x64.ActiveCfg = Release|Any CPU
 		{AB465E37-9A39-42EC-9E4D-A684F8513A1C}.Release|x64.Build.0 = Release|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Debug|x86.Build.0 = Debug|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Debug|x64.Build.0 = Debug|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Release|x86.ActiveCfg = Release|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Release|x86.Build.0 = Release|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Release|x64.ActiveCfg = Release|Any CPU
+		{CDCEC8D6-76CB-439A-95BA-31B401A83265}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

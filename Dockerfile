@@ -38,11 +38,8 @@ RUN dotnet publish "Resgrid.Audio.Relay.Console/Resgrid.Audio.Relay.Console.cspr
 # ─── Publish extras (shell available here, not in the hardened final image) ──
 FROM build AS publish
 ARG BUILD_VERSION
-# docker-compose-wait: waits for WAIT_HOSTS (if any) then execs WAIT_COMMAND. The
-# hardened final image has no shell, so this is how we launch the app.
-ADD --checksum=sha256:2241be671073520e028b2f12df1e9ef0419014cffb5670b7a80b2080804be17d \
-    https://github.com/ufoscout/docker-compose-wait/releases/download/2.12.1/wait /app/publish/wait
-RUN chmod +x /app/publish/wait
+# docker-compose-wait is fetched in its own architecture-aware stage (wait-download,
+# below) and copied into the final image so it matches the runtime architecture.
 # The hardened DHI image marks tzdata installed (dpkg) but ships none of the zone
 # files, so a plain install is a no-op. --reinstall forces re-extraction; the test
 # asserts the zone files are really present so the build fails loudly otherwise.
@@ -88,19 +85,52 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget zstd ca-ce
 FROM debian:bookworm-slim AS ffi-download
 ARG LIVEKIT_FFI_VERSION
 ARG TARGETARCH=amd64
+# Pin each release asset's SHA-256 per arch (as loclx-download does) so the native
+# library is integrity-checked before extraction/install. Values correspond to the
+# LIVEKIT_FFI_VERSION above; leave empty to skip the check (a warning is emitted)
+# until the official hashes are pinned here or passed in by CI.
+ARG LIVEKIT_FFI_SHA256_AMD64=
+ARG LIVEKIT_FFI_SHA256_ARM64=
 RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-certificates \
     && case "${TARGETARCH}" in \
-         amd64) asset="ffi-linux-x86_64" ;; \
-         arm64) asset="ffi-linux-arm64"  ;; \
+         amd64) asset="ffi-linux-x86_64"; sha="${LIVEKIT_FFI_SHA256_AMD64}" ;; \
+         arm64) asset="ffi-linux-arm64";  sha="${LIVEKIT_FFI_SHA256_ARM64}" ;; \
          *)     echo "Unsupported arch: ${TARGETARCH}" >&2 ; exit 1 ;; \
        esac \
     && enc=$(printf '%s' "${LIVEKIT_FFI_VERSION}" | sed 's#/#%2F#') \
     && curl -sSL -o /tmp/ffi.zip \
          "https://github.com/livekit/rust-sdks/releases/download/${enc}/${asset}.zip" \
+    && if [ -n "${sha}" ]; then echo "${sha}  /tmp/ffi.zip" | sha256sum -c - ; \
+       else echo "WARNING: no SHA-256 pinned for ${asset}.zip (set LIVEKIT_FFI_SHA256_AMD64/_ARM64); skipping integrity check" >&2 ; fi \
     && mkdir -p /tmp/ffi && unzip -q /tmp/ffi.zip -d /tmp/ffi \
     && find /tmp/ffi -name 'liblivekit_ffi.so' -exec install -m 755 {} /usr/local/lib/liblivekit_ffi.so \; \
     && test -f /usr/local/lib/liblivekit_ffi.so \
     && rm -rf /tmp/ffi.zip /tmp/ffi /var/lib/apt/lists/*
+
+# ─── docker-compose-wait download (architecture-aware) ──────────────────────
+# The hardened final image has no shell, so docker-compose-wait launches the app
+# (waits for WAIT_HOSTS, then execs WAIT_COMMAND). The release ships per-arch
+# binaries; pick the one matching TARGETARCH and normalize it to "wait" so the
+# ENTRYPOINT stays arch-independent. Mirrors the ffi-download / loclx-download stages.
+FROM debian:bookworm-slim AS wait-download
+ARG TARGETARCH=amd64
+ARG WAIT_VERSION=2.12.1
+# amd64 asset sha256 is pinned; set WAIT_SHA256_ARM64 to verify arm64 builds too
+# (the asset is downloaded either way — verification is skipped when no hash is given).
+ARG WAIT_SHA256_AMD64=2241be671073520e028b2f12df1e9ef0419014cffb5670b7a80b2080804be17d
+ARG WAIT_SHA256_ARM64=
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && case "${TARGETARCH}" in \
+         amd64) asset="wait";         sha="${WAIT_SHA256_AMD64}" ;; \
+         arm64) asset="wait_aarch64"; sha="${WAIT_SHA256_ARM64}" ;; \
+         *)     echo "Unsupported arch: ${TARGETARCH}" >&2 ; exit 1 ;; \
+       esac \
+    && curl -sSL -o /wait \
+         "https://github.com/ufoscout/docker-compose-wait/releases/download/${WAIT_VERSION}/${asset}" \
+    && if [ -n "${sha}" ]; then echo "${sha}  /wait" | sha256sum -c - ; fi \
+    && chmod +x /wait \
+    && test -x /wait \
+    && rm -rf /var/lib/apt/lists/*
 
 # ─── Final (hardened, distroless, non-root) ─────────────────────────────────
 FROM ${DOTNET_RUNTIME_IMAGE} AS final
@@ -114,6 +144,7 @@ ENV TZ=Etc/UTC
 COPY --from=publish /app/publish .
 COPY --from=loclx-download /usr/local/bin/loclx /usr/local/bin/loclx
 COPY --from=ffi-download /usr/local/lib/liblivekit_ffi.so /app/liblivekit_ffi.so
+COPY --from=wait-download /wait /app/wait
 # Native lib lives next to the app; make it discoverable by the loader.
 ENV LD_LIBRARY_PATH=/app
 

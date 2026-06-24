@@ -45,7 +45,8 @@ namespace Resgrid.Audio.Voice.LiveKit
 
 			_room.TrackSubscribed += OnTrackSubscribed;
 			_room.TrackUnsubscribed += OnTrackUnsubscribed;
-			_room.Connected += (_, __) => RaiseConnection(true, "connected");
+			// Initial connect is signaled explicitly after ConnectAsync below (deterministic,
+			// fires exactly once); also subscribing to _room.Connected would double-notify.
 			_room.Disconnected += (_, reason) => RaiseConnection(false, reason.ToString());
 			_room.Reconnecting += (_, __) => RaiseConnection(false, "reconnecting");
 			_room.Reconnected += (_, __) => RaiseConnection(true, "reconnected");

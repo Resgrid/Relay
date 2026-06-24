@@ -119,10 +119,13 @@ namespace Resgrid.Audio.Voice.LiveKit
 		{
 			if (_disposed)
 				return;
-			_disposed = true;
 
+			// Flush buffered residual audio BEFORE marking disposed — FlushAsync
+			// short-circuits once _disposed is set, which would drop the final partial frame.
 			try { await FlushAsync(CancellationToken.None).ConfigureAwait(false); }
 			catch (Exception ex) { _logger?.Debug(ex, "Publisher flush on dispose failed"); }
+
+			_disposed = true;
 
 			try
 			{

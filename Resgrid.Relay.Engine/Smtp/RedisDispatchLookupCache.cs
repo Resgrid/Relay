@@ -1,4 +1,4 @@
-using Resgrid.Audio.Relay.Console.Configuration;
+using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Providers.ApiClient.V4.Models;
 using StackExchange.Redis;
 using System;
@@ -6,7 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Resgrid.Audio.Relay.Console.Smtp
+namespace Resgrid.Relay.Engine.Smtp
 {
 	/// <summary>
 	/// Redis-backed implementation of <see cref="IDispatchLookupCache"/>.

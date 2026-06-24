@@ -33,7 +33,9 @@ namespace Resgrid.Audio.Voice.ToneOut
 				else if (i >= count - fade) env = 0.5 * (1 - Math.Cos(Math.PI * (count - 1 - i) / fade));
 
 				double value = Math.Sin(i * step) * amplitude * env;
-				samples[i] = (short)(value * short.MaxValue);
+				double scaled = value * short.MaxValue;
+				// Clamp before the cast so a ToneProfile.Amplitude > 1 clips instead of wrapping (sign flip).
+				samples[i] = (short)Math.Clamp(scaled, short.MinValue, short.MaxValue);
 			}
 			return samples;
 		}

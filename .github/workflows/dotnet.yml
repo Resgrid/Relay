@@ -128,8 +128,16 @@ jobs:
             $zip = Join-Path $env:RUNNER_TEMP "$asset.zip"
             $ex = Join-Path $env:RUNNER_TEMP $asset
             Invoke-WebRequest -Uri $url -OutFile $zip
+            # Validate the download produced a non-empty archive before extracting
+            # (mirrors the Dockerfile ffi-download stage, which fails on a bad archive).
+            if (-not (Test-Path $zip) -or (Get-Item $zip).Length -eq 0) {
+              throw "LiveKit FFI download failed or produced an empty archive: $url"
+            }
             Expand-Archive -Path $zip -DestinationPath $ex -Force
             $src = Get-ChildItem -Path $ex -Recurse -Filter $lib | Select-Object -First 1
+            if (-not $src) {
+              throw "LiveKit FFI library '$lib' not found in '$asset.zip' from $url"
+            }
             Copy-Item $src.FullName (Join-Path $dest $lib) -Force
           }
           Add-Ffi "ffi-windows-x86_64" "livekit_ffi.dll" (Join-Path $publishRoot "relay-console-net10.0-windows")

@@ -1,10 +1,10 @@
-using Resgrid.Audio.Relay.Console.Configuration;
+using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Providers.ApiClient.V4;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace Resgrid.Audio.Relay.Console.Smtp
+namespace Resgrid.Relay.Engine.Smtp
 {
 	/// <summary>
 	/// Parses SMTP recipient addresses into dispatch codes, determining the

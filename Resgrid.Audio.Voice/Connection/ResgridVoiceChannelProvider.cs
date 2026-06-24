@@ -19,15 +19,17 @@ namespace Resgrid.Audio.Voice.Connection
 	public sealed class ResgridVoiceChannelProvider : IVoiceChannelProvider
 	{
 		private readonly ILogger _logger;
+		private readonly IResgridVoiceApi _voiceApi;
 
-		public ResgridVoiceChannelProvider(ILogger logger)
+		public ResgridVoiceChannelProvider(ILogger logger, IResgridVoiceApi voiceApi)
 		{
 			_logger = logger;
+			_voiceApi = voiceApi ?? throw new ArgumentNullException(nameof(voiceApi));
 		}
 
 		public async Task<IReadOnlyList<VoiceChannel>> GetChannelsAsync(string departmentId = null, CancellationToken cancellationToken = default)
 		{
-			var settings = await VoiceApi.GetDepartmentVoiceSettingsAsync(departmentId, cancellationToken).ConfigureAwait(false);
+			var settings = await _voiceApi.GetDepartmentVoiceSettingsAsync(departmentId, cancellationToken).ConfigureAwait(false);
 			if (settings == null)
 				throw new InvalidOperationException("The Resgrid API returned no voice settings. Is voice/PTT enabled for this department?");
 
@@ -70,11 +72,11 @@ namespace Resgrid.Audio.Voice.Connection
 
 		public async Task<bool?> CanConnectAsync(string departmentId = null, CancellationToken cancellationToken = default)
 		{
-			var settings = await VoiceApi.GetDepartmentVoiceSettingsAsync(departmentId, cancellationToken).ConfigureAwait(false);
+			var settings = await _voiceApi.GetDepartmentVoiceSettingsAsync(departmentId, cancellationToken).ConfigureAwait(false);
 			if (settings == null || string.IsNullOrWhiteSpace(settings.CanConnectApiToken))
 				return null;
 
-			var result = await VoiceApi.CanConnectToVoiceSessionAsync(settings.CanConnectApiToken, cancellationToken).ConfigureAwait(false);
+			var result = await _voiceApi.CanConnectToVoiceSessionAsync(settings.CanConnectApiToken, cancellationToken).ConfigureAwait(false);
 			if (result == null)
 				return null;
 

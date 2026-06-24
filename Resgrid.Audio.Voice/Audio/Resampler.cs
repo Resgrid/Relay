@@ -14,14 +14,21 @@ namespace Resgrid.Audio.Voice.Audio
 		{
 			if (input == null || input.Length == 0)
 				return Array.Empty<short>();
+			if (inRate <= 0)
+				throw new ArgumentOutOfRangeException(nameof(inRate), "Sample rate must be positive.");
+			if (outRate <= 0)
+				throw new ArgumentOutOfRangeException(nameof(outRate), "Sample rate must be positive.");
 			if (inRate == outRate)
 				return (short[])input.Clone();
 
 			long outLen = (long)input.Length * outRate / inRate;
 			if (outLen <= 0)
 				return Array.Empty<short>();
+			if (outLen > int.MaxValue)
+				throw new ArgumentOutOfRangeException(nameof(outRate),
+					$"Resampled length {outLen} exceeds the maximum array size ({int.MaxValue}).");
 
-			var output = new short[outLen];
+			var output = new short[(int)outLen];
 			double step = (double)inRate / outRate;
 			double pos = 0;
 

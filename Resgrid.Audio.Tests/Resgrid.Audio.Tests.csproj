@@ -31,7 +31,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Providers\Resgrid.Providers.ApiClient\Resgrid.Providers.ApiClient.csproj" />
     <ProjectReference Include="..\Resgrid.Audio.Core\Resgrid.Audio.Core.csproj" />
-    <ProjectReference Include="..\Resgrid.Audio.Relay.Console\Resgrid.Audio.Relay.Console.csproj" />
+    <ProjectReference Include="..\Resgrid.Relay.Engine\Resgrid.Relay.Engine.csproj" />
   </ItemGroup>
 
   <ItemGroup>

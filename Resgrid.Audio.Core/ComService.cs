@@ -16,15 +16,21 @@ namespace Resgrid.Audio.Core
 	{
 		private readonly Logger _logger;
 		private readonly AudioProcessor _audioProcessor;
+		private readonly IResgridApiClient _apiClient;
+		private readonly IResgridHealthApi _healthApi;
+		private readonly IResgridCallsApi _callsApi;
 
 		private Config _config;
 
 		public event EventHandler<CallCreatedEventArgs> CallCreatedEvent;
 
-		public ComService(Logger logger, AudioProcessor audioProcessor)
+		public ComService(Logger logger, AudioProcessor audioProcessor, IResgridApiClient apiClient, IResgridHealthApi healthApi, IResgridCallsApi callsApi)
 		{
 			_logger = logger;
 			_audioProcessor = audioProcessor;
+			_apiClient = apiClient;
+			_healthApi = healthApi;
+			_callsApi = callsApi;
 		}
 
 		public void Init(Config config)
@@ -38,7 +44,7 @@ namespace Resgrid.Audio.Core
 		{
 			try
 			{
-				return HealthApi.IsHealthyAsync().GetAwaiter().GetResult();
+				return _healthApi.IsHealthyAsync().GetAwaiter().GetResult();
 			}
 			catch (HttpRequestException ex)
 			{
@@ -81,12 +87,12 @@ namespace Resgrid.Audio.Core
 						Type = "Relay Audio"
 					};
 
-					var savedCallId = CallsApi.SaveCallAsync(callInput).GetAwaiter().GetResult();
-					var userId = ResgridV4ApiClient.CurrentUserId;
+					var savedCallId = _callsApi.SaveCallAsync(callInput).GetAwaiter().GetResult();
+					var userId = _apiClient.CurrentUserId;
 					if (String.IsNullOrWhiteSpace(userId))
 						throw new InvalidOperationException("The Resgrid access token did not contain a user id required to upload the dispatch audio.");
 
-					CallsApi.SaveCallFileAsync(new SaveCallFileInput
+					_callsApi.SaveCallFileAsync(new SaveCallFileInput
 					{
 						CallId = savedCallId,
 						UserId = userId,
@@ -96,7 +102,7 @@ namespace Resgrid.Audio.Core
 						Note = $"Captured dispatch audio for watcher {e.Watcher.Name}"
 					}).GetAwaiter().GetResult();
 
-					var savedCall = CallsApi.GetCallAsync(savedCallId).GetAwaiter().GetResult();
+					var savedCall = _callsApi.GetCallAsync(savedCallId).GetAwaiter().GetResult();
 					CallCreatedEvent?.Invoke(
 						this,
 						new CallCreatedEventArgs(e.Watcher.Name, savedCallId, savedCall?.Data?.Number, DateTime.Now));

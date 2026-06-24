@@ -1,8 +1,8 @@
 using FluentAssertions;
 using MimeKit;
 using NUnit.Framework;
-using Resgrid.Audio.Relay.Console.Configuration;
-using Resgrid.Audio.Relay.Console.Smtp;
+using Resgrid.Relay.Engine.Configuration;
+using Resgrid.Relay.Engine.Smtp;
 using Resgrid.Providers.ApiClient.V4.Models;
 using SmtpServer;
 using SmtpServer.IO;
@@ -28,7 +28,7 @@ namespace Resgrid.Audio.Tests
 			{
 				var telemetry = new FakeSmtpTelemetry();
 				var callsClient = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient);
+				var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: callsClient);
 
 				var response = await store.SaveAsync(
 					new FakeSessionContext(),
@@ -63,7 +63,7 @@ namespace Resgrid.Audio.Tests
 				{
 					SaveCallException = new InvalidOperationException("Resgrid is unavailable")
 				};
-				var failingStore = new RelayMessageStore(CreateOptions(dataDirectory), failingTelemetry, failingClient);
+				var failingStore = new RelayMessageStore(CreateOptions(dataDirectory), failingTelemetry, callsClient: failingClient);
 
 				await FluentActions
 					.Awaiting(() => failingStore.SaveAsync(new FakeSessionContext(), null, buffer, CancellationToken.None))
@@ -78,7 +78,7 @@ namespace Resgrid.Audio.Tests
 				{
 					NextCallId = "call-42"
 				};
-				var successStore = new RelayMessageStore(CreateOptions(dataDirectory), successTelemetry, successClient);
+				var successStore = new RelayMessageStore(CreateOptions(dataDirectory), successTelemetry, callsClient: successClient);
 
 				var response = await successStore.SaveAsync(new FakeSessionContext(), null, buffer, CancellationToken.None);
 
@@ -181,6 +181,7 @@ namespace Resgrid.Audio.Tests
 			public List<SaveCallFileInput> SaveCallFileInputs { get; } = new List<SaveCallFileInput>();
 			public Exception SaveCallException { get; set; }
 			public string NextCallId { get; set; } = "call-1";
+			public string CurrentUserId { get; set; } = "fake-user-id";
 
 			public Task<string> SaveCallAsync(NewCallInput call, CancellationToken cancellationToken)
 			{

@@ -27,13 +27,15 @@ namespace Resgrid.Audio.Voice.Dsp
 		private readonly bool _createCall;
 		private readonly int _priority;
 		private readonly string _dispatchList;
+		private readonly IResgridCallsApi _callsApi;
 
-		public ResgridEmergencyAlertSink(ILogger logger, bool createCall = false, int priority = 1, string dispatchList = null)
+		public ResgridEmergencyAlertSink(ILogger logger, bool createCall = false, int priority = 1, string dispatchList = null, IResgridCallsApi callsApi = null)
 		{
 			_logger = logger;
 			_createCall = createCall;
 			_priority = priority;
 			_dispatchList = dispatchList;
+			_callsApi = callsApi;
 		}
 
 		public async Task RaiseAsync(string source, string detail, CancellationToken cancellationToken = default)
@@ -56,7 +58,7 @@ namespace Resgrid.Audio.Voice.Dsp
 					ReferenceId = DateTime.UtcNow.ToString("O")
 				};
 
-				var callId = await CallsApi.SaveCallAsync(input, cancellationToken).ConfigureAwait(false);
+				var callId = await _callsApi.SaveCallAsync(input, cancellationToken).ConfigureAwait(false);
 				_logger?.Information("Created emergency call {CallId} from radio signaling", callId);
 			}
 			catch (Exception ex)

@@ -4,7 +4,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Resgrid.Audio.Relay.Console.Smtp
+namespace Resgrid.Relay.Engine.Smtp
 {
 	/// <summary>
 	/// Wraps <see cref="LookupsApi"/> with a cache-first strategy.
@@ -18,10 +18,12 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 	internal sealed class CachedLookupsService
 	{
 		private readonly IDispatchLookupCache _cache;
+		private readonly IResgridLookupsApi _lookupsApi;
 
-		public CachedLookupsService(IDispatchLookupCache cache)
+		public CachedLookupsService(IDispatchLookupCache cache, IResgridLookupsApi lookupsApi)
 		{
 			_cache = cache ?? throw new ArgumentNullException(nameof(cache));
+			_lookupsApi = lookupsApi;
 		}
 
 		/// <summary>
@@ -39,7 +41,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 			if (cached != null)
 				return cached;
 
-			var result = await LookupsApi.LookupGroupByDispatchCodeAsync(code, departmentId, cancellationToken).ConfigureAwait(false);
+			var result = await _lookupsApi.LookupGroupByDispatchCodeAsync(code, departmentId, cancellationToken).ConfigureAwait(false);
 			if (result != null)
 				await _cache.SetGroupByDispatchCodeAsync(code, departmentId, result).ConfigureAwait(false);
 
@@ -61,7 +63,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 			if (cached != null)
 				return cached;
 
-			var result = await LookupsApi.LookupGroupByMessageCodeAsync(code, departmentId, cancellationToken).ConfigureAwait(false);
+			var result = await _lookupsApi.LookupGroupByMessageCodeAsync(code, departmentId, cancellationToken).ConfigureAwait(false);
 			if (result != null)
 				await _cache.SetGroupByMessageCodeAsync(code, departmentId, result).ConfigureAwait(false);
 
@@ -83,7 +85,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 			if (cached != null)
 				return cached;
 
-			var result = await LookupsApi.LookupUnitByNameAsync(name, departmentId, cancellationToken).ConfigureAwait(false);
+			var result = await _lookupsApi.LookupUnitByNameAsync(name, departmentId, cancellationToken).ConfigureAwait(false);
 			if (result != null)
 				await _cache.SetUnitByNameAsync(name, departmentId, result).ConfigureAwait(false);
 
@@ -105,7 +107,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 			if (cached != null)
 				return cached;
 
-			var result = await LookupsApi.LookupRoleByNameAsync(name, departmentId, cancellationToken).ConfigureAwait(false);
+			var result = await _lookupsApi.LookupRoleByNameAsync(name, departmentId, cancellationToken).ConfigureAwait(false);
 			if (result != null)
 				await _cache.SetRoleByNameAsync(name, departmentId, result).ConfigureAwait(false);
 

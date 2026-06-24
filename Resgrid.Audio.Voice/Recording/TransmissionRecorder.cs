@@ -60,7 +60,7 @@ namespace Resgrid.Audio.Voice.Recording
 
 		private void OnAudioFrame(object sender, VoiceAudioFrame frame)
 		{
-			if (frame?.Pcm == null || frame.Pcm.Length == 0)
+			if (frame?.Pcm == null || frame.Pcm.Length == 0 || string.IsNullOrEmpty(frame.TrackSid))
 				return;
 
 			bool active = AudioFormat.Dbfs(frame.Pcm) > _settings.SilenceFloorDbfs;

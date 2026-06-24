@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,7 +28,7 @@ namespace Resgrid.Audio.Voice.ToneOut
 
 		public CustomerDepartmentVoiceResolver(IVoiceChannelProvider channels)
 		{
-			_channels = channels;
+			_channels = channels ?? throw new ArgumentNullException(nameof(channels));
 		}
 
 		public async Task<IReadOnlyList<VoiceChannel>> ResolveAnnouncementChannelsAsync(

@@ -1,7 +1,7 @@
 using Resgrid.Audio.Voice.ToneOut;
 using Resgrid.Providers.ApiClient.V4;
 
-namespace Resgrid.Audio.Relay.Console.Configuration
+namespace Resgrid.Relay.Engine.Configuration
 {
 	public sealed class RelayHostOptions
 	{

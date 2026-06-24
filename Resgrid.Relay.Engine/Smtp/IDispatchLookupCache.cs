@@ -3,7 +3,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Resgrid.Audio.Relay.Console.Smtp
+namespace Resgrid.Relay.Engine.Smtp
 {
 	/// <summary>
 	/// Caches dispatch code lookup results so that repeated lookups for the

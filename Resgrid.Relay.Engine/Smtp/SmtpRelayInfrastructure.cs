@@ -1,5 +1,5 @@
 using MimeKit;
-using Resgrid.Audio.Relay.Console.Configuration;
+using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Providers.ApiClient.V4;
 using Resgrid.Providers.ApiClient.V4.Models;
 using SmtpServer;
@@ -19,11 +19,11 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Resgrid.Audio.Relay.Console.Smtp
+namespace Resgrid.Relay.Engine.Smtp
 {
-	internal static class SmtpRelayRunner
+	public static class SmtpRelayRunner
 	{
-		public static async Task RunAsync(SmtpRelayOptions options, ISmtpTelemetry telemetry, CancellationToken cancellationToken)
+		public static async Task RunAsync(SmtpRelayOptions options, ISmtpTelemetry telemetry, IResgridApiClient apiClient, CancellationToken cancellationToken)
 		{
 			if (options == null)
 				throw new ArgumentNullException(nameof(options));
@@ -32,7 +32,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 
 			var serviceProvider = new ServiceProvider();
 			serviceProvider.Add((IMailboxFilterFactory)new RelayMailboxFilter(options, telemetry));
-			serviceProvider.Add(new RelayMessageStore(options, telemetry));
+			serviceProvider.Add(new RelayMessageStore(options, telemetry, apiClient));
 
 			var smtpServerOptions = new SmtpServerOptionsBuilder()
 				.ServerName(options.ServerName)
@@ -65,33 +65,45 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 		}
 	}
 
-	internal interface IResgridCallsClient
+	public interface IResgridCallsClient
 	{
+		string CurrentUserId { get; }
 		Task<string> SaveCallAsync(NewCallInput call, CancellationToken cancellationToken);
 		Task<string> SaveCallFileAsync(SaveCallFileInput file, CancellationToken cancellationToken);
 	}
 
 	internal sealed class ResgridCallsClient : IResgridCallsClient
 	{
+		private readonly IResgridApiClient _apiClient;
+		private readonly CallsApi _callsApi;
+
+		public ResgridCallsClient(IResgridApiClient apiClient)
+		{
+			_apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
+			_callsApi = new CallsApi(apiClient);
+		}
+
+		public string CurrentUserId => _apiClient.CurrentUserId;
+
 		public Task<string> SaveCallAsync(NewCallInput call, CancellationToken cancellationToken)
 		{
-			return CallsApi.SaveCallAsync(call, cancellationToken);
+			return _callsApi.SaveCallAsync(call, cancellationToken);
 		}
 
 		public Task<string> SaveCallFileAsync(SaveCallFileInput file, CancellationToken cancellationToken)
 		{
-			return CallsApi.SaveCallFileAsync(file, cancellationToken);
+			return _callsApi.SaveCallFileAsync(file, cancellationToken);
 		}
 	}
 
-	internal sealed class AttachmentPayload
+	public sealed class AttachmentPayload
 	{
 		public string Name { get; set; }
 		public byte[] Data { get; set; }
 		public CallFileType Type { get; set; }
 	}
 
-	internal sealed class RelayMessageStore : MessageStore
+	public sealed class RelayMessageStore : MessageStore
 	{
 		private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
 		{
@@ -108,13 +120,14 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 		private readonly string _dataDirectory;
 		private readonly string _messageDirectory;
 
-		public RelayMessageStore(SmtpRelayOptions options, ISmtpTelemetry telemetry, IResgridCallsClient callsClient = null, IDispatchLookupCache lookupCache = null)
+		public RelayMessageStore(SmtpRelayOptions options, ISmtpTelemetry telemetry, IResgridApiClient apiClient = null, IResgridCallsClient callsClient = null, IDispatchLookupCache lookupCache = null, IResgridLookupsApi lookupsApi = null)
 		{
 			_options = options ?? throw new ArgumentNullException(nameof(options));
 			_telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
-			_callsClient = callsClient ?? new ResgridCallsClient();
+			_callsClient = callsClient ?? new ResgridCallsClient(apiClient);
 			_lookupCache = lookupCache ?? CreateLookupCache(options);
-			_lookupService = new CachedLookupsService(_lookupCache);
+			lookupsApi ??= apiClient != null ? new LookupsApi(apiClient) : null;
+			_lookupService = new CachedLookupsService(_lookupCache, lookupsApi);
 			_dispatchAddressParser = new SmtpDispatchAddressParser(options);
 			_dataDirectory = ResolvePath(options.DataDirectory);
 			_messageDirectory = Path.Combine(_dataDirectory, "messages");
@@ -236,7 +249,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 				var uploadableAttachments = attachments.Where(x => x.Data.Length <= _options.MaxAttachmentBytes).ToList();
 				if (uploadableAttachments.Count > 0)
 				{
-					var userId = ResgridV4ApiClient.CurrentUserId;
+					var userId = _callsClient.CurrentUserId;
 					// In SystemApiKey (hosted) mode the department ID serves as
 					// the user identifier for file uploads.  In token-based modes
 					// the user id must come from the access token JWT.
@@ -486,7 +499,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 		}
 	}
 
-	internal sealed class RelayMailboxFilter : IMailboxFilter, IMailboxFilterFactory
+	public sealed class RelayMailboxFilter : IMailboxFilter, IMailboxFilterFactory
 	{
 		private readonly SmtpRelayOptions _options;
 		private readonly ISmtpTelemetry _telemetry;

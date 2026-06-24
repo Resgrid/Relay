@@ -1,7 +1,7 @@
 using Resgrid.Providers.ApiClient.V4.Models;
 using System.Threading.Tasks;
 
-namespace Resgrid.Audio.Relay.Console.Smtp
+namespace Resgrid.Relay.Engine.Smtp
 {
 	/// <summary>
 	/// No-op cache implementation used when Redis caching is disabled.

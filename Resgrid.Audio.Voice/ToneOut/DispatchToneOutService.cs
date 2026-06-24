@@ -45,6 +45,10 @@ namespace Resgrid.Audio.Voice.ToneOut
 			if (publisher == null)
 				throw new ArgumentNullException(nameof(publisher));
 
+			// Normalize once so the preview logging (text.Length/Substring) and the
+			// announcement build can't NRE on a null text argument.
+			text ??= string.Empty;
+
 			var audio = await BuildAnnouncementAsync(text, cancellationToken).ConfigureAwait(false);
 			_logger?.Information("Toning out dispatch ({Ms} ms): {Preview}",
 				audio.Length / (AudioFormat.SampleRate / 1000),
@@ -66,6 +70,11 @@ namespace Resgrid.Audio.Voice.ToneOut
 				{
 					await publisher.WriteAsync(audio, cancellationToken).ConfigureAwait(false);
 					await publisher.FlushAsync(cancellationToken).ConfigureAwait(false);
+				}
+				catch (OperationCanceledException)
+				{
+					// Normal shutdown — let cancellation propagate instead of logging it as a failure.
+					throw;
 				}
 				catch (Exception ex)
 				{

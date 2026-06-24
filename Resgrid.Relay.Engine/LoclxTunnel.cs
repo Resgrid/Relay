@@ -1,10 +1,10 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using Resgrid.Audio.Relay.Console.Configuration;
+using Resgrid.Relay.Engine.Configuration;
 using Cli = System.Console;
 
-namespace Resgrid.Audio.Relay.Console
+namespace Resgrid.Relay.Engine
 {
 	/// <summary>
 	/// Optionally starts a LocalXpose (loclx) TCP tunnel as a child process. This used
@@ -17,7 +17,7 @@ namespace Resgrid.Audio.Relay.Console
 	///   LOCLX_RESERVED_ENDPOINT=&lt;host:port&gt;   (optional)
 	/// or a mounted tunnels file at /etc/resgrid/loclx-tunnels.yaml.
 	/// </summary>
-	internal sealed class LoclxTunnel : IDisposable
+	public sealed class LoclxTunnel : IDisposable
 	{
 		private const string TunnelsFile = "/etc/resgrid/loclx-tunnels.yaml";
 		private Process _process;

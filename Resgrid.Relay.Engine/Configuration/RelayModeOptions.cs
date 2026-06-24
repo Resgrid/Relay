@@ -3,7 +3,7 @@ using Resgrid.Audio.Voice.Dsp;
 using Resgrid.Audio.Voice.Recording;
 using Resgrid.Audio.Voice.ToneOut;
 
-namespace Resgrid.Audio.Relay.Console.Configuration
+namespace Resgrid.Relay.Engine.Configuration
 {
 	// Option POCOs for the LiveKit voice modes (radio / record / dispatch). These are
 	// cross-platform — they reference only the Resgrid.Audio.Voice library, never the

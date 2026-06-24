@@ -17,8 +17,21 @@ namespace Resgrid.Providers.ApiClient.V4
 	///   GET /api/v4/Voice/GetDepartmentVoiceSettings
 	///   GET /api/v4/Voice/CanConnectToVoiceSession?token={token}
 	/// </summary>
-	public static class VoiceApi
+	public interface IResgridVoiceApi
 	{
+		Task<DepartmentVoiceResultData> GetDepartmentVoiceSettingsAsync(string departmentId = null, CancellationToken cancellationToken = default);
+		Task<CanConnectToVoiceSessionResultData> CanConnectToVoiceSessionAsync(string token, CancellationToken cancellationToken = default);
+	}
+
+	public sealed class VoiceApi : IResgridVoiceApi
+	{
+		private readonly IResgridApiClient _client;
+
+		public VoiceApi(IResgridApiClient client)
+		{
+			_client = client ?? throw new ArgumentNullException(nameof(client));
+		}
+
 		/// <summary>
 		/// Gets the calling user's department voice settings, including the LiveKit
 		/// server URL and every voice channel with a pre-minted join token.
@@ -28,7 +41,7 @@ namespace Resgrid.Providers.ApiClient.V4
 		/// specific department. In normal (per-user) mode the department is taken
 		/// from the authenticated context.
 		/// </summary>
-		public static async Task<DepartmentVoiceResultData> GetDepartmentVoiceSettingsAsync(
+		public async Task<DepartmentVoiceResultData> GetDepartmentVoiceSettingsAsync(
 			string departmentId = null,
 			CancellationToken cancellationToken = default)
 		{
@@ -36,7 +49,7 @@ namespace Resgrid.Providers.ApiClient.V4
 			if (!String.IsNullOrWhiteSpace(departmentId))
 				url += $"?departmentId={Uri.EscapeDataString(departmentId)}";
 
-			var response = await ResgridV4ApiClient
+			var response = await _client
 				.GetAsync<DepartmentVoiceResult>(url, cancellationToken)
 				.ConfigureAwait(false);
 
@@ -50,7 +63,7 @@ namespace Resgrid.Providers.ApiClient.V4
 		/// <see cref="GetDepartmentVoiceSettingsAsync"/>. Returns null if the endpoint
 		/// is unavailable (treat as "unknown" and proceed per policy).
 		/// </summary>
-		public static async Task<CanConnectToVoiceSessionResultData> CanConnectToVoiceSessionAsync(
+		public async Task<CanConnectToVoiceSessionResultData> CanConnectToVoiceSessionAsync(
 			string token,
 			CancellationToken cancellationToken = default)
 		{
@@ -61,7 +74,7 @@ namespace Resgrid.Providers.ApiClient.V4
 
 			try
 			{
-				var response = await ResgridV4ApiClient
+				var response = await _client
 					.GetAsync<CanConnectToVoiceSessionResult>(url, cancellationToken)
 					.ConfigureAwait(false);
 

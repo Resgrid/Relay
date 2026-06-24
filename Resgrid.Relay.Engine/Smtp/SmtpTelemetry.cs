@@ -1,5 +1,5 @@
 using MimeKit;
-using Resgrid.Audio.Relay.Console.Configuration;
+using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Providers.ApiClient.V4;
 using Sentry;
 using Serilog;
@@ -20,9 +20,9 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 
-namespace Resgrid.Audio.Relay.Console.Smtp
+namespace Resgrid.Relay.Engine.Smtp
 {
-	internal interface ISmtpTelemetry : IAsyncDisposable
+	public interface ISmtpTelemetry : IAsyncDisposable
 	{
 		void RelayStarting(SmtpRelayOptions options);
 		void RelayStopped(SmtpRelayOptions options);
@@ -42,7 +42,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 		void MessageFailed(ISessionContext context, SmtpMessageSummary message, Exception exception, TimeSpan duration);
 	}
 
-	internal sealed class SmtpTelemetry : ISmtpTelemetry
+	public sealed class SmtpTelemetry : ISmtpTelemetry
 	{
 		private readonly ILogger _logger;
 		private readonly CountlyTelemetryClient _countlyClient;
@@ -685,7 +685,7 @@ namespace Resgrid.Audio.Relay.Console.Smtp
 		}
 	}
 
-	internal sealed class SmtpMessageSummary
+	public sealed class SmtpMessageSummary
 	{
 		private SmtpMessageSummary()
 		{

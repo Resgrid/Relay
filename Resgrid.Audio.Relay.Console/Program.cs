@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
-using Resgrid.Audio.Relay.Console.Configuration;
-using Resgrid.Audio.Relay.Console.Smtp;
+using Resgrid.Relay.Engine;
+using Resgrid.Relay.Engine.Configuration;
+using Resgrid.Relay.Engine.Smtp;
 using Resgrid.Providers.ApiClient.V4;
 using Serilog;
 using Serilog.Core;
@@ -12,6 +13,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Cli = System.Console;
+using EngineVoice = Resgrid.Relay.Engine.Voice;
 #if NET10_0_WINDOWS
 using NAudio.Wave;
 using Resgrid.Audio.Core;
@@ -92,8 +94,8 @@ namespace Resgrid.Audio.Relay.Console
 					{
 						var smtpLogger = CreateLogger(debug: false);
 						await using var telemetry = SmtpTelemetry.Create(hostOptions, smtpLogger);
-						ResgridV4ApiClient.Init(hostOptions.Resgrid);
-						await SmtpRelayRunner.RunAsync(hostOptions.Smtp, telemetry, cancellationTokenSource.Token).ConfigureAwait(false);
+						using var apiClient = new ResgridV4ApiClient(hostOptions.Resgrid);
+						await SmtpRelayRunner.RunAsync(hostOptions.Smtp, telemetry, apiClient, cancellationTokenSource.Token).ConfigureAwait(false);
 						return 0;
 					}
 					case "audio":
@@ -101,9 +103,9 @@ namespace Resgrid.Audio.Relay.Console
 					case "radio":
 						return await RunRadioModeAsync(hostOptions, cancellationTokenSource.Token).ConfigureAwait(false);
 					case "record":
-						return await Voice.RecordMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationTokenSource.Token).ConfigureAwait(false);
+						return await EngineVoice.RecordMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationTokenSource.Token).ConfigureAwait(false);
 					case "dispatch":
-						return await Voice.DispatchVoiceMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationTokenSource.Token).ConfigureAwait(false);
+						return await EngineVoice.DispatchVoiceMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationTokenSource.Token).ConfigureAwait(false);
 					default:
 						Cli.Error.WriteLine($"Unsupported relay mode '{hostOptions.Mode}'. Supported modes are 'smtp', 'audio', 'radio', 'record' and 'dispatch'.");
 						return 1;
@@ -263,14 +265,16 @@ namespace Resgrid.Audio.Relay.Console
 		{
 			var config = LoadAudioConfig(hostOptions.AudioConfigPath);
 			var apiOptions = ResolveResgridOptions(hostOptions, config);
-			ResgridV4ApiClient.Init(apiOptions);
+			using var apiClient = new ResgridV4ApiClient(apiOptions);
+			var healthApi = new HealthApi(apiClient);
+			var callsApi = new CallsApi(apiClient);
 
 			Logger logger = CreateLogger(config.Debug);
 			var audioStorage = new WatcherAudioStorage(logger);
 			var evaluator = new AudioEvaluator(logger);
 			var recorder = new AudioRecorder(evaluator, audioStorage);
 			var processor = new AudioProcessor(recorder, evaluator, audioStorage);
-			var comService = new ComService(logger, processor);
+			var comService = new ComService(logger, processor, apiClient, healthApi, callsApi);
 
 			evaluator.WatcherTriggered += (_, eventArgs) =>
 				Cli.WriteLine($"{DateTime.Now:G}: WATCHER TRIGGERED: {eventArgs.Watcher.Name}");
@@ -429,7 +433,7 @@ namespace Resgrid.Audio.Relay.Console
 		}
 
 		private static Task<int> RunRadioModeAsync(RelayHostOptions hostOptions, CancellationToken cancellationToken)
-			=> Voice.RadioMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationToken);
+			=> EngineVoice.RadioMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationToken);
 
 		private static async Task<int> TuneAsync(string[] args)
 		{
@@ -446,7 +450,7 @@ namespace Resgrid.Audio.Relay.Console
 			Cli.CancelKeyPress += cancelHandler;
 			try
 			{
-				return await Voice.RadioMode.RunTuneAsync(hostOptions, cancellationTokenSource.Token).ConfigureAwait(false);
+				return await EngineVoice.RadioMode.RunTuneAsync(hostOptions, cancellationTokenSource.Token).ConfigureAwait(false);
 			}
 			finally
 			{
