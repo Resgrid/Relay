@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using Microsoft.Extensions.DependencyInjection;
+using Resgrid.Audio.Relay.Services;
 using Resgrid.Audio.Relay.ViewModels;
 using Resgrid.Audio.Relay.Views;
 using Wpf.Ui.Abstractions;
@@ -97,7 +98,7 @@ namespace Resgrid.Audio.Relay
 			RestoreFromTray();
 		}
 
-		private void TrayQuit_OnClick(object sender, RoutedEventArgs e)
+		private async void TrayQuit_OnClick(object sender, RoutedEventArgs e)
 		{
 			var result = System.Windows.MessageBox.Show(
 				"Quit Resgrid Relay? Any running relay modes will be stopped.",
@@ -110,6 +111,19 @@ namespace Resgrid.Audio.Relay
 
 			_isExiting = true;
 			TrayIcon?.Dispose();
+
+			// Stop all running relay modes before shutting down — done here (not in App.OnExit,
+			// which is now synchronous) so the async teardown actually completes. Best-effort;
+			// the default await resumes on the UI thread so Shutdown() is called there.
+			try
+			{
+				await _services.GetRequiredService<RelayController>().StopAllAsync();
+			}
+			catch
+			{
+				// Proceed to shutdown regardless.
+			}
+
 			Application.Current.Shutdown();
 		}
 

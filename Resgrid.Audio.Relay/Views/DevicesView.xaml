@@ -40,6 +40,9 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        <TextBlock Text="No audio input devices found."
+                                   Opacity="0.5" FontStyle="Italic"
+                                   Visibility="{Binding InputDevices.Count, Converter={x:Static conv:CountToVisibilityConverter.ZeroVisible}}" />
                     </StackPanel>
                 </ui:Card>
 
@@ -54,6 +57,9 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        <TextBlock Text="No audio output devices found."
+                                   Opacity="0.5" FontStyle="Italic"
+                                   Visibility="{Binding OutputDevices.Count, Converter={x:Static conv:CountToVisibilityConverter.ZeroVisible}}" />
                     </StackPanel>
                 </ui:Card>
 

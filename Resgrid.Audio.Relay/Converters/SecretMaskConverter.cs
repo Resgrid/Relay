@@ -18,7 +18,8 @@ namespace Resgrid.Audio.Relay.Converters
 			var s = value as string;
 			if (string.IsNullOrEmpty(s))
 				return "";
-			return new string('•', Math.Min(Math.Max(s.Length, 8), 16));
+			// Fixed length regardless of the real secret length, so the mask never leaks size.
+			return new string('•', 8);
 		}
 
 		public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)

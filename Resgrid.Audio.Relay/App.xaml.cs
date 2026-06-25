@@ -118,18 +118,14 @@ namespace Resgrid.Audio.Relay
 			return services.BuildServiceProvider();
 		}
 
-		protected override async void OnExit(ExitEventArgs e)
+		protected override void OnExit(ExitEventArgs e)
 		{
 			try
 			{
-				if (_services != null)
-				{
-					var controller = _services.GetService<RelayController>();
-					if (controller != null)
-						await controller.StopAllAsync().ConfigureAwait(true);
-
-					_services.Dispose();
-				}
+				// Relay modes are stopped in the explicit quit flow (ShellWindow) before
+				// Shutdown(); OnExit now only disposes and flushes synchronously so it always
+				// runs to completion (an async-void OnExit could return before cleanup ran).
+				_services?.Dispose();
 			}
 			catch
 			{

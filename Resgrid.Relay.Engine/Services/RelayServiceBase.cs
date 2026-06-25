@@ -66,10 +66,12 @@ namespace Resgrid.Relay.Engine.Services
 					throw new InvalidOperationException($"The '{Mode}' relay service is already active (state: {_state}).");
 				previous = _state;
 				_state = RelayServiceState.Starting;
+				// Publish the CTS inside the same lock as the state change so a StopAsync arriving
+				// during the startup window cancels THIS source — no stop can slip through.
+				_cts = CancellationTokenSource.CreateLinkedTokenSource(token);
 			}
 			StateChanged?.Invoke(this, new RelayStateChangedEventArgs(previous, RelayServiceState.Starting));
 
-			_cts = CancellationTokenSource.CreateLinkedTokenSource(token);
 			try
 			{
 				TransitionTo(RelayServiceState.Running);
@@ -94,10 +96,23 @@ namespace Resgrid.Relay.Engine.Services
 
 		public Task StopAsync()
 		{
-			if (_state == RelayServiceState.Starting || _state == RelayServiceState.Running)
-				TransitionTo(RelayServiceState.Stopping);
-			try { _cts?.Cancel(); }
-			catch (ObjectDisposedException) { }
+			var previous = RelayServiceState.Stopped;
+			var transitioned = false;
+			lock (_sync)
+			{
+				if (_state == RelayServiceState.Starting || _state == RelayServiceState.Running)
+				{
+					previous = _state;
+					_state = RelayServiceState.Stopping;
+					transitioned = true;
+				}
+				// Cancel the captured CTS under the same lock StartAsync publishes it in, so a stop
+				// can't slip through the startup window. (Fire StateChanged outside the lock.)
+				try { _cts?.Cancel(); }
+				catch (ObjectDisposedException) { }
+			}
+			if (transitioned)
+				StateChanged?.Invoke(this, new RelayStateChangedEventArgs(previous, RelayServiceState.Stopping));
 			return Task.CompletedTask;
 		}
 

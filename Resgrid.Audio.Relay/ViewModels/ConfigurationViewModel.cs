@@ -454,9 +454,23 @@ namespace Resgrid.Audio.Relay.ViewModels
 				return;
 			}
 
-			// Apply on top of freshly loaded options so unedited/unknown fields survive.
-			var options = _configuration.Reload();
+			// Start from a disk-only snapshot (no RESGRID__RELAY__ env overrides) so unedited/
+			// unknown fields survive without baking environment values into the user config file.
+			var options = _configuration.LoadFromDisk();
 			ApplyToOptions(options);
+
+			// Validate the full Resgrid API contract (client secret + the grant-type-specific
+			// token/key requirements), not just the annotated fields, before persisting.
+			try
+			{
+				options.Resgrid.Validate();
+			}
+			catch (InvalidOperationException ex)
+			{
+				StatusMessage = $"Cannot save — {ex.Message}";
+				return;
+			}
+
 			_configuration.Save(options);
 
 			// Re-load so masked secrets reflect the now-stored values.
@@ -499,6 +513,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 			var options = _configuration.Current;
 			ApplyToOptions(options);
 
+			_tuneCts?.Dispose();
 			_tuneCts = new CancellationTokenSource();
 			IsTuning = true;
 			TuneStatus = "Tuning… key the radio to see levels.";
@@ -524,6 +539,10 @@ namespace Resgrid.Audio.Relay.ViewModels
 			finally
 			{
 				IsTuning = false;
+				// Dispose this session's CTS so repeated tune runs don't leak; null so a
+				// subsequent StopTune/Start sees no stale source.
+				_tuneCts?.Dispose();
+				_tuneCts = null;
 			}
 #else
 			TuneStatus = "Tuning is only available on Windows.";

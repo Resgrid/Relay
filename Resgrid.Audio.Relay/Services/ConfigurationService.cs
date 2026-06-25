@@ -30,13 +30,21 @@ namespace Resgrid.Audio.Relay.Services
 			return Current;
 		}
 
-		/// <summary>Persists <see cref="Current"/> to the per-user settings file.</summary>
-		public void Save()
+		/// <summary>
+		/// Returns a disk-only snapshot (appsettings + user.json, without <c>RESGRID__RELAY__</c>
+		/// env overrides) for use as the base when saving, so environment values aren't baked into
+		/// the file. Does not change <see cref="Current"/>.
+		/// </summary>
+		public RelayHostOptions LoadFromDisk()
 		{
-			RelayConfiguration.Save(Current);
+			return RelayConfiguration.LoadFromDisk();
 		}
 
-		/// <summary>Persists <paramref name="options"/> and adopts it as <see cref="Current"/>.</summary>
+		/// <summary>
+		/// Persists <paramref name="options"/> and adopts it as <see cref="Current"/>. The caller
+		/// must pass a disk-based model (build it from <see cref="LoadFromDisk"/>), never the
+		/// env-merged <see cref="Current"/>, so <c>RESGRID__RELAY__</c> overrides aren't written out.
+		/// </summary>
 		public void Save(RelayHostOptions options)
 		{
 			RelayConfiguration.Save(options);

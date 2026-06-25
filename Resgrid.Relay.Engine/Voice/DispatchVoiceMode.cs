@@ -54,9 +54,11 @@ namespace Resgrid.Relay.Engine.Voice
 
 			using var tts = new ResgridTtsClient(options.Tts, logger);
 
-			// TTS reachability is unverified until the first synthesis actually reaches the service,
-			// so leave status.Tts as the caller set it (Connecting) and confirm Connected on the first
-			// successful announcement below.
+			// TTS reachability is unverified until the first synthesis actually reaches the service:
+			// report it as unprobed (Unknown) rather than a transitional Connecting that would stick,
+			// and confirm Connected on the first successful announcement below.
+			if (status != null)
+				status.Tts = ConnectionState.Unknown;
 
 			var service = new DispatchToneOutService(tts, new ToneGenerator(), options.DispatchVoice.Tone, logger);
 

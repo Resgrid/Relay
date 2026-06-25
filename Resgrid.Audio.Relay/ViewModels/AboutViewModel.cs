@@ -81,9 +81,6 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private static bool ReadRunAtStartup()
 		{
 #if NET10_0_WINDOWS
-			if (!OperatingSystem.IsWindows())
-				return false;
-
 			try
 			{
 				using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
@@ -101,9 +98,6 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private static void WriteRunAtStartup(bool enabled)
 		{
 #if NET10_0_WINDOWS
-			if (!OperatingSystem.IsWindows())
-				return;
-
 			try
 			{
 				using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true);

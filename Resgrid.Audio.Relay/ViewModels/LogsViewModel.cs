@@ -31,6 +31,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private readonly CancellationTokenSource _cts = new CancellationTokenSource();
 		private readonly object _pendingGate = new object();
 		private readonly List<LogRecord> _pending = new List<LogRecord>();
+		private readonly List<LogRecord> _history = new List<LogRecord>();
 		private bool _disposed;
 
 		public LogsViewModel(UiLogBus bus)
@@ -116,12 +117,19 @@ namespace Resgrid.Audio.Relay.ViewModels
 			var appendedVisible = false;
 			foreach (var record in batch)
 			{
-				if (record.Level < MinimumLevel)
-					continue;
+				// Retain every record so changing the level filter can rebuild the visible list.
+				_history.Add(record);
 
-				Entries.Add(record);
-				appendedVisible = true;
+				if (record.Level >= MinimumLevel)
+				{
+					Entries.Add(record);
+					appendedVisible = true;
+				}
 			}
+
+			// Ring-buffer both the retained history and the visible list to the cap (drop oldest).
+			if (_history.Count > MaxEntries)
+				_history.RemoveRange(0, _history.Count - MaxEntries);
 
 			while (Entries.Count > MaxEntries)
 				Entries.RemoveAt(0);
@@ -130,9 +138,34 @@ namespace Resgrid.Audio.Relay.ViewModels
 				EntriesAppended?.Invoke(this, EventArgs.Empty);
 		}
 
+		/// <summary>
+		/// Rebuild the visible list from retained history when the level filter changes, so
+		/// the filter applies to prior records (not just newly appended batches).
+		/// </summary>
+		partial void OnMinimumLevelChanged(LogEventLevel value)
+		{
+			Entries.Clear();
+			foreach (var record in _history)
+			{
+				if (record.Level >= value)
+					Entries.Add(record);
+			}
+		}
+
 		[RelayCommand]
 		private void Clear()
 		{
+			// Fully discard the current backlog, not just the visible list: drain anything still
+			// queued in the bus and the pump's pending buffer so it isn't re-appended on the next
+			// flush. (ChannelReader.TryRead is safe to call concurrently with the pump.)
+			while (_bus.Reader.TryRead(out _))
+			{
+			}
+			lock (_pendingGate)
+			{
+				_pending.Clear();
+			}
+			_history.Clear();
 			Entries.Clear();
 		}
 

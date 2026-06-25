@@ -48,14 +48,26 @@ namespace Resgrid.Relay.Engine.Configuration
 		/// and <c>Resgrid.TokenCachePath</c> values are resolved against the base directory,
 		/// mirroring the console's <c>LoadHostOptions</c>.
 		/// </summary>
-		public static RelayHostOptions Load()
+		public static RelayHostOptions Load() => Load(includeEnvironment: true);
+
+		/// <summary>
+		/// Loads only the on-disk layers (appsettings + relay.user.json), WITHOUT the
+		/// <c>RESGRID__RELAY__</c> environment overrides. Use this as the base when saving so
+		/// ops/container env values are never persisted into the per-user config file.
+		/// </summary>
+		public static RelayHostOptions LoadFromDisk() => Load(includeEnvironment: false);
+
+		private static RelayHostOptions Load(bool includeEnvironment)
 		{
-			var configuration = new ConfigurationBuilder()
+			var builder = new ConfigurationBuilder()
 				.SetBasePath(AppContext.BaseDirectory)
 				.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
-				.AddJsonFile(UserConfigPath, optional: true, reloadOnChange: false)
-				.AddEnvironmentVariables(EnvPrefix)
-				.Build();
+				.AddJsonFile(UserConfigPath, optional: true, reloadOnChange: false);
+
+			if (includeEnvironment)
+				builder.AddEnvironmentVariables(EnvPrefix);
+
+			var configuration = builder.Build();
 
 			var options = new RelayHostOptions();
 			configuration.Bind(options);
@@ -74,9 +86,11 @@ namespace Resgrid.Relay.Engine.Configuration
 		}
 
 		/// <summary>
-		/// Persists <paramref name="options"/> to <see cref="UserConfigPath"/> as indented
-		/// JSON, creating the containing directory if needed. Does not write environment
-		/// overrides — those continue to win on the next <see cref="Load"/>.
+		/// Persists <paramref name="options"/> to <see cref="UserConfigPath"/> as indented JSON,
+		/// creating the containing directory if needed. The object is serialized verbatim, so callers
+		/// MUST pass the user-owned model — build it from <see cref="LoadFromDisk"/> (appsettings +
+		/// user.json), NOT the env-merged <see cref="Load"/> result — otherwise <c>RESGRID__RELAY__</c>
+		/// overrides get baked into the user file. Env overrides still win on the next <see cref="Load"/>.
 		/// </summary>
 		public static void Save(RelayHostOptions options)
 		{
@@ -88,7 +102,13 @@ namespace Resgrid.Relay.Engine.Configuration
 				Directory.CreateDirectory(directory);
 
 			var json = JsonSerializer.Serialize(options, new JsonSerializerOptions { WriteIndented = true });
-			File.WriteAllText(UserConfigPath, json);
+
+			// Atomic write: serialize to a temp file in the same directory (so the replace is a
+			// same-volume rename), then move it over the target only after the write completes, so
+			// relay.user.json is never left partially written if the process dies mid-write.
+			var tempPath = UserConfigPath + ".tmp";
+			File.WriteAllText(tempPath, json);
+			File.Move(tempPath, UserConfigPath, overwrite: true);
 		}
 
 		/// <summary>

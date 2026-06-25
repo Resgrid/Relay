@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -88,7 +89,21 @@ namespace Resgrid.Audio.Relay.Controls
 
 		private static void OnValuesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
 		{
-			((Sparkline)d).Redraw();
+			var sparkline = (Sparkline)d;
+
+			// Detach from the previous collection and subscribe to the new one so in-place
+			// changes to an ObservableCollection (not just reassignment) trigger a redraw.
+			if (e.OldValue is INotifyCollectionChanged oldCollection)
+				oldCollection.CollectionChanged -= sparkline.OnValuesCollectionChanged;
+			if (e.NewValue is INotifyCollectionChanged newCollection)
+				newCollection.CollectionChanged += sparkline.OnValuesCollectionChanged;
+
+			sparkline.Redraw();
+		}
+
+		private void OnValuesCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+		{
+			Redraw();
 		}
 
 		private static void OnStrokeChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
