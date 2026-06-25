@@ -20,7 +20,7 @@ namespace Resgrid.Relay.Engine.Services
 
 		protected override async Task ExecuteAsync(CancellationToken token)
 		{
-			await AudioImportMode.RunAsync(Options, Logger, token, MutableStatus).ConfigureAwait(false);
+			ThrowIfFailed(await AudioImportMode.RunAsync(Options, Logger, token, MutableStatus).ConfigureAwait(false));
 		}
 	}
 }

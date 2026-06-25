@@ -136,10 +136,18 @@ namespace Resgrid.Audio.Core.Radio
 			_emergency?.Process(frame);
 
 			bool open = IsSquelchOpen(frame);
-			SetReceiving(open);
 
+			// Only count as "receiving" when RX audio is actually forwarded to the channel —
+			// not merely when squelch opens, and not while AntiLoop suppresses forwarding during
+			// transmit (a squelch opening then is our own TX feedback, not real RX, and counting
+			// it would make OnChannelAudio's anti-loop gate suppress the in-progress transmit).
 			if (!open || (_settings.AntiLoop && _transmitting))
+			{
+				SetReceiving(false);
 				return;
+			}
+
+			SetReceiving(true);
 
 			// Copy + condition the audio before publishing.
 			var outgoing = (short[])frame.Clone();

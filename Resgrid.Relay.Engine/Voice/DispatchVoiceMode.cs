@@ -54,9 +54,11 @@ namespace Resgrid.Relay.Engine.Voice
 
 			using var tts = new ResgridTtsClient(options.Tts, logger);
 
-			// TTS client created — the Resgrid TTS service is reachable.
+			// TTS reachability is unverified until the first synthesis actually reaches the service:
+			// report it as unprobed (Unknown) rather than a transitional Connecting that would stick,
+			// and confirm Connected on the first successful announcement below.
 			if (status != null)
-				status.Tts = ConnectionState.Connected;
+				status.Tts = ConnectionState.Unknown;
 
 			var service = new DispatchToneOutService(tts, new ToneGenerator(), options.DispatchVoice.Tone, logger);
 
@@ -81,11 +83,42 @@ namespace Resgrid.Relay.Engine.Voice
 
 						var text = VoiceModeRuntime.FormatCallAnnouncement(call);
 						logger.Information("Toning out new call {CallId}", call.CallId);
+						// Build (TTS synthesis) and publish (LiveKit) are tracked separately so a failure is
+						// attributed to the right subsystem instead of always blaming TTS. AnnounceAsync does
+						// both internally, so call its public BuildAnnouncementAsync step explicitly here.
+						short[] audio;
 						try
 						{
-							await service.AnnounceAsync(publisher, text, cancellationToken).ConfigureAwait(false);
-							// Only mark the call handled once the announcement actually succeeds,
-							// so a failed tone-out is retried on the next poll instead of being lost.
+							audio = await service.BuildAnnouncementAsync(text, cancellationToken).ConfigureAwait(false);
+							// A successful build means a real TTS synthesis call reached the service.
+							if (status != null)
+								status.Tts = ConnectionState.Connected;
+						}
+						catch (OperationCanceledException)
+						{
+							throw;
+						}
+						catch (Exception ex)
+						{
+							// TTS synthesis failed → mark TTS unreachable. The call stays unseen and is
+							// retried on the next poll; LiveKit status is untouched (it's not the fault).
+							if (status != null)
+								status.Tts = ConnectionState.Disconnected;
+							logger.Error(ex, "TTS synthesis failed for call {CallId}; will retry next poll", call.CallId);
+							continue;
+						}
+
+						try
+						{
+							// CaptureFrameAsync back-pressures on the AudioSource queue, so this paces
+							// roughly in real time as the audio is transmitted.
+							await publisher.WriteAsync(audio, cancellationToken).ConfigureAwait(false);
+							await publisher.FlushAsync(cancellationToken).ConfigureAwait(false);
+							// Publish reached LiveKit (recover the pill if a prior publish had failed).
+							if (status != null)
+								status.LiveKit = ConnectionState.Connected;
+							// Only mark the call handled once the whole tone-out succeeds, so a failed
+							// publish is retried on the next poll instead of being lost.
 							seen.Add(call.CallId);
 						}
 						catch (OperationCanceledException)
@@ -94,9 +127,12 @@ namespace Resgrid.Relay.Engine.Voice
 						}
 						catch (Exception ex)
 						{
-							// Per-call failure: log and keep going so one bad announcement does not
-							// block the rest of the batch; the call stays unseen and is retried next poll.
-							logger.Error(ex, "Failed to tone out call {CallId}; will retry next poll", call.CallId);
+							// Publish failed → this is a LiveKit fault, not TTS (synthesis already
+							// succeeded above). Reflect it on LiveKit so the operator looks in the right
+							// place; the call stays unseen and is retried on the next poll.
+							if (status != null)
+								status.LiveKit = ConnectionState.Disconnected;
+							logger.Error(ex, "Failed to publish tone-out for call {CallId}; will retry next poll", call.CallId);
 						}
 					}
 				}

@@ -21,7 +21,7 @@ namespace Resgrid.Relay.Engine.Services
 		{
 			MutableStatus.LiveKit = ConnectionState.Connecting;
 			MutableStatus.Tts = ConnectionState.Connecting;
-			await DispatchVoiceMode.RunAsync(Options, Logger, token, MutableStatus).ConfigureAwait(false);
+			ThrowIfFailed(await DispatchVoiceMode.RunAsync(Options, Logger, token, MutableStatus).ConfigureAwait(false));
 		}
 	}
 }

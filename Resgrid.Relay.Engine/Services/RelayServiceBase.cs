@@ -43,18 +43,49 @@ namespace Resgrid.Relay.Engine.Services
 		/// </summary>
 		protected abstract Task ExecuteAsync(CancellationToken token);
 
+		/// <summary>
+		/// Faults the service when a mode runner returns a non-zero exit code (a pre-flight
+		/// failure), by throwing — <see cref="StartAsync"/> catches it and transitions to
+		/// <see cref="RelayServiceState.Faulted"/> rather than silently reporting success.
+		/// </summary>
+		protected void ThrowIfFailed(int exitCode)
+		{
+			if (exitCode != 0)
+				throw new InvalidOperationException($"The '{Mode}' relay mode exited with code {exitCode}.");
+		}
+
 		public async Task StartAsync(CancellationToken token)
 		{
-			_cts = CancellationTokenSource.CreateLinkedTokenSource(token);
-			TransitionTo(RelayServiceState.Starting);
+			// Reject re-entrant starts: only (re)start from a terminal state, and claim Starting
+			// atomically before creating the CTS so two concurrent/overlapping starts can't run
+			// ExecuteAsync twice or orphan the cancellation source (leaving the run unstoppable).
+			RelayServiceState previous;
+			lock (_sync)
+			{
+				if (_state == RelayServiceState.Starting || _state == RelayServiceState.Running || _state == RelayServiceState.Stopping)
+					throw new InvalidOperationException($"The '{Mode}' relay service is already active (state: {_state}).");
+				previous = _state;
+				_state = RelayServiceState.Starting;
+				// Publish the CTS inside the same lock as the state change so a StopAsync arriving
+				// during the startup window cancels THIS source — no stop can slip through.
+				_cts = CancellationTokenSource.CreateLinkedTokenSource(token);
+			}
+			StateChanged?.Invoke(this, new RelayStateChangedEventArgs(previous, RelayServiceState.Starting));
+
 			try
 			{
-				TransitionTo(RelayServiceState.Running);
+				// Only advance to Running if a concurrent StopAsync hasn't already moved us out of
+				// Starting during the startup window (it sets Stopping + cancels _cts under _sync).
+				// Atomic, so a stop that wins the race keeps Stopping/Stopped instead of reverting.
+				TryTransition(RelayServiceState.Starting, RelayServiceState.Running);
 				await ExecuteAsync(_cts.Token).ConfigureAwait(false);
 				TransitionTo(RelayServiceState.Stopped);
 			}
-			catch (OperationCanceledException)
+			catch (OperationCanceledException) when (_cts.IsCancellationRequested)
 			{
+				// Graceful stop: only when OUR shutdown token was actually requested. A cancellation
+				// from elsewhere (e.g. a dependency/HttpClient timeout) is a real fault and flows to
+				// the catch below so Program surfaces a failure exit code.
 				TransitionTo(RelayServiceState.Stopped);
 			}
 			catch (Exception ex)
@@ -68,10 +99,23 @@ namespace Resgrid.Relay.Engine.Services
 
 		public Task StopAsync()
 		{
-			if (_state == RelayServiceState.Starting || _state == RelayServiceState.Running)
-				TransitionTo(RelayServiceState.Stopping);
-			try { _cts?.Cancel(); }
-			catch (ObjectDisposedException) { }
+			var previous = RelayServiceState.Stopped;
+			var transitioned = false;
+			lock (_sync)
+			{
+				if (_state == RelayServiceState.Starting || _state == RelayServiceState.Running)
+				{
+					previous = _state;
+					_state = RelayServiceState.Stopping;
+					transitioned = true;
+				}
+				// Cancel the captured CTS under the same lock StartAsync publishes it in, so a stop
+				// can't slip through the startup window. (Fire StateChanged outside the lock.)
+				try { _cts?.Cancel(); }
+				catch (ObjectDisposedException) { }
+			}
+			if (transitioned)
+				StateChanged?.Invoke(this, new RelayStateChangedEventArgs(previous, RelayServiceState.Stopping));
 			return Task.CompletedTask;
 		}
 
@@ -94,6 +138,24 @@ namespace Resgrid.Relay.Engine.Services
 				_state = next;
 			}
 			StateChanged?.Invoke(this, new RelayStateChangedEventArgs(prev, next, error));
+		}
+
+		/// <summary>
+		/// Atomically transitions <see cref="_state"/> from <paramref name="from"/> to
+		/// <paramref name="to"/> only if it is currently <paramref name="from"/>, returning whether
+		/// the change happened. Lets the Running transition be skipped when a concurrent StopAsync
+		/// has already left Starting, so the stop isn't overwritten.
+		/// </summary>
+		private bool TryTransition(RelayServiceState from, RelayServiceState to)
+		{
+			lock (_sync)
+			{
+				if (_state != from)
+					return false;
+				_state = to;
+			}
+			StateChanged?.Invoke(this, new RelayStateChangedEventArgs(from, to));
+			return true;
 		}
 	}
 }

@@ -1,0 +1,291 @@
+<UserControl x:Class="Resgrid.Audio.Relay.Views.ConfigurationView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:vm="clr-namespace:Resgrid.Audio.Relay.ViewModels"
+             xmlns:ctrl="clr-namespace:Resgrid.Audio.Relay.Controls"
+             xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:ConfigurationViewModel}"
+             d:DesignHeight="450" d:DesignWidth="800">
+    <UserControl.Resources>
+        <conv:BoolToBrushConverter x:Key="SquelchBrush"
+                                   TrueBrush="{x:Static conv:StatusBrushes.Running}"
+                                   FalseBrush="{x:Static conv:StatusBrushes.Inactive}" />
+        <Style TargetType="TextBlock" x:Key="FieldLabel">
+            <Setter Property="Margin" Value="0,8,0,2" />
+            <Setter Property="Opacity" Value="0.8" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style TargetType="ui:Card" x:Key="Section">
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="Padding" Value="18" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="{Binding Title}" FontSize="24" FontWeight="SemiBold" />
+
+        <!-- Env-override banner -->
+        <ui:InfoBar Grid.Row="1" Margin="0,8,0,8"
+                    Severity="Warning"
+                    IsOpen="{Binding HasEnvOverrides, Mode=OneWay}"
+                    IsClosable="False"
+                    Title="Environment overrides active"
+                    Message="One or more RESGRID__RELAY__ environment variables override these settings and win on reload." />
+
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel MaxWidth="720" HorizontalAlignment="Left">
+
+                <!-- General -->
+                <ui:Card Style="{StaticResource Section}">
+                    <StackPanel>
+                        <TextBlock Text="General" FontWeight="SemiBold" FontSize="15" />
+                        <TextBlock Text="Mode" Style="{StaticResource FieldLabel}" />
+                        <ComboBox ItemsSource="{Binding AvailableModes}" SelectedItem="{Binding Mode, Mode=TwoWay}" Width="220" HorizontalAlignment="Left" />
+                        <TextBlock Margin="0,8,0,0" Opacity="0.5" FontSize="11"
+                                   Text="{Binding UserConfigPath, StringFormat=Settings file: {0}}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Resgrid API -->
+                <ui:Card Style="{StaticResource Section}">
+                    <StackPanel>
+                        <TextBlock Text="Resgrid API" FontWeight="SemiBold" FontSize="15" />
+
+                        <TextBlock Text="Base URL" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding ResgridBaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, ValidatesOnNotifyDataErrors=True}" />
+
+                        <TextBlock Text="Client Id" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding ResgridClientId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, ValidatesOnNotifyDataErrors=True}" />
+
+                        <TextBlock Text="Grant Type" Style="{StaticResource FieldLabel}" />
+                        <ComboBox ItemsSource="{Binding GrantTypes}" SelectedItem="{Binding ResgridGrantType, Mode=TwoWay}" Width="260" HorizontalAlignment="Left" />
+
+                        <CheckBox Content="Reveal secrets" Margin="0,12,0,0" IsChecked="{Binding RevealSecrets, Mode=TwoWay}" />
+
+                        <TextBlock Text="Client Secret" Style="{StaticResource FieldLabel}" />
+                        <Grid>
+                            <ui:TextBox Text="{Binding ResgridClientSecret, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}" />
+                            <TextBox IsReadOnly="True"
+                                     Text="{Binding ResgridClientSecret, Converter={x:Static conv:SecretMaskConverter.Instance}, Mode=OneWay}"
+                                     Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityInvertedConverter.Instance}}" />
+                        </Grid>
+
+                        <TextBlock Text="Refresh Token" Style="{StaticResource FieldLabel}" />
+                        <Grid>
+                            <ui:TextBox Text="{Binding ResgridRefreshToken, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}" />
+                            <TextBox IsReadOnly="True"
+                                     Text="{Binding ResgridRefreshToken, Converter={x:Static conv:SecretMaskConverter.Instance}, Mode=OneWay}"
+                                     Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityInvertedConverter.Instance}}" />
+                        </Grid>
+
+                        <TextBlock Text="System API Key" Style="{StaticResource FieldLabel}" />
+                        <Grid>
+                            <ui:TextBox Text="{Binding ResgridSystemApiKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}" />
+                            <TextBox IsReadOnly="True"
+                                     Text="{Binding ResgridSystemApiKey, Converter={x:Static conv:SecretMaskConverter.Instance}, Mode=OneWay}"
+                                     Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityInvertedConverter.Instance}}" />
+                        </Grid>
+
+                        <TextBlock Text="Department Id (hosted/system-key)" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding ResgridDepartmentId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- SMTP + Redis -->
+                <ui:Card Style="{StaticResource Section}">
+                    <StackPanel>
+                        <TextBlock Text="SMTP" FontWeight="SemiBold" FontSize="15" />
+                        <TextBlock Text="Server name" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding SmtpServerName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Port" Style="{StaticResource FieldLabel}" />
+                        <ui:NumberBox Value="{Binding SmtpPort, Mode=TwoWay}" Width="160" HorizontalAlignment="Left" />
+                        <TextBlock Text="Department address domains (comma-separated)" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding SmtpDepartmentAddressDomains, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Group address domains (comma-separated)" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding SmtpGroupAddressDomains, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <CheckBox Content="Hosted (multi-department) mode" Margin="0,10,0,0" IsChecked="{Binding SmtpHostedMode, Mode=TwoWay}" />
+
+                        <TextBlock Text="Redis lookup cache" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <CheckBox Content="Enable Redis cache" Margin="0,6,0,0" IsChecked="{Binding RedisEnabled, Mode=TwoWay}" />
+                        <TextBlock Text="Connection string" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding RedisConnectionString, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="TTL (minutes)" Style="{StaticResource FieldLabel}" />
+                        <ui:NumberBox Value="{Binding RedisTtlMinutes, Mode=TwoWay}" Width="160" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Voice -->
+                <ui:Card Style="{StaticResource Section}">
+                    <StackPanel>
+                        <TextBlock Text="Voice (radio / record / dispatch)" FontWeight="SemiBold" FontSize="15" />
+                        <TextBlock Text="Channel" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding VoiceChannel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Department Id" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding VoiceDepartmentId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <CheckBox Content="Enforce concurrent-seat limit" Margin="0,10,0,0" IsChecked="{Binding VoiceEnforceSeatLimit, Mode=TwoWay}" />
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Radio + Squelch tune + Emergency -->
+                <ui:Card Style="{StaticResource Section}">
+                    <StackPanel>
+                        <TextBlock Text="Radio (Windows)" FontWeight="SemiBold" FontSize="15" />
+                        <TextBlock Text="Input device" Style="{StaticResource FieldLabel}" />
+                        <ui:NumberBox Value="{Binding RadioInputDevice, Mode=TwoWay}" Width="160" HorizontalAlignment="Left" />
+                        <TextBlock Text="Output device (-1 = default)" Style="{StaticResource FieldLabel}" />
+                        <ui:NumberBox Value="{Binding RadioOutputDevice, Mode=TwoWay}" Width="160" HorizontalAlignment="Left" />
+                        <TextBlock Text="PTT method (Vox | SerialRts | SerialDtr | Cm108)" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding RadioPttMethod, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Serial port" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding RadioSerialPort, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                        <!-- Squelch -->
+                        <TextBlock Text="Squelch (anti-static gate)" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock Text="Mode (Off | Vox | Carrier | Ctcss)" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding SquelchMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="220" HorizontalAlignment="Left" />
+                        <TextBlock Text="Open dBFS" Style="{StaticResource FieldLabel}" />
+                        <ui:NumberBox Value="{Binding SquelchOpenDbfs, Mode=TwoWay}" Width="160" HorizontalAlignment="Left" />
+                        <TextBlock Text="Close dBFS" Style="{StaticResource FieldLabel}" />
+                        <ui:NumberBox Value="{Binding SquelchCloseDbfs, Mode=TwoWay}" Width="160" HorizontalAlignment="Left" />
+                        <TextBlock Text="Hang (ms)" Style="{StaticResource FieldLabel}" />
+                        <ui:NumberBox Value="{Binding SquelchHangMs, Mode=TwoWay}" Width="160" HorizontalAlignment="Left" />
+
+                        <!-- Live tune meter -->
+                        <Border Margin="0,12,0,0" Padding="12" CornerRadius="4" Background="#22000000">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:Button Content="{Binding IsTuning, Converter={x:Static conv:TuneButtonTextConverter.Instance}}"
+                                               Appearance="Secondary"
+                                               IsEnabled="{Binding CanTune}"
+                                               Command="{Binding ToggleTuneCommand}" />
+                                    <Border CornerRadius="9" Padding="8,2" Margin="12,0,0,0" VerticalAlignment="Center"
+                                            Background="{Binding TuneSquelchOpen, Converter={StaticResource SquelchBrush}}">
+                                        <TextBlock Foreground="White" FontSize="11"
+                                                   Text="{Binding TuneSquelchOpen, Converter={x:Static conv:SquelchTextConverter.Instance}}" />
+                                    </Border>
+                                </StackPanel>
+                                <ctrl:LevelMeter Dbfs="{Binding TuneDbfs}" Margin="0,8,0,0" Height="16" />
+                                <TextBlock Text="{Binding TuneStatus}" Opacity="0.6" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Emergency -->
+                        <TextBlock Text="Emergency signaling" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <CheckBox Content="Detect MDC-1200" Margin="0,6,0,0" IsChecked="{Binding EmergencyDetectMdc1200, Mode=TwoWay}" />
+                        <CheckBox Content="Detect emergency tones" Margin="0,4,0,0" IsChecked="{Binding EmergencyDetectTones, Mode=TwoWay}" />
+                        <CheckBox Content="Create high-priority call on detect" Margin="0,4,0,0" IsChecked="{Binding EmergencyCreateCall, Mode=TwoWay}" />
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Recorder + S3 -->
+                <ui:Card Style="{StaticResource Section}">
+                    <StackPanel>
+                        <TextBlock Text="Recorder" FontWeight="SemiBold" FontSize="15" />
+                        <TextBlock Text="Channel (or 'all')" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding RecorderChannel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Store (local | s3 | both)" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding RecorderStore, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="220" HorizontalAlignment="Left" />
+                        <TextBlock Text="Local path" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding RecorderLocalPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                        <TextBlock Text="S3 storage" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock Text="Endpoint" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding S3Endpoint, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Bucket" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding S3Bucket, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Region" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding S3Region, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Access key" Style="{StaticResource FieldLabel}" />
+                        <Grid>
+                            <ui:TextBox Text="{Binding S3AccessKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}" />
+                            <TextBox IsReadOnly="True"
+                                     Text="{Binding S3AccessKey, Converter={x:Static conv:SecretMaskConverter.Instance}, Mode=OneWay}"
+                                     Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityInvertedConverter.Instance}}" />
+                        </Grid>
+                        <TextBlock Text="Secret key" Style="{StaticResource FieldLabel}" />
+                        <Grid>
+                            <ui:TextBox Text="{Binding S3SecretKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}" />
+                            <TextBox IsReadOnly="True"
+                                     Text="{Binding S3SecretKey, Converter={x:Static conv:SecretMaskConverter.Instance}, Mode=OneWay}"
+                                     Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityInvertedConverter.Instance}}" />
+                        </Grid>
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Dispatch voice + TTS -->
+                <ui:Card Style="{StaticResource Section}">
+                    <StackPanel>
+                        <TextBlock Text="Dispatch tone-out" FontWeight="SemiBold" FontSize="15" />
+                        <TextBlock Text="Channel" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding DispatchChannel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Poll interval (seconds)" Style="{StaticResource FieldLabel}" />
+                        <ui:NumberBox Value="{Binding DispatchPollSeconds, Mode=TwoWay}" Width="160" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="TTS" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock Text="Service base URL" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding TtsServiceBaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Voice id" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding TtsVoice, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Speed (WPM, 0 = default)" Style="{StaticResource FieldLabel}" />
+                        <ui:NumberBox Value="{Binding TtsSpeed, Mode=TwoWay}" Width="160" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Telemetry -->
+                <ui:Card Style="{StaticResource Section}">
+                    <StackPanel>
+                        <TextBlock Text="Telemetry" FontWeight="SemiBold" FontSize="15" />
+                        <TextBlock Text="Environment" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding TelemetryEnvironment, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Sentry DSN" Style="{StaticResource FieldLabel}" />
+                        <Grid>
+                            <ui:TextBox Text="{Binding SentryDsn, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}" />
+                            <TextBox IsReadOnly="True"
+                                     Text="{Binding SentryDsn, Converter={x:Static conv:SecretMaskConverter.Instance}, Mode=OneWay}"
+                                     Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityInvertedConverter.Instance}}" />
+                        </Grid>
+                        <TextBlock Text="Countly URL" Style="{StaticResource FieldLabel}" />
+                        <ui:TextBox Text="{Binding CountlyUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="Countly app key" Style="{StaticResource FieldLabel}" />
+                        <Grid>
+                            <ui:TextBox Text="{Binding CountlyAppKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}" />
+                            <TextBox IsReadOnly="True"
+                                     Text="{Binding CountlyAppKey, Converter={x:Static conv:SecretMaskConverter.Instance}, Mode=OneWay}"
+                                     Visibility="{Binding RevealSecrets, Converter={x:Static conv:BoolToVisibilityInvertedConverter.Instance}}" />
+                        </Grid>
+                    </StackPanel>
+                </ui:Card>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Save / Reload bar -->
+        <Border Grid.Row="3" Padding="0,12,0,0">
+            <Grid>
+                <TextBlock Text="{Binding StatusMessage}" Opacity="0.7" VerticalAlignment="Center" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <ui:Button Content="Reload" Appearance="Secondary" Margin="0,0,8,0" Command="{Binding ReloadCommand}" />
+                    <ui:Button Content="Save" Appearance="Primary" Command="{Binding SaveCommand}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

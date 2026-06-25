@@ -21,7 +21,7 @@ namespace Resgrid.Relay.Engine.Services
 		protected override async Task ExecuteAsync(CancellationToken token)
 		{
 			MutableStatus.LiveKit = ConnectionState.Connecting;
-			await RadioMode.RunAsync(Options, Logger, token, MutableStatus).ConfigureAwait(false);
+			ThrowIfFailed(await RadioMode.RunAsync(Options, Logger, token, MutableStatus).ConfigureAwait(false));
 		}
 	}
 }

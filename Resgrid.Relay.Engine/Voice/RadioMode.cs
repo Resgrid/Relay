@@ -66,9 +66,9 @@ namespace Resgrid.Relay.Engine.Voice
 			var (mdc, emergency, alertSink) = BuildSignaling(options.Radio.Emergency, logger, callsApi);
 
 			await using var bridge = new RadioBridge(device, ptt, carrier, radioSettings, logger, mdc, emergency, alertSink);
-			await bridge.StartAsync(session, cancellationToken).ConfigureAwait(false);
 
-			// Mirror the bridge's live TX/RX state onto the status surface.
+			// Mirror the bridge's live TX/RX state onto the status surface — wire this BEFORE
+			// StartAsync so no initial transmit/receive flip is missed.
 			// note: squelch open-state and input dBFS live inside RadioBridge in radio mode
 			// and are not exposed, so InputDbfs/SquelchOpen are intentionally left unwired here.
 			if (status != null)
@@ -77,6 +77,8 @@ namespace Resgrid.Relay.Engine.Voice
 					status.Transmitting = bridge.Transmitting;
 					status.Receiving = bridge.Receiving;
 				};
+
+			await bridge.StartAsync(session, cancellationToken).ConfigureAwait(false);
 
 			TransmissionRecorder recorder = null;
 			List<IDisposable> recorderDisposables = null;

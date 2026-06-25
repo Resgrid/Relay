@@ -8,7 +8,7 @@ using DtmfDetection;
 using DtmfDetection.NAudio;
 using NAudio.Wave;
 using Resgrid.Audio.Core.Events;
-using Serilog.Core;
+using Serilog;
 
 namespace Resgrid.Audio.Core
 {
@@ -29,7 +29,7 @@ namespace Resgrid.Audio.Core
 	public class AudioEvaluator : IAudioEvaluator
 	{
 		private static Object _lock = new Object();
-		private readonly Logger _logger;
+		private readonly ILogger _logger;
 
 		private Config _config;
 		private List<DtmfTone> _dtmfTone;
@@ -40,7 +40,7 @@ namespace Resgrid.Audio.Core
 		public event EventHandler<EvaluatorEventArgs> EvaluatorFinished;
 		public event EventHandler<WatcherEventArgs> WatcherTriggered;
 
-		public AudioEvaluator(Logger logger)
+		public AudioEvaluator(ILogger logger)
 		{
 			_logger = logger;
 

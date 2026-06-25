@@ -17,7 +17,21 @@ namespace Resgrid.Relay.Engine.Services
 			if (options == null)
 				throw new ArgumentNullException(nameof(options));
 
-			var mode = (options.Mode ?? "smtp").Trim().ToLowerInvariant();
+			// Only a null Mode falls back to the default; an explicitly blank/whitespace-only value
+			// is a configuration error, not a silent default to smtp.
+			string mode;
+			if (options.Mode == null)
+			{
+				mode = "smtp";
+			}
+			else
+			{
+				mode = options.Mode.Trim().ToLowerInvariant();
+				if (mode.Length == 0)
+					throw new ArgumentException(
+						"A relay mode must be configured; options.Mode was blank. Supported modes are 'smtp', 'audio', 'radio', 'record' and 'dispatch'.",
+						nameof(options));
+			}
 
 			switch (mode)
 			{

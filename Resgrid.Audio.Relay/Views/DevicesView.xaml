@@ -1,0 +1,102 @@
+<UserControl x:Class="Resgrid.Audio.Relay.Views.DevicesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:vm="clr-namespace:Resgrid.Audio.Relay.ViewModels"
+             xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:DevicesViewModel}"
+             d:DesignHeight="450" d:DesignWidth="800">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="{Binding Title}" FontSize="24" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding LastRefreshed}" Opacity="0.55" FontSize="12"
+                           VerticalAlignment="Bottom" Margin="12,0,0,4" />
+            </StackPanel>
+            <ui:Button Content="Refresh"
+                       Icon="{ui:SymbolIcon ArrowClockwise24}"
+                       HorizontalAlignment="Right"
+                       Command="{Binding RefreshCommand}" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" Margin="0,16,0,0" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- Audio input devices -->
+                <ui:Card Padding="16">
+                    <StackPanel>
+                        <TextBlock Text="Audio Input (radio receive)" FontWeight="SemiBold" Margin="0,0,0,8" />
+                        <ItemsControl ItemsSource="{Binding InputDevices}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Display}" Margin="0,2" FontFamily="Consolas" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="No audio input devices found."
+                                   Opacity="0.5" FontStyle="Italic"
+                                   Visibility="{Binding InputDevices.Count, Converter={x:Static conv:CountToVisibilityConverter.ZeroVisible}}" />
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Audio output devices -->
+                <ui:Card Padding="16" Margin="0,12,0,0">
+                    <StackPanel>
+                        <TextBlock Text="Audio Output (radio transmit)" FontWeight="SemiBold" Margin="0,0,0,8" />
+                        <ItemsControl ItemsSource="{Binding OutputDevices}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Display}" Margin="0,2" FontFamily="Consolas" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="No audio output devices found."
+                                   Opacity="0.5" FontStyle="Italic"
+                                   Visibility="{Binding OutputDevices.Count, Converter={x:Static conv:CountToVisibilityConverter.ZeroVisible}}" />
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Serial ports -->
+                <ui:Card Padding="16" Margin="0,12,0,0">
+                    <StackPanel>
+                        <TextBlock Text="Serial Ports (PTT / carrier detect)" FontWeight="SemiBold" Margin="0,0,0,8" />
+                        <ItemsControl ItemsSource="{Binding SerialPorts}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding PortName}" Margin="0,2" FontFamily="Consolas" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="No serial ports found."
+                                   Opacity="0.5" FontStyle="Italic"
+                                   Visibility="{Binding SerialPorts.Count, Converter={x:Static conv:CountToVisibilityConverter.ZeroVisible}}" />
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- CM108 HID -->
+                <ui:Card Padding="16" Margin="0,12,0,0">
+                    <StackPanel>
+                        <TextBlock Text="CM108-class HID (PTT GPIO)" FontWeight="SemiBold" Margin="0,0,0,8" />
+                        <ItemsControl ItemsSource="{Binding Cm108Devices}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Display}" Margin="0,2" FontFamily="Consolas" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="No CM108 devices found."
+                                   Opacity="0.5" FontStyle="Italic"
+                                   Visibility="{Binding Cm108Devices.Count, Converter={x:Static conv:CountToVisibilityConverter.ZeroVisible}}" />
+                    </StackPanel>
+                </ui:Card>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

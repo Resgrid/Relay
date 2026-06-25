@@ -36,9 +36,9 @@ namespace Resgrid.Relay.Engine.Voice
 			var healthApi = new HealthApi(apiClient);
 			var callsApi = new CallsApi(apiClient);
 
-			// The Resgrid API client is built and ready to be used.
+			// Client built — health is verified below before reporting Connected.
 			if (status != null)
-				status.ResgridApi = ConnectionState.Connected;
+				status.ResgridApi = ConnectionState.Connecting;
 
 			var audioStorage = new WatcherAudioStorage(logger);
 			var evaluator = new AudioEvaluator(logger);
@@ -59,9 +59,15 @@ namespace Resgrid.Relay.Engine.Voice
 			comService.Init(config);
 			if (!comService.IsConnectionValid())
 			{
+				if (status != null)
+					status.ResgridApi = ConnectionState.Disconnected;
 				logger.Error("Unable to reach the Resgrid v4 API with the configured OpenID Connect settings.");
 				return 1;
 			}
+
+			// Health check passed — the Resgrid API is reachable.
+			if (status != null)
+				status.ResgridApi = ConnectionState.Connected;
 
 			logger.Information("Listening for dispatches on device {InputDevice}", config.InputDevice);
 			processor.Init(config);

@@ -1,0 +1,129 @@
+<UserControl x:Class="Resgrid.Audio.Relay.Views.DashboardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:vm="clr-namespace:Resgrid.Audio.Relay.ViewModels"
+             xmlns:ctrl="clr-namespace:Resgrid.Audio.Relay.Controls"
+             xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:DashboardViewModel}"
+             d:DesignHeight="450" d:DesignWidth="800">
+    <UserControl.Resources>
+        <conv:RelayServiceStateToBrushConverter x:Key="StateBrush" />
+        <conv:BoolToBrushConverter x:Key="OnOffBrush" />
+        <conv:BoolToBrushConverter x:Key="SquelchBrush"
+                                   TrueBrush="{x:Static conv:StatusBrushes.Running}"
+                                   FalseBrush="{x:Static conv:StatusBrushes.Inactive}" />
+    </UserControl.Resources>
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Header + overall summary -->
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="{Binding Title}" FontSize="24" FontWeight="SemiBold" />
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
+                <Ellipse Width="12" Height="12" Margin="0,0,8,0"
+                         Fill="{Binding OverallState, Converter={StaticResource StateBrush}}" />
+                <TextBlock Text="{Binding SummaryText}" VerticalAlignment="Center" />
+            </StackPanel>
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="0,16,0,0">
+            <!-- Empty state -->
+            <TextBlock Text="No services are running. Start one from the Operations screen."
+                       Opacity="0.6" FontStyle="Italic"
+                       VerticalAlignment="Top"
+                       Visibility="{Binding IsIdle, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}" />
+
+            <!-- Service tiles -->
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding Tiles}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <ui:Card Width="360" Margin="0,0,12,12" Padding="16" VerticalAlignment="Top">
+                                <StackPanel>
+                                    <!-- Tile header: mode name + lifecycle dot -->
+                                    <Grid>
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Ellipse Width="10" Height="10" Margin="0,0,8,0"
+                                                     Fill="{Binding State, Converter={StaticResource StateBrush}}" />
+                                            <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="15" />
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding State}" HorizontalAlignment="Right"
+                                                   Opacity="0.7" VerticalAlignment="Center" />
+                                    </Grid>
+
+                                    <!-- Connection pills -->
+                                    <WrapPanel Margin="0,12,0,0">
+                                        <ctrl:StatusPill Label="API" State="{Binding Status.ResgridApi}" Margin="0,0,6,6" />
+                                        <ctrl:StatusPill Label="LiveKit" State="{Binding Status.LiveKit}" Margin="0,0,6,6" />
+                                        <ctrl:StatusPill Label="Redis" State="{Binding Status.Redis}" Margin="0,0,6,6" />
+                                        <ctrl:StatusPill Label="SMTP" State="{Binding Status.Smtp}" Margin="0,0,6,6" />
+                                        <ctrl:StatusPill Label="TTS" State="{Binding Status.Tts}" Margin="0,0,6,6" />
+                                    </WrapPanel>
+
+                                    <!-- Audio level -->
+                                    <ctrl:LevelMeter Dbfs="{Binding Status.InputDbfs}" Margin="0,8,0,0" Height="16" />
+
+                                    <!-- Squelch + TX/RX lamps -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <Border CornerRadius="9" Padding="8,2" Margin="0,0,8,0"
+                                                Background="{Binding Status.SquelchOpen, Converter={StaticResource SquelchBrush}}">
+                                            <TextBlock Foreground="White" FontSize="11"
+                                                       Text="{Binding Status.SquelchOpen, Converter={x:Static conv:SquelchTextConverter.Instance}}" />
+                                        </Border>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,8,0" VerticalAlignment="Center">
+                                            <Ellipse Width="10" Height="10" Margin="0,0,4,0"
+                                                     Fill="{Binding Status.Transmitting, Converter={StaticResource OnOffBrush}}" />
+                                            <TextBlock Text="TX" FontSize="11" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Ellipse Width="10" Height="10" Margin="0,0,4,0"
+                                                     Fill="{Binding Status.Receiving, Converter={StaticResource OnOffBrush}}" />
+                                            <TextBlock Text="RX" FontSize="11" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </StackPanel>
+
+                                    <!-- Counters -->
+                                    <Grid Margin="0,12,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{Binding Status.CallsCreated}" FontSize="18" FontWeight="SemiBold" />
+                                            <TextBlock Text="Calls" Opacity="0.6" FontSize="11" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="{Binding Status.MessagesProcessed}" FontSize="18" FontWeight="SemiBold" />
+                                            <TextBlock Text="Messages" Opacity="0.6" FontSize="11" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="{Binding Status.TransmissionsRecorded}" FontSize="18" FontWeight="SemiBold" />
+                                            <TextBlock Text="Transmissions" Opacity="0.6" FontSize="11" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <TextBlock Margin="0,8,0,0" Opacity="0.5" FontSize="10"
+                                               Text="{Binding LastUpdated, StringFormat=Updated {0}}" />
+                                </StackPanel>
+                            </ui:Card>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>

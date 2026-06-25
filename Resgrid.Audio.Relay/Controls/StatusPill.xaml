@@ -1,0 +1,32 @@
+<UserControl x:Class="Resgrid.Audio.Relay.Controls.StatusPill"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
+             mc:Ignorable="d"
+             x:Name="Root"
+             d:DesignHeight="22" d:DesignWidth="120">
+    <UserControl.Resources>
+        <conv:ConnectionStateToBrushConverter x:Key="StateBrush" />
+    </UserControl.Resources>
+    <Border CornerRadius="9"
+            Padding="8,2"
+            Background="{Binding State, ElementName=Root, Converter={StaticResource StateBrush}}">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <Ellipse Width="8" Height="8" Margin="0,0,6,0" Fill="#FFFFFF" Opacity="0.85" />
+            <!-- Show the label AND the state as text so status is perceivable without relying
+                 on the background colour (colourblind users / screen readers). -->
+            <TextBlock Foreground="#FFFFFF"
+                       FontSize="11"
+                       VerticalAlignment="Center">
+                <TextBlock.Text>
+                    <MultiBinding StringFormat="{}{0} · {1}">
+                        <Binding Path="Label" ElementName="Root" />
+                        <Binding Path="State" ElementName="Root" />
+                    </MultiBinding>
+                </TextBlock.Text>
+            </TextBlock>
+        </StackPanel>
+    </Border>
+</UserControl>
