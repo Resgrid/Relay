@@ -81,7 +81,7 @@ namespace Resgrid.Relay.Engine.Smtp
 				_release);
 		}
 
-		public static ISmtpTelemetry Create(RelayHostOptions hostOptions, Logger logger)
+		public static ISmtpTelemetry Create(RelayHostOptions hostOptions, ILogger logger)
 		{
 			if (hostOptions == null)
 				throw new ArgumentNullException(nameof(hostOptions));

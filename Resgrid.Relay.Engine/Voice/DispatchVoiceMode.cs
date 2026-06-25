@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Resgrid.Relay.Engine;
 using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Audio.Voice;
 using Resgrid.Audio.Voice.Connection;
@@ -20,7 +21,7 @@ namespace Resgrid.Relay.Engine.Voice
 	/// </summary>
 	public static class DispatchVoiceMode
 	{
-		public static async Task<int> RunAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken)
+		public static async Task<int> RunAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken, RelayStatus status = null)
 		{
 			if (string.IsNullOrWhiteSpace(options.Tts.ServiceBaseUrl))
 			{
@@ -47,7 +48,16 @@ namespace Resgrid.Relay.Engine.Voice
 			var session = await manager.JoinAsync(channel, cancellationToken).ConfigureAwait(false);
 			var publisher = await session.CreatePublisherAsync("dispatch", cancellationToken).ConfigureAwait(false);
 
+			// Channel joined and session established — LiveKit is up.
+			if (status != null)
+				status.LiveKit = ConnectionState.Connected;
+
 			using var tts = new ResgridTtsClient(options.Tts, logger);
+
+			// TTS client created — the Resgrid TTS service is reachable.
+			if (status != null)
+				status.Tts = ConnectionState.Connected;
+
 			var service = new DispatchToneOutService(tts, new ToneGenerator(), options.DispatchVoice.Tone, logger);
 
 			// Prime "seen" with the current backlog so startup doesn't re-announce open calls.

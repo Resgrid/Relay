@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Resgrid.Relay.Engine;
 using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Audio.Voice;
 using Resgrid.Audio.Voice.Abstractions;
@@ -21,7 +22,7 @@ namespace Resgrid.Relay.Engine.Voice
 	/// </summary>
 	public static class RecordMode
 	{
-		public static async Task<int> RunAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken)
+		public static async Task<int> RunAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken, RelayStatus status = null)
 		{
 			using var apiClient = new ResgridV4ApiClient(options.Resgrid);
 			var voiceApi = new VoiceApi(apiClient);
@@ -47,9 +48,15 @@ namespace Resgrid.Relay.Engine.Voice
 				{
 					var session = await manager.JoinAsync(channel, cancellationToken).ConfigureAwait(false);
 					var recorder = new TransmissionRecorder(session, options.Recorder.Segmentation, stores, log, logger);
+					if (status != null)
+						recorder.TransmissionRecorded += (_, __) => status.IncrementTransmissionsRecorded();
 					recorder.Start();
 					recorders.Add(recorder);
 				}
+
+				// All requested channels joined — LiveKit is up.
+				if (status != null)
+					status.LiveKit = ConnectionState.Connected;
 
 				logger.Information($"Recording {channels.Count} channel(s) to {options.Recorder.Store}. Press Ctrl+C to stop.");
 				await VoiceModeRuntime.WaitForCancellationAsync(cancellationToken).ConfigureAwait(false);
