@@ -1,7 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Resgrid.Relay.Engine;
 using Resgrid.Relay.Engine.Configuration;
-using Resgrid.Relay.Engine.Smtp;
+using Resgrid.Relay.Engine.Services;
 using Resgrid.Providers.ApiClient.V4;
 using Serilog;
 using Serilog.Core;
@@ -68,7 +68,6 @@ namespace Resgrid.Audio.Relay.Console
 		private static async Task<int> RunAsync()
 		{
 			var hostOptions = LoadHostOptions();
-			var mode = (hostOptions.Mode ?? "smtp").Trim().ToLowerInvariant();
 
 			// Validate required settings before starting (fail fast with clear messages).
 			if (!ValidateOptions(hostOptions))
@@ -88,28 +87,24 @@ namespace Resgrid.Audio.Relay.Console
 
 			try
 			{
-				switch (mode)
+				// The engine owns all mode wiring; the console just builds the service and runs it.
+				IRelayService service;
+				try
 				{
-					case "smtp":
-					{
-						var smtpLogger = CreateLogger(debug: false);
-						await using var telemetry = SmtpTelemetry.Create(hostOptions, smtpLogger);
-						using var apiClient = new ResgridV4ApiClient(hostOptions.Resgrid);
-						await SmtpRelayRunner.RunAsync(hostOptions.Smtp, telemetry, apiClient, cancellationTokenSource.Token).ConfigureAwait(false);
-						return 0;
-					}
-					case "audio":
-						return await RunAudioModeAsync(hostOptions, cancellationTokenSource.Token).ConfigureAwait(false);
-					case "radio":
-						return await RunRadioModeAsync(hostOptions, cancellationTokenSource.Token).ConfigureAwait(false);
-					case "record":
-						return await EngineVoice.RecordMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationTokenSource.Token).ConfigureAwait(false);
-					case "dispatch":
-						return await EngineVoice.DispatchVoiceMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationTokenSource.Token).ConfigureAwait(false);
-					default:
-						Cli.Error.WriteLine($"Unsupported relay mode '{hostOptions.Mode}'. Supported modes are 'smtp', 'audio', 'radio', 'record' and 'dispatch'.");
-						return 1;
+					service = RelayServiceFactory.Create(hostOptions, CreateLogger(debug: false));
 				}
+				catch (ArgumentException ex)
+				{
+					Cli.Error.WriteLine(ex.Message);
+					return 1;
+				}
+
+				await using (service)
+				{
+					await service.StartAsync(cancellationTokenSource.Token).ConfigureAwait(false);
+				}
+
+				return service.State == RelayServiceState.Faulted ? 1 : 0;
 			}
 			finally
 			{
@@ -261,68 +256,6 @@ namespace Resgrid.Audio.Relay.Console
 		}
 
 #if NET10_0_WINDOWS
-		private static async Task<int> RunAudioModeAsync(RelayHostOptions hostOptions, CancellationToken cancellationToken)
-		{
-			var config = LoadAudioConfig(hostOptions.AudioConfigPath);
-			var apiOptions = ResolveResgridOptions(hostOptions, config);
-			using var apiClient = new ResgridV4ApiClient(apiOptions);
-			var healthApi = new HealthApi(apiClient);
-			var callsApi = new CallsApi(apiClient);
-
-			Logger logger = CreateLogger(config.Debug);
-			var audioStorage = new WatcherAudioStorage(logger);
-			var evaluator = new AudioEvaluator(logger);
-			var recorder = new AudioRecorder(evaluator, audioStorage);
-			var processor = new AudioProcessor(recorder, evaluator, audioStorage);
-			var comService = new ComService(logger, processor, apiClient, healthApi, callsApi);
-
-			evaluator.WatcherTriggered += (_, eventArgs) =>
-				Cli.WriteLine($"{DateTime.Now:G}: WATCHER TRIGGERED: {eventArgs.Watcher.Name}");
-
-			comService.CallCreatedEvent += (_, eventArgs) =>
-				Cli.WriteLine($"{eventArgs.Timestamp:G}: CALL CREATED: {eventArgs.CallId} ({eventArgs.CallNumber})");
-
-			comService.Init(config);
-			if (!comService.IsConnectionValid())
-			{
-				Cli.Error.WriteLine("Unable to reach the Resgrid v4 API with the configured OpenID Connect settings.");
-				return 1;
-			}
-
-			Cli.WriteLine($"Listening for dispatches on device {config.InputDevice}");
-			processor.Init(config);
-			processor.Start();
-
-			using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-			ConsoleCancelEventHandler stopHandler = (_, eventArgs) =>
-			{
-				eventArgs.Cancel = true;
-				recorder.Stop();
-				linkedCts.Cancel();
-			};
-			Cli.CancelKeyPress += stopHandler;
-
-			try
-			{
-				while (!linkedCts.IsCancellationRequested &&
-					   (recorder.RecordingState == RecordingState.Monitoring ||
-						recorder.RecordingState == RecordingState.Recording ||
-						recorder.RecordingState == RecordingState.RequestedStop))
-				{
-					await Task.Delay(250, linkedCts.Token).ConfigureAwait(false);
-				}
-			}
-			catch (TaskCanceledException)
-			{
-			}
-			finally
-			{
-				Cli.CancelKeyPress -= stopHandler;
-			}
-
-			return 0;
-		}
-
 		private static async Task<int> SetupAsync()
 		{
 			Cli.WriteLine("Resgrid Relay Audio Setup");
@@ -432,14 +365,22 @@ namespace Resgrid.Audio.Relay.Console
 			catch { return "(unnamed)"; }
 		}
 
-		private static Task<int> RunRadioModeAsync(RelayHostOptions hostOptions, CancellationToken cancellationToken)
-			=> EngineVoice.RadioMode.RunAsync(hostOptions, CreateLogger(debug: false), cancellationToken);
-
 		private static async Task<int> TuneAsync(string[] args)
 		{
 			var hostOptions = LoadHostOptions();
 			if (args.Length > 0 && Int32.TryParse(args[0], out var device))
 				hostOptions.Radio.InputDevice = device;
+
+			Cli.WriteLine($"Tuning input device {hostOptions.Radio.InputDevice}. Open={hostOptions.Radio.Squelch.OpenDbfs} dBFS, Close={hostOptions.Radio.Squelch.CloseDbfs} dBFS.");
+			Cli.WriteLine("Key up the radio (or feed static) and adjust OpenDbfs just above the static floor. Ctrl+C to stop.");
+
+			// Render the live meter in-place from the engine's tune samples.
+			var progress = new Progress<TuneSample>(sample =>
+			{
+				int bars = Math.Clamp((int)((sample.Dbfs + 80) / 80 * 30), 0, 30);
+				var meter = new string('#', bars).PadRight(30, '·');
+				Cli.Write($"\r[{meter}] {sample.Dbfs,6:0.0} dBFS  {(sample.SquelchOpen ? "OPEN  " : "closed")}");
+			});
 
 			using var cancellationTokenSource = new CancellationTokenSource();
 			ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
@@ -450,11 +391,12 @@ namespace Resgrid.Audio.Relay.Console
 			Cli.CancelKeyPress += cancelHandler;
 			try
 			{
-				return await EngineVoice.RadioMode.RunTuneAsync(hostOptions, cancellationTokenSource.Token).ConfigureAwait(false);
+				return await EngineVoice.RadioMode.RunTuneAsync(hostOptions, Logger.None, cancellationTokenSource.Token, progress).ConfigureAwait(false);
 			}
 			finally
 			{
 				Cli.CancelKeyPress -= cancelHandler;
+				Cli.WriteLine();
 			}
 		}
 
@@ -528,20 +470,6 @@ namespace Resgrid.Audio.Relay.Console
 			return Path.Combine(AppContext.BaseDirectory, "settings.json");
 		}
 
-		private static ResgridApiClientOptions ResolveResgridOptions(RelayHostOptions hostOptions, Config config)
-		{
-			return new ResgridApiClientOptions
-			{
-				BaseUrl = FirstNonEmpty(hostOptions.Resgrid.BaseUrl, config.Resgrid?.BaseUrl, config.ApiUrl, "https://api.resgrid.com"),
-				ApiVersion = FirstNonEmpty(hostOptions.Resgrid.ApiVersion, config.Resgrid?.ApiVersion, "4"),
-				ClientId = FirstNonEmpty(hostOptions.Resgrid.ClientId, config.Resgrid?.ClientId),
-				ClientSecret = FirstNonEmpty(hostOptions.Resgrid.ClientSecret, config.Resgrid?.ClientSecret),
-				RefreshToken = FirstNonEmpty(hostOptions.Resgrid.RefreshToken, config.Resgrid?.RefreshToken),
-				Scope = FirstNonEmpty(hostOptions.Resgrid.Scope, config.Resgrid?.Scope, "openid profile email offline_access mobile"),
-				TokenCachePath = FirstNonEmpty(hostOptions.Resgrid.TokenCachePath, config.Resgrid?.TokenCachePath, Path.Combine(AppContext.BaseDirectory, "data", "resgrid-token.json"))
-			};
-		}
-
 		private static string Prompt(string text, string defaultValue)
 		{
 			Cli.Write($"{text}{(String.IsNullOrWhiteSpace(defaultValue) ? String.Empty : $" [{defaultValue}]")}: ");
@@ -549,12 +477,6 @@ namespace Resgrid.Audio.Relay.Console
 			return String.IsNullOrWhiteSpace(input) ? defaultValue : input.Trim();
 		}
 #else
-		private static Task<int> RunAudioModeAsync(RelayHostOptions hostOptions, CancellationToken cancellationToken)
-		{
-			Cli.Error.WriteLine("Audio mode is only available in the net10.0-windows build.");
-			return Task.FromResult(1);
-		}
-
 		private static Task<int> SetupAsync()
 		{
 			Cli.Error.WriteLine("Audio setup is only available in the net10.0-windows build.");
@@ -573,12 +495,6 @@ namespace Resgrid.Audio.Relay.Console
 			return Task.FromResult(1);
 		}
 
-		private static Task<int> RunRadioModeAsync(RelayHostOptions hostOptions, CancellationToken cancellationToken)
-		{
-			Cli.Error.WriteLine("Radio bridge mode is only available in the net10.0-windows build (it needs physical audio devices).");
-			return Task.FromResult(1);
-		}
-
 		private static Task<int> TuneAsync(string[] args)
 		{
 			Cli.Error.WriteLine("Tune is only available in the net10.0-windows build.");
@@ -592,11 +508,6 @@ namespace Resgrid.Audio.Relay.Console
 				.MinimumLevel.Is(debug ? Serilog.Events.LogEventLevel.Debug : Serilog.Events.LogEventLevel.Information)
 				.WriteTo.Console()
 				.CreateLogger();
-		}
-
-		private static string FirstNonEmpty(params string[] values)
-		{
-			return values.FirstOrDefault(x => !String.IsNullOrWhiteSpace(x));
 		}
 	}
 }

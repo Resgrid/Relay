@@ -99,6 +99,31 @@ namespace Resgrid.Audio.Core.Radio
 				_session.ChannelName, _settings.Squelch.Mode, _settings.Ptt);
 		}
 
+		/// <summary>True while channel audio is being keyed to the radio (PTT active).</summary>
+		public bool Transmitting => _transmitting;
+
+		/// <summary>True while radio audio is open and passing through to the channel.</summary>
+		public bool Receiving => _receiving;
+
+		/// <summary>Raised whenever <see cref="Transmitting"/> or <see cref="Receiving"/> changes.</summary>
+		public event EventHandler TxRxChanged;
+
+		private void SetReceiving(bool value)
+		{
+			if (_receiving == value)
+				return;
+			_receiving = value;
+			TxRxChanged?.Invoke(this, EventArgs.Empty);
+		}
+
+		private void SetTransmitting(bool value)
+		{
+			if (_transmitting == value)
+				return;
+			_transmitting = value;
+			TxRxChanged?.Invoke(this, EventArgs.Empty);
+		}
+
 		// ---- Radio receive → channel ---------------------------------------------
 
 		private void OnRadioAudio(object sender, short[] frame)
@@ -111,7 +136,7 @@ namespace Resgrid.Audio.Core.Radio
 			_emergency?.Process(frame);
 
 			bool open = IsSquelchOpen(frame);
-			_receiving = open;
+			SetReceiving(open);
 
 			if (!open || (_settings.AntiLoop && _transmitting))
 				return;
@@ -166,7 +191,7 @@ namespace Resgrid.Audio.Core.Radio
 			if (!_ptt.IsKeyed)
 			{
 				_ptt.Key();
-				_transmitting = true;
+				SetTransmitting(true);
 				_courtesyPlayed = false;
 				_logger?.Debug("PTT keyed (channel audio from {Who})", frame.Participant?.ToString() ?? "remote");
 			}
@@ -197,7 +222,7 @@ namespace Resgrid.Audio.Core.Radio
 			if (idleMs >= _settings.TxHangMs + _settings.TxTailMs)
 			{
 				_ptt.Unkey();
-				_transmitting = false;
+				SetTransmitting(false);
 				_logger?.Debug("PTT unkeyed after {Idle:0} ms idle", idleMs);
 			}
 		}

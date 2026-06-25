@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.IO.Ports;
 using Resgrid.Audio.Core.Radio;
+using Resgrid.Relay.Engine;
 using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Audio.Voice;
 using Resgrid.Audio.Voice.Abstractions;
@@ -25,7 +26,7 @@ namespace Resgrid.Relay.Engine.Voice
 	/// </summary>
 	public static class RadioMode
 	{
-		public static async Task<int> RunAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken)
+		public static async Task<int> RunAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken, RelayStatus status = null)
 		{
 			using var apiClient = new ResgridV4ApiClient(options.Resgrid);
 			var voiceApi = new VoiceApi(apiClient);
@@ -49,6 +50,10 @@ namespace Resgrid.Relay.Engine.Voice
 			var channel = await provider.GetChannelAsync(options.Voice.Channel, deptId, cancellationToken).ConfigureAwait(false);
 			var session = await manager.JoinAsync(channel, cancellationToken).ConfigureAwait(false);
 
+			// Session joined — LiveKit is up.
+			if (status != null)
+				status.LiveKit = ConnectionState.Connected;
+
 			var radioSettings = MapSettings(options.Radio, logger);
 			// Serial PTT and serial carrier-detect on the same COM port must share one
 			// SerialPort instance — opening the same port twice fails on Windows. RunAsync
@@ -62,6 +67,16 @@ namespace Resgrid.Relay.Engine.Voice
 
 			await using var bridge = new RadioBridge(device, ptt, carrier, radioSettings, logger, mdc, emergency, alertSink);
 			await bridge.StartAsync(session, cancellationToken).ConfigureAwait(false);
+
+			// Mirror the bridge's live TX/RX state onto the status surface.
+			// note: squelch open-state and input dBFS live inside RadioBridge in radio mode
+			// and are not exposed, so InputDbfs/SquelchOpen are intentionally left unwired here.
+			if (status != null)
+				bridge.TxRxChanged += (_, __) =>
+				{
+					status.Transmitting = bridge.Transmitting;
+					status.Receiving = bridge.Receiving;
+				};
 
 			TransmissionRecorder recorder = null;
 			List<IDisposable> recorderDisposables = null;
@@ -85,39 +100,37 @@ namespace Resgrid.Relay.Engine.Voice
 			if (recorderDisposables != null)
 				foreach (var d in recorderDisposables) d.Dispose();
 
-			await bridge.DisposeAsync().ConfigureAwait(false);
+			// bridge is disposed by its `await using` scope on method exit — no explicit call.
 			return 0;
 		}
 
-		/// <summary>Live receive-level meter + squelch state to help tune the anti-static threshold.</summary>
-		public static async Task<int> RunTuneAsync(RelayHostOptions options, CancellationToken cancellationToken)
+		/// <summary>
+		/// Live receive-level metering + squelch state to help tune the anti-static threshold.
+		/// Each ~150 ms sample is reported via <paramref name="progress"/> (the engine renders
+		/// nothing itself); <paramref name="logger"/> is used only for device diagnostics.
+		/// </summary>
+		public static async Task<int> RunTuneAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken, IProgress<TuneSample> progress = null)
 		{
-			var logger = Serilog.Core.Logger.None;
 			var radioSettings = MapSettings(options.Radio, logger);
 			var gate = new SquelchGate(radioSettings.Squelch, AudioFormat.SampleRate);
-			var device = new NAudioRadioDevice(radioSettings.InputDevice, radioSettings.OutputDevice, logger);
+			using var device = new NAudioRadioDevice(radioSettings.InputDevice, radioSettings.OutputDevice, logger);
 
-			var lastPrintTicks = 0L;
+			var lastSampleTicks = 0L;
 			device.SamplesReceived += (_, frame) =>
 			{
 				bool open = gate.Process(frame);
 				var now = DateTime.UtcNow.Ticks;
-				if (now - lastPrintTicks < TimeSpan.TicksPerMillisecond * 150)
+				if (now - lastSampleTicks < TimeSpan.TicksPerMillisecond * 150)
 					return;
-				lastPrintTicks = now;
+				lastSampleTicks = now;
 
-				double db = gate.LastDbfs;
-				int bars = Math.Clamp((int)((db + 80) / 80 * 30), 0, 30);
-				var meter = new string('#', bars).PadRight(30, '·');
-				logger.Information($"[{meter}] {db,6:0.0} dBFS  {(open ? "OPEN  " : "closed")}");
+				// Surface the live level/squelch so the console meter (and the WPF Radio
+				// tuner) can render it; the engine itself stays UI-free.
+				progress?.Report(new TuneSample(gate.LastDbfs, open));
 			};
 
 			device.StartReceive();
-			logger.Information($"Tuning input device {radioSettings.InputDevice}. Open={radioSettings.Squelch.OpenDbfs} dBFS, Close={radioSettings.Squelch.CloseDbfs} dBFS.");
-			logger.Information("Key up the radio (or feed static) and adjust OpenDbfs just above the static floor. Ctrl+C to stop.");
-
 			await VoiceModeRuntime.WaitForCancellationAsync(cancellationToken).ConfigureAwait(false);
-			device.Dispose();
 			return 0;
 		}
 

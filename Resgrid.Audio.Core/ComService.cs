@@ -8,13 +8,14 @@ using Resgrid.Audio.Core.Events;
 using Resgrid.Audio.Core.Model;
 using Resgrid.Providers.ApiClient.V4;
 using Resgrid.Providers.ApiClient.V4.Models;
+using Serilog;
 using Serilog.Core;
 
 namespace Resgrid.Audio.Core
 {
 	public class ComService
 	{
-		private readonly Logger _logger;
+		private readonly ILogger _logger;
 		private readonly AudioProcessor _audioProcessor;
 		private readonly IResgridApiClient _apiClient;
 		private readonly IResgridHealthApi _healthApi;
@@ -24,7 +25,7 @@ namespace Resgrid.Audio.Core
 
 		public event EventHandler<CallCreatedEventArgs> CallCreatedEvent;
 
-		public ComService(Logger logger, AudioProcessor audioProcessor, IResgridApiClient apiClient, IResgridHealthApi healthApi, IResgridCallsApi callsApi)
+		public ComService(ILogger logger, AudioProcessor audioProcessor, IResgridApiClient apiClient, IResgridHealthApi healthApi, IResgridCallsApi callsApi)
 		{
 			_logger = logger;
 			_audioProcessor = audioProcessor;
