@@ -39,9 +39,12 @@ namespace Resgrid.Audio.Relay.Controls
 			_canvas = canvas;
 
 			SizeChanged += (_, __) => Redraw();
+			Loaded += OnLoaded;
+			Unloaded += OnUnloaded;
 		}
 
 		private readonly Canvas _canvas;
+		private INotifyCollectionChanged _subscribed;
 
 		protected override int VisualChildrenCount => 1;
 
@@ -87,16 +90,27 @@ namespace Resgrid.Audio.Relay.Controls
 			set => SetValue(StrokeProperty, value);
 		}
 
+		private void OnLoaded(object sender, RoutedEventArgs e)
+		{
+			AttachToValues();
+			Redraw();
+		}
+
+		private void OnUnloaded(object sender, RoutedEventArgs e)
+		{
+			// Stop receiving CollectionChanged once off-screen so the bound collection doesn't keep
+			// this control alive; the Loaded handler re-attaches when it is shown again.
+			DetachFromValues();
+		}
+
 		private static void OnValuesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
 		{
 			var sparkline = (Sparkline)d;
 
-			// Detach from the previous collection and subscribe to the new one so in-place
-			// changes to an ObservableCollection (not just reassignment) trigger a redraw.
-			if (e.OldValue is INotifyCollectionChanged oldCollection)
-				oldCollection.CollectionChanged -= sparkline.OnValuesCollectionChanged;
-			if (e.NewValue is INotifyCollectionChanged newCollection)
-				newCollection.CollectionChanged += sparkline.OnValuesCollectionChanged;
+			// Re-point the subscription at the new collection (active only while loaded) so in-place
+			// changes to an ObservableCollection — not just reassignment — trigger a redraw.
+			sparkline.DetachFromValues();
+			sparkline.AttachToValues();
 
 			sparkline.Redraw();
 		}
@@ -104,6 +118,29 @@ namespace Resgrid.Audio.Relay.Controls
 		private void OnValuesCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
 		{
 			Redraw();
+		}
+
+		// Centralized attach/detach: subscribe to the current Values collection only while the
+		// control is loaded, and detach on unload so we never leak via a long-lived collection.
+		private void AttachToValues()
+		{
+			if (!IsLoaded)
+				return;
+			if (Values is INotifyCollectionChanged collection && !ReferenceEquals(collection, _subscribed))
+			{
+				DetachFromValues();
+				collection.CollectionChanged += OnValuesCollectionChanged;
+				_subscribed = collection;
+			}
+		}
+
+		private void DetachFromValues()
+		{
+			if (_subscribed != null)
+			{
+				_subscribed.CollectionChanged -= OnValuesCollectionChanged;
+				_subscribed = null;
+			}
 		}
 
 		private static void OnStrokeChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)

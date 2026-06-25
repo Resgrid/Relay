@@ -15,10 +15,18 @@
             Background="{Binding State, ElementName=Root, Converter={StaticResource StateBrush}}">
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
             <Ellipse Width="8" Height="8" Margin="0,0,6,0" Fill="#FFFFFF" Opacity="0.85" />
-            <TextBlock Text="{Binding Label, ElementName=Root}"
-                       Foreground="#FFFFFF"
+            <!-- Show the label AND the state as text so status is perceivable without relying
+                 on the background colour (colourblind users / screen readers). -->
+            <TextBlock Foreground="#FFFFFF"
                        FontSize="11"
-                       VerticalAlignment="Center" />
+                       VerticalAlignment="Center">
+                <TextBlock.Text>
+                    <MultiBinding StringFormat="{}{0} · {1}">
+                        <Binding Path="Label" ElementName="Root" />
+                        <Binding Path="State" ElementName="Root" />
+                    </MultiBinding>
+                </TextBlock.Text>
+            </TextBlock>
         </StackPanel>
     </Border>
 </UserControl>

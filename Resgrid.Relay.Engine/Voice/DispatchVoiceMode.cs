@@ -99,8 +99,11 @@ namespace Resgrid.Relay.Engine.Voice
 						}
 						catch (Exception ex)
 						{
-							// Per-call failure: log and keep going so one bad announcement does not
-							// block the rest of the batch; the call stays unseen and is retried next poll.
+							// Per-call failure: the synthesis never reached the service, so reflect TTS
+							// as unreachable until the next attempt succeeds. Log and keep going so one bad
+							// announcement doesn't block the batch; the call stays unseen and retries next poll.
+							if (status != null)
+								status.Tts = ConnectionState.Disconnected;
 							logger.Error(ex, "Failed to tone out call {CallId}; will retry next poll", call.CallId);
 						}
 					}

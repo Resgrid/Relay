@@ -488,7 +488,10 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 		// ─────────── Tune meter ───────────
 
-		[RelayCommand]
+		// AllowConcurrentExecutions so the command (and its bound button) stays enabled while the
+		// long-running tune meter is active — otherwise CanExecute would be false for the whole
+		// session and the IsTuning→StopTune branch would be unreachable (can't stop without leaving).
+		[RelayCommand(AllowConcurrentExecutions = true)]
 		private async Task ToggleTune()
 		{
 			if (IsTuning)
@@ -509,8 +512,10 @@ namespace Resgrid.Audio.Relay.ViewModels
 				return;
 			}
 
-			// Reflect the current radio form into the live options so the meter tunes what you edit.
-			var options = _configuration.Current;
+			// Tune against an isolated snapshot with the edited form values overlaid, so uncommitted
+			// form changes never mutate the shared Current that active services (RelayController) read.
+			// RunTuneAsync only consumes the Radio settings; the rest of the clone is throwaway.
+			var options = _configuration.LoadFromDisk();
 			ApplyToOptions(options);
 
 			_tuneCts?.Dispose();

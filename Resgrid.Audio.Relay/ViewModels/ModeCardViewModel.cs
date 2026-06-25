@@ -63,13 +63,15 @@ namespace Resgrid.Audio.Relay.ViewModels
 			HasValidationErrors = errors.Count > 0;
 			ValidationSummary = errors.Count == 0
 				? "Pre-flight OK"
-				: $"{errors.Count} issue(s) — start may fail";
+				: $"{errors.Count} issue(s) — start disabled";
 
 			StartCommand.NotifyCanExecuteChanged();
 			StopCommand.NotifyCanExecuteChanged();
 		}
 
-		private bool CanStart() => !IsRunning;
+		// Mirror OperationsViewModel.StartMode: disallow Start when already running or when
+		// pre-flight validation has failed. Refresh() notifies StartCommand when these change.
+		private bool CanStart() => !IsRunning && !HasValidationErrors;
 		private bool CanStop() => IsRunning;
 
 		[RelayCommand(CanExecute = nameof(CanStart))]

@@ -86,9 +86,10 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 		internal void StartMode(string mode)
 		{
-			// Don't start a duplicate or an invalid configuration: keep pre-flight failures in the
-			// card's validation summary rather than starting a doomed service (or letting Start throw).
-			if (IsRunning(mode) || Validate(mode).Count > 0)
+			// Duplicate-start check uses the controller's authoritative tracked-services state (not the
+			// UI-marshalled RunningServices collection, which lags Start by a dispatcher hop); pre-flight
+			// failures stay in the card's validation summary rather than starting a doomed service.
+			if (_controller.IsModeRunning(mode) || Validate(mode).Count > 0)
 				return;
 
 			_controller.Start(BuildOptions(mode));

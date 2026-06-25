@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
 using Resgrid.Relay.Engine;
 using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Relay.Engine.Services;
@@ -17,21 +18,18 @@ namespace Resgrid.Audio.Relay.Services
 	/// <see cref="IRelayService.StartAsync"/> on a tracked background task with its own
 	/// <see cref="CancellationTokenSource"/>; stopping cancels, awaits, disposes and removes it.
 	///
-	/// All <see cref="RunningServices"/> mutations are marshalled to the captured UI
-	/// <see cref="SynchronizationContext"/> so the collection can be bound directly.
+	/// All <see cref="RunningServices"/> mutations are marshalled onto the WPF UI thread via
+	/// <see cref="Application.Current"/>'s dispatcher so the collection can be bound directly.
 	/// </summary>
 	public sealed class RelayController
 	{
 		private readonly ILogger _logger;
-		private readonly SynchronizationContext _uiContext;
 		private readonly object _gate = new object();
 		private readonly Dictionary<IRelayService, RunningEntry> _entries = new Dictionary<IRelayService, RunningEntry>();
 
 		public RelayController(ILogger logger)
 		{
 			_logger = logger ?? Log.Logger;
-			// Captured at construction (App startup) so we can post collection updates to the UI thread.
-			_uiContext = SynchronizationContext.Current;
 		}
 
 		/// <summary>The currently running relay services. Bind UI lists against this.</summary>
@@ -80,6 +78,26 @@ namespace Resgrid.Audio.Relay.Services
 		}
 
 		/// <summary>
+		/// True when a service for <paramref name="mode"/> is currently tracked. Reads the
+		/// authoritative <c>_entries</c> set under <c>_gate</c> — not the UI-marshalled
+		/// <see cref="RunningServices"/> collection — so a just-started mode is seen immediately,
+		/// independent of when the collection update is dispatched to the UI thread.
+		/// </summary>
+		public bool IsModeRunning(string mode)
+		{
+			lock (_gate)
+			{
+				foreach (var service in _entries.Keys)
+				{
+					if (string.Equals(service.Mode, mode, StringComparison.OrdinalIgnoreCase))
+						return true;
+				}
+
+				return false;
+			}
+		}
+
+		/// <summary>
 		/// Creates the configured mode via <see cref="RelayServiceFactory"/>, adds it to the
 		/// running set and launches its background run loop. Returns the created service.
 		/// </summary>
@@ -94,13 +112,8 @@ namespace Resgrid.Audio.Relay.Services
 
 			service.StateChanged += OnServiceStateChanged;
 
-			lock (_gate)
-			{
-				_entries[service] = entry;
-			}
-
-			Post(() => RunningServices.Add(service));
-
+			// Fully initialise the entry (including RunTask) BEFORE publishing it to _entries, so a
+			// concurrent StopAsync/StopAllAsync never observes a partially-built entry (RunTask == null).
 			entry.RunTask = Task.Run(async () =>
 			{
 				try
@@ -116,6 +129,13 @@ namespace Resgrid.Audio.Relay.Services
 					_logger?.Error(ex, "Relay mode '{Mode}' terminated unexpectedly.", service.Mode);
 				}
 			});
+
+			lock (_gate)
+			{
+				_entries[service] = entry;
+			}
+
+			Post(() => RunningServices.Add(service));
 
 			RaiseOverallStateChanged();
 			return service;
@@ -185,10 +205,13 @@ namespace Resgrid.Audio.Relay.Services
 
 		private void Post(Action action)
 		{
-			if (_uiContext != null)
-				_uiContext.Post(_ => action(), null);
-			else
+			// Resolve the UI dispatcher at call time (not construction) so updates always land on the
+			// WPF UI thread even if no SynchronizationContext was current when the controller was built.
+			var dispatcher = Application.Current?.Dispatcher;
+			if (dispatcher == null || dispatcher.CheckAccess())
 				action();
+			else
+				dispatcher.BeginInvoke(action);
 		}
 
 		private sealed class RunningEntry

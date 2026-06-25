@@ -100,7 +100,10 @@ namespace Resgrid.Audio.Relay
 			services.AddTransient<DashboardViewModel>();
 			services.AddTransient<OperationsViewModel>();
 			services.AddTransient<ConfigurationViewModel>();
-			services.AddTransient<LogsViewModel>();
+			// Singleton: owns a long-lived log pump consuming the singleton UiLogBus and must survive
+			// navigation (so logs aren't lost and a reused LogsView page keeps working). Disposed by
+			// the container at app shutdown.
+			services.AddSingleton<LogsViewModel>();
 			services.AddTransient<DevicesViewModel>();
 			services.AddTransient<AboutViewModel>();
 

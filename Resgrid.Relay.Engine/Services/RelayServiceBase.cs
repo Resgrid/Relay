@@ -74,7 +74,10 @@ namespace Resgrid.Relay.Engine.Services
 
 			try
 			{
-				TransitionTo(RelayServiceState.Running);
+				// Only advance to Running if a concurrent StopAsync hasn't already moved us out of
+				// Starting during the startup window (it sets Stopping + cancels _cts under _sync).
+				// Atomic, so a stop that wins the race keeps Stopping/Stopped instead of reverting.
+				TryTransition(RelayServiceState.Starting, RelayServiceState.Running);
 				await ExecuteAsync(_cts.Token).ConfigureAwait(false);
 				TransitionTo(RelayServiceState.Stopped);
 			}
@@ -135,6 +138,24 @@ namespace Resgrid.Relay.Engine.Services
 				_state = next;
 			}
 			StateChanged?.Invoke(this, new RelayStateChangedEventArgs(prev, next, error));
+		}
+
+		/// <summary>
+		/// Atomically transitions <see cref="_state"/> from <paramref name="from"/> to
+		/// <paramref name="to"/> only if it is currently <paramref name="from"/>, returning whether
+		/// the change happened. Lets the Running transition be skipped when a concurrent StopAsync
+		/// has already left Starting, so the stop isn't overwritten.
+		/// </summary>
+		private bool TryTransition(RelayServiceState from, RelayServiceState to)
+		{
+			lock (_sync)
+			{
+				if (_state != from)
+					return false;
+				_state = to;
+			}
+			StateChanged?.Invoke(this, new RelayStateChangedEventArgs(from, to));
+			return true;
 		}
 	}
 }

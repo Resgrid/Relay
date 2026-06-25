@@ -45,7 +45,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private string _title = "Logs";
 
 		/// <summary>Most-recent-last log entries currently shown (filtered, ring-buffered).</summary>
-		public ObservableCollection<LogRecord> Entries { get; } = new ObservableCollection<LogRecord>();
+		public TrimmableObservableCollection<LogRecord> Entries { get; } = new TrimmableObservableCollection<LogRecord>();
 
 		/// <summary>Available minimum-level filter options.</summary>
 		public IReadOnlyList<LogEventLevel> Levels { get; } = new[]
@@ -131,8 +131,11 @@ namespace Resgrid.Audio.Relay.ViewModels
 			if (_history.Count > MaxEntries)
 				_history.RemoveRange(0, _history.Count - MaxEntries);
 
-			while (Entries.Count > MaxEntries)
-				Entries.RemoveAt(0);
+			// Trim the visible list to the cap in a single operation: TrimmableObservableCollection drops
+			// the overflow via one RemoveRange + one Reset notification, avoiding the O(n²) array shifts
+			// and per-item CollectionChanged of repeated RemoveAt(0). (_history is a List<T>, so its
+			// RemoveRange above is already a single O(n) call.)
+			Entries.TrimToLast(MaxEntries);
 
 			if (appendedVisible && AutoScroll)
 				EntriesAppended?.Invoke(this, EventArgs.Empty);

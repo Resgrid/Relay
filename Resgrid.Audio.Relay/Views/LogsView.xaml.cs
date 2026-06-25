@@ -17,6 +17,7 @@ namespace Resgrid.Audio.Relay.Views
 		public LogsView()
 		{
 			InitializeComponent();
+			Loaded += OnLoaded;
 			Unloaded += OnUnloaded;
 		}
 
@@ -24,7 +25,6 @@ namespace Resgrid.Audio.Relay.Views
 		{
 			DataContext = viewModel;
 			_viewModel = viewModel;
-			_viewModel.EntriesAppended += OnEntriesAppended;
 		}
 
 		private void OnEntriesAppended(object sender, EventArgs e)
@@ -36,16 +36,26 @@ namespace Resgrid.Audio.Relay.Views
 			LogList.ScrollIntoView(last);
 		}
 
-		private void OnUnloaded(object sender, RoutedEventArgs e)
+		private void OnLoaded(object sender, RoutedEventArgs e)
 		{
-			// The pages are transient and re-created on navigation, so detach + stop the pump
-			// when this instance leaves the visual tree.
+			// Re-attach the view-only auto-scroll handler whenever the page (re)enters the visual
+			// tree — the page instance may be reused on back-navigation. Idempotent so repeated
+			// Loaded events don't double-subscribe. The view-model is a long-lived singleton whose
+			// log pump keeps running across navigation, so there's nothing to restart here.
 			if (_viewModel != null)
 			{
 				_viewModel.EntriesAppended -= OnEntriesAppended;
-				_viewModel.Dispose();
-				_viewModel = null;
+				_viewModel.EntriesAppended += OnEntriesAppended;
 			}
+		}
+
+		private void OnUnloaded(object sender, RoutedEventArgs e)
+		{
+			// Detach only the view-only auto-scroll handler. Do NOT dispose the view-model or null
+			// the field: the page may be reused on back-navigation and the shared pump must keep
+			// running. The singleton view-model is disposed by the DI container at app shutdown.
+			if (_viewModel != null)
+				_viewModel.EntriesAppended -= OnEntriesAppended;
 		}
 	}
 }

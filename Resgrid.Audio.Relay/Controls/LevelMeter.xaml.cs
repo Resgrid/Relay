@@ -36,10 +36,11 @@ namespace Resgrid.Audio.Relay.Controls
 
 		private void UpdateVisual(double db)
 		{
-			// Map dBFS to a 0..100 percentage: -80 dBFS -> 0, 0 dBFS -> 100.
-			var percent = Math.Clamp((db + 80.0) / 80.0 * 100.0, 0.0, 100.0);
-			Bar.Value = percent;
-			Label.Text = $"{db,5:0.0} dBFS";
+			// Clamp to the -80..0 display range once, then map to a 0..100 percentage
+			// (-80 dBFS -> 0, 0 dBFS -> 100) so the bar and the label stay consistent.
+			var clampedDb = Math.Clamp(db, -80.0, 0.0);
+			Bar.Value = (clampedDb + 80.0) / 80.0 * 100.0;
+			Label.Text = $"{clampedDb,5:0.0} dBFS";
 		}
 	}
 }
