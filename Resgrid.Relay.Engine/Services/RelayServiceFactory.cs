@@ -17,7 +17,7 @@ namespace Resgrid.Relay.Engine.Services
 			if (options == null)
 				throw new ArgumentNullException(nameof(options));
 
-			var mode = (options.Mode ?? "smtp").Trim().ToLowerInvariant();
+			var mode = string.IsNullOrWhiteSpace(options.Mode) ? "smtp" : options.Mode.Trim().ToLowerInvariant();
 
 			switch (mode)
 			{

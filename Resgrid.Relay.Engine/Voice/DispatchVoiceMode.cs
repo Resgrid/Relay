@@ -54,9 +54,9 @@ namespace Resgrid.Relay.Engine.Voice
 
 			using var tts = new ResgridTtsClient(options.Tts, logger);
 
-			// TTS client created — the Resgrid TTS service is reachable.
-			if (status != null)
-				status.Tts = ConnectionState.Connected;
+			// TTS reachability is unverified until the first synthesis actually reaches the service,
+			// so leave status.Tts as the caller set it (Connecting) and confirm Connected on the first
+			// successful announcement below.
 
 			var service = new DispatchToneOutService(tts, new ToneGenerator(), options.DispatchVoice.Tone, logger);
 
@@ -84,6 +84,9 @@ namespace Resgrid.Relay.Engine.Voice
 						try
 						{
 							await service.AnnounceAsync(publisher, text, cancellationToken).ConfigureAwait(false);
+							// A successful announcement means a real TTS synthesis call reached the service.
+							if (status != null)
+								status.Tts = ConnectionState.Connected;
 							// Only mark the call handled once the announcement actually succeeds,
 							// so a failed tone-out is retried on the next poll instead of being lost.
 							seen.Add(call.CallId);

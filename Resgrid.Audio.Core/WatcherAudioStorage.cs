@@ -1,6 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using Serilog.Core;
+using Serilog;
 
 namespace Resgrid.Audio.Core
 {
@@ -16,10 +16,10 @@ namespace Resgrid.Audio.Core
 	public class WatcherAudioStorage : IWatcherAudioStorage
 	{
 		private static Object _lock = new Object();
-		private readonly Logger _logger;
+		private readonly ILogger _logger;
 		private static Dictionary<Guid, List<byte>> _watcherAudio;
 
-		public WatcherAudioStorage(Logger logger)
+		public WatcherAudioStorage(ILogger logger)
 		{
 			_logger = logger;
 			_watcherAudio = new Dictionary<Guid, List<byte>>();

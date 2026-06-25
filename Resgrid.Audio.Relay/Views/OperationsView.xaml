@@ -1,0 +1,83 @@
+<UserControl x:Class="Resgrid.Audio.Relay.Views.OperationsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:vm="clr-namespace:Resgrid.Audio.Relay.ViewModels"
+             xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:OperationsViewModel}"
+             d:DesignHeight="450" d:DesignWidth="800">
+    <UserControl.Resources>
+        <conv:RelayServiceStateToBrushConverter x:Key="StateBrush" />
+    </UserControl.Resources>
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="{Binding Title}" FontSize="24" FontWeight="SemiBold" />
+
+        <ScrollViewer Grid.Row="1" Margin="0,16,0,0" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Modes}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <ui:Card Width="420" Margin="0,0,12,12" Padding="16" VerticalAlignment="Top">
+                            <StackPanel>
+                                <!-- Header: mode + state -->
+                                <Grid>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Ellipse Width="10" Height="10" Margin="0,0,8,0"
+                                                 Fill="{Binding State, Converter={StaticResource StateBrush}}" />
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="15" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding StateText}" HorizontalAlignment="Right"
+                                               Opacity="0.7" VerticalAlignment="Center" />
+                                </Grid>
+
+                                <TextBlock Text="{Binding Description}" Opacity="0.6" FontSize="12"
+                                           TextWrapping="Wrap" Margin="0,6,0,0" />
+
+                                <!-- Pre-flight validation -->
+                                <Border Margin="0,12,0,0" Padding="10,8" CornerRadius="4"
+                                        Background="#22000000">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding ValidationSummary}"
+                                                   FontSize="12" FontWeight="SemiBold" />
+                                        <ItemsControl ItemsSource="{Binding ValidationErrors}"
+                                                      Margin="0,4,0,0"
+                                                      Visibility="{Binding HasValidationErrors, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding}" FontSize="11"
+                                                               Foreground="{x:Static conv:StatusBrushes.Connecting}"
+                                                               TextWrapping="Wrap" Margin="0,1" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Start/Stop -->
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <ui:Button Content="Start" Appearance="Primary" Margin="0,0,8,0"
+                                               Command="{Binding StartCommand}" />
+                                    <ui:Button Content="Stop" Appearance="Secondary"
+                                               Command="{Binding StopCommand}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </ui:Card>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

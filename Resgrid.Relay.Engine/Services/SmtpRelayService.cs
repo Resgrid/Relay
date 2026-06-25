@@ -42,8 +42,11 @@ namespace Resgrid.Relay.Engine.Services
 				MutableStatus.ResgridApi = ConnectionState.Disconnected;
 			}
 
+			// Redis is used lazily by the dispatch-lookup cache during message processing, so there
+			// is no startup connection to probe here. Report it as applicable-but-unprobed (Unknown)
+			// rather than a transitional "Connecting" that would never resolve.
 			MutableStatus.Redis = Options.Smtp.RedisCache?.Enabled == true
-				? ConnectionState.Connecting
+				? ConnectionState.Unknown
 				: ConnectionState.NotApplicable;
 
 			var inner = SmtpTelemetry.Create(Options, Logger);

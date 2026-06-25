@@ -43,18 +43,44 @@ namespace Resgrid.Relay.Engine.Services
 		/// </summary>
 		protected abstract Task ExecuteAsync(CancellationToken token);
 
+		/// <summary>
+		/// Faults the service when a mode runner returns a non-zero exit code (a pre-flight
+		/// failure), by throwing — <see cref="StartAsync"/> catches it and transitions to
+		/// <see cref="RelayServiceState.Faulted"/> rather than silently reporting success.
+		/// </summary>
+		protected void ThrowIfFailed(int exitCode)
+		{
+			if (exitCode != 0)
+				throw new InvalidOperationException($"The '{Mode}' relay mode exited with code {exitCode}.");
+		}
+
 		public async Task StartAsync(CancellationToken token)
 		{
+			// Reject re-entrant starts: only (re)start from a terminal state, and claim Starting
+			// atomically before creating the CTS so two concurrent/overlapping starts can't run
+			// ExecuteAsync twice or orphan the cancellation source (leaving the run unstoppable).
+			RelayServiceState previous;
+			lock (_sync)
+			{
+				if (_state == RelayServiceState.Starting || _state == RelayServiceState.Running || _state == RelayServiceState.Stopping)
+					throw new InvalidOperationException($"The '{Mode}' relay service is already active (state: {_state}).");
+				previous = _state;
+				_state = RelayServiceState.Starting;
+			}
+			StateChanged?.Invoke(this, new RelayStateChangedEventArgs(previous, RelayServiceState.Starting));
+
 			_cts = CancellationTokenSource.CreateLinkedTokenSource(token);
-			TransitionTo(RelayServiceState.Starting);
 			try
 			{
 				TransitionTo(RelayServiceState.Running);
 				await ExecuteAsync(_cts.Token).ConfigureAwait(false);
 				TransitionTo(RelayServiceState.Stopped);
 			}
-			catch (OperationCanceledException)
+			catch (OperationCanceledException) when (_cts.IsCancellationRequested)
 			{
+				// Graceful stop: only when OUR shutdown token was actually requested. A cancellation
+				// from elsewhere (e.g. a dependency/HttpClient timeout) is a real fault and flows to
+				// the catch below so Program surfaces a failure exit code.
 				TransitionTo(RelayServiceState.Stopped);
 			}
 			catch (Exception ex)
