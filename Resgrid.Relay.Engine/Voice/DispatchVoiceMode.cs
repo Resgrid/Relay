@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Resgrid.Relay.Engine;
 using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Audio.Voice;
+using Resgrid.Audio.Voice.Abstractions;
 using Resgrid.Audio.Voice.Connection;
 using Resgrid.Audio.Voice.LiveKit;
 using Resgrid.Audio.Voice.ToneOut;
@@ -52,6 +53,23 @@ namespace Resgrid.Relay.Engine.Voice
 			if (status != null)
 				status.LiveKit = ConnectionState.Connected;
 
+			// Signals a hard LiveKit disconnect so the run throws and the resilience layer
+			// rejoins; a transient SDK "reconnecting" only degrades status.
+			var disconnect = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+			EventHandler<VoiceConnectionStateChange> onConnectionChanged = (_, change) =>
+			{
+				if (change.Connected)
+					return;
+				if (string.Equals(change.Reason, "reconnecting", StringComparison.OrdinalIgnoreCase))
+				{
+					if (status != null)
+						status.LiveKit = ConnectionState.Degraded;
+					return;
+				}
+				disconnect.TrySetResult();
+			};
+			session.ConnectionChanged += onConnectionChanged;
+
 			using var tts = new ResgridTtsClient(options.Tts, logger);
 
 			// TTS reachability is unverified until the first synthesis actually reaches the service:
@@ -71,8 +89,14 @@ namespace Resgrid.Relay.Engine.Voice
 			var pollSeconds = Math.Max(5, options.DispatchVoice.PollSeconds);
 			logger.Information($"Dispatch tone-out on '{channel.Name}', polling new calls every {pollSeconds}s. Press Ctrl+C to stop.");
 
+			try
+			{
 			while (!cancellationToken.IsCancellationRequested)
 			{
+				// A hard LiveKit disconnect ends the poll loop so resilience reconnects.
+				if (disconnect.Task.IsCompleted)
+					throw new InvalidOperationException("LiveKit dispatch session disconnected; reconnecting");
+
 				try
 				{
 					var calls = await callsApi.GetActiveCallsAsync(deptId, cancellationToken).ConfigureAwait(false);
@@ -145,11 +169,17 @@ namespace Resgrid.Relay.Engine.Voice
 					logger.Error(ex, "Dispatch tone-out poll failed");
 				}
 
-				try { await Task.Delay(TimeSpan.FromSeconds(pollSeconds), cancellationToken).ConfigureAwait(false); }
+				// Wake promptly on a hard disconnect instead of sleeping out the full poll interval.
+				try { await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(pollSeconds), cancellationToken), disconnect.Task).ConfigureAwait(false); }
 				catch (TaskCanceledException) { break; }
 			}
+			}
+			finally
+			{
+				session.ConnectionChanged -= onConnectionChanged;
+				await publisher.DisposeAsync().ConfigureAwait(false);
+			}
 
-			await publisher.DisposeAsync().ConfigureAwait(false);
 			return 0;
 		}
 

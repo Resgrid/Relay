@@ -42,11 +42,33 @@ namespace Resgrid.Relay.Engine.Voice
 			var log = BuildLog(options.Recorder, logger);
 			var recorders = new List<TransmissionRecorder>();
 
+			// Signals a hard LiveKit disconnect (not a transient SDK reconnect) so the run
+			// throws and the resilience layer rejoins. Carries the disconnect reason.
+			var disconnect = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+			var sessionHandlers = new List<(IVoiceRoomSession session, EventHandler<VoiceConnectionStateChange> handler)>();
+
 			try
 			{
 				foreach (var channel in channels)
 				{
 					var session = await manager.JoinAsync(channel, cancellationToken).ConfigureAwait(false);
+					EventHandler<VoiceConnectionStateChange> handler = (_, change) =>
+					{
+						if (change.Connected)
+							return;
+						// "reconnecting" is the SDK auto-recovering — degrade but keep running.
+						if (string.Equals(change.Reason, "reconnecting", StringComparison.OrdinalIgnoreCase))
+						{
+							if (status != null)
+								status.LiveKit = ConnectionState.Degraded;
+							return;
+						}
+						// Any other Connected=false is a hard disconnect — restart the recorder.
+						disconnect.TrySetResult(change.Reason);
+					};
+					session.ConnectionChanged += handler;
+					sessionHandlers.Add((session, handler));
+
 					var recorder = new TransmissionRecorder(session, options.Recorder.Segmentation, stores, log, logger);
 					if (status != null)
 						recorder.TransmissionRecorded += (_, __) => status.IncrementTransmissionsRecorded();
@@ -59,10 +81,15 @@ namespace Resgrid.Relay.Engine.Voice
 					status.LiveKit = ConnectionState.Connected;
 
 				logger.Information($"Recording {channels.Count} channel(s) to {options.Recorder.Store}. Press Ctrl+C to stop.");
-				await VoiceModeRuntime.WaitForCancellationAsync(cancellationToken).ConfigureAwait(false);
+				var completed = await Task.WhenAny(VoiceModeRuntime.WaitForCancellationAsync(cancellationToken), disconnect.Task).ConfigureAwait(false);
+				if (completed == disconnect.Task)
+					throw new InvalidOperationException($"LiveKit session disconnected ({disconnect.Task.Result}); restarting recorder");
 			}
 			finally
 			{
+				// Detach connection handlers first so a teardown-time disconnect can't fire.
+				foreach (var (session, handler) in sessionHandlers)
+					session.ConnectionChanged -= handler;
 				// Always tear down so a mid-loop JoinAsync failure or cancellation does not
 				// leak already-created recorders, the metadata log, or disposable stores.
 				foreach (var recorder in recorders)
