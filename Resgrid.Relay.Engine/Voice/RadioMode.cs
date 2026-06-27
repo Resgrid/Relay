@@ -86,7 +86,13 @@ namespace Resgrid.Relay.Engine.Voice
 			EventHandler<VoiceConnectionStateChange> onConnectionChanged = (_, change) =>
 			{
 				if (change.Connected)
+				{
+					// A successful (re)connect clears a prior "reconnecting" degrade so the pill
+					// recovers to Connected instead of staying stuck at Degraded after auto-recovery.
+					if (status != null)
+						status.LiveKit = ConnectionState.Connected;
 					return;
+				}
 				if (string.Equals(change.Reason, "reconnecting", StringComparison.OrdinalIgnoreCase))
 				{
 					if (status != null)

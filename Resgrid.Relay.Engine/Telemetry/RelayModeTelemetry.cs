@@ -13,6 +13,6 @@ namespace Resgrid.Relay.Engine.Telemetry
 		public static IRelayModeTelemetry Create(RelayTelemetryOptions telemetry, ILogger logger) =>
 			string.IsNullOrWhiteSpace(telemetry?.Sentry?.Dsn)
 				? NullRelayModeTelemetry.Instance
-				: new SentryRelayModeTelemetry(telemetry.Sentry, telemetry.Environment, logger);
+				: SentryRelayModeTelemetry.Acquire(telemetry.Sentry, telemetry.Environment, logger);
 	}
 }

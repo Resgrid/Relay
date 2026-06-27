@@ -46,6 +46,12 @@ namespace Resgrid.Relay.Engine.Voice
 			// throws and the resilience layer rejoins. Carries the disconnect reason.
 			var disconnect = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 			var sessionHandlers = new List<(IVoiceRoomSession session, EventHandler<VoiceConnectionStateChange> handler)>();
+			// The single LiveKit status pill is shared across every recorded channel, so track which
+			// channels are mid-reconnect and surface the worst state: stay Degraded while ANY channel
+			// is reconnecting and only return to Connected once they are all back. Connection events
+			// fire on SDK threads, so guard the set and the status write with a lock.
+			var degradedChannels = new HashSet<IVoiceRoomSession>();
+			var statusLock = new object();
 
 			try
 			{
@@ -55,12 +61,28 @@ namespace Resgrid.Relay.Engine.Voice
 					EventHandler<VoiceConnectionStateChange> handler = (_, change) =>
 					{
 						if (change.Connected)
+						{
+							// This channel recovered; only report the shared link healthy once EVERY
+							// channel is back — a sibling still reconnecting keeps the pill Degraded.
+							if (status != null)
+								lock (statusLock)
+								{
+									degradedChannels.Remove(session);
+									status.LiveKit = degradedChannels.Count == 0
+										? ConnectionState.Connected
+										: ConnectionState.Degraded;
+								}
 							return;
+						}
 						// "reconnecting" is the SDK auto-recovering — degrade but keep running.
 						if (string.Equals(change.Reason, "reconnecting", StringComparison.OrdinalIgnoreCase))
 						{
 							if (status != null)
-								status.LiveKit = ConnectionState.Degraded;
+								lock (statusLock)
+								{
+									degradedChannels.Add(session);
+									status.LiveKit = ConnectionState.Degraded;
+								}
 							return;
 						}
 						// Any other Connected=false is a hard disconnect — restart the recorder.
@@ -76,13 +98,19 @@ namespace Resgrid.Relay.Engine.Voice
 					recorders.Add(recorder);
 				}
 
-				// All requested channels joined — LiveKit is up.
+				// All requested channels joined — LiveKit is up, unless a channel already began
+				// reconnecting during the join loop, in which case keep the shared pill Degraded.
 				if (status != null)
-					status.LiveKit = ConnectionState.Connected;
+					lock (statusLock)
+						status.LiveKit = degradedChannels.Count == 0
+							? ConnectionState.Connected
+							: ConnectionState.Degraded;
 
 				logger.Information($"Recording {channels.Count} channel(s) to {options.Recorder.Store}. Press Ctrl+C to stop.");
 				var completed = await Task.WhenAny(VoiceModeRuntime.WaitForCancellationAsync(cancellationToken), disconnect.Task).ConfigureAwait(false);
-				if (completed == disconnect.Task)
+				// Only fault on a real disconnect, not when a Ctrl+C/SIGTERM shutdown raced the
+				// teardown's own disconnect event — a requested shutdown must complete cleanly.
+				if (completed == disconnect.Task && !cancellationToken.IsCancellationRequested)
 					throw new InvalidOperationException($"LiveKit session disconnected ({disconnect.Task.Result}); restarting recorder");
 			}
 			finally

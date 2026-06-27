@@ -59,7 +59,13 @@ namespace Resgrid.Relay.Engine.Voice
 			EventHandler<VoiceConnectionStateChange> onConnectionChanged = (_, change) =>
 			{
 				if (change.Connected)
+				{
+					// A healthy (re)connected state clears a prior "reconnecting" degrade so the
+					// pill recovers immediately instead of waiting for the next successful publish.
+					if (status != null)
+						status.LiveKit = ConnectionState.Connected;
 					return;
+				}
 				if (string.Equals(change.Reason, "reconnecting", StringComparison.OrdinalIgnoreCase))
 				{
 					if (status != null)
@@ -70,6 +76,11 @@ namespace Resgrid.Relay.Engine.Voice
 			};
 			session.ConnectionChanged += onConnectionChanged;
 
+			// Enter the try BEFORE the remaining setup (TTS client, backlog prime) so the finally
+			// below always detaches the handler and disposes the publisher — a transient API failure
+			// during startup must not leak the ConnectionChanged subscription or the publisher.
+			try
+			{
 			using var tts = new ResgridTtsClient(options.Tts, logger);
 
 			// TTS reachability is unverified until the first synthesis actually reaches the service:
@@ -89,8 +100,6 @@ namespace Resgrid.Relay.Engine.Voice
 			var pollSeconds = Math.Max(5, options.DispatchVoice.PollSeconds);
 			logger.Information($"Dispatch tone-out on '{channel.Name}', polling new calls every {pollSeconds}s. Press Ctrl+C to stop.");
 
-			try
-			{
 			while (!cancellationToken.IsCancellationRequested)
 			{
 				// A hard LiveKit disconnect ends the poll loop so resilience reconnects.

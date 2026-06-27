@@ -15,10 +15,19 @@ namespace Resgrid.Relay.Engine.Telemetry
 	/// </summary>
 	public sealed class SentryRelayModeTelemetry : IRelayModeTelemetry
 	{
+		// SentrySdk.Init initializes a process-global hub and the returned IDisposable closes it,
+		// so every LiveKit service shares ONE telemetry instance and ONE SDK handle. The shared
+		// instance is reference-counted: the SDK is initialized on the first service and only
+		// flushed/closed when the last service is disposed — otherwise the first service to stop
+		// would tear Sentry down for the others still running.
+		private static readonly object _sharedLock = new object();
+		private static SentryRelayModeTelemetry _shared;
+		private static int _refCount;
+
 		private readonly ILogger _logger;
 		private readonly IDisposable _sentrySdk;
 
-		public SentryRelayModeTelemetry(SentryTelemetryOptions sentry, string environment, ILogger logger)
+		private SentryRelayModeTelemetry(SentryTelemetryOptions sentry, string environment, ILogger logger)
 		{
 			_logger = logger;
 
@@ -40,6 +49,21 @@ namespace Resgrid.Relay.Engine.Telemetry
 				"Relay mode observability initialized. SentryEnabled={SentryEnabled} Environment={Environment}",
 				_sentrySdk != null,
 				environment);
+		}
+
+		/// <summary>
+		/// Returns the process-wide shared telemetry, initializing the Sentry SDK on first use.
+		/// Each call increments a reference count that <see cref="DisposeAsync"/> releases, so the
+		/// SDK stays alive until every LiveKit service sharing it has been disposed.
+		/// </summary>
+		public static IRelayModeTelemetry Acquire(SentryTelemetryOptions sentry, string environment, ILogger logger)
+		{
+			lock (_sharedLock)
+			{
+				_shared ??= new SentryRelayModeTelemetry(sentry, environment, logger);
+				_refCount++;
+				return _shared;
+			}
 		}
 
 		public void ModeStarting(string mode)
@@ -117,10 +141,22 @@ namespace Resgrid.Relay.Engine.Telemetry
 
 		public async ValueTask DisposeAsync()
 		{
-			if (_sentrySdk != null)
+			IDisposable sdk;
+			lock (_sharedLock)
+			{
+				// Release this service's reference; only the last one out flushes and closes the
+				// shared SDK so any services still running keep reporting to Sentry.
+				if (_refCount == 0 || --_refCount > 0)
+					return;
+
+				sdk = _sentrySdk;
+				_shared = null;
+			}
+
+			if (sdk != null)
 			{
 				await SentrySdk.FlushAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-				_sentrySdk.Dispose();
+				sdk.Dispose();
 			}
 		}
 	}
