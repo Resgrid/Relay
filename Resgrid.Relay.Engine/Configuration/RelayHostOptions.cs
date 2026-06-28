@@ -17,6 +17,24 @@ namespace Resgrid.Relay.Engine.Configuration
 		public RecorderModeOptions Recorder { get; set; } = new RecorderModeOptions();
 		public DispatchVoiceOptions DispatchVoice { get; set; } = new DispatchVoiceOptions();
 		public TtsSettings Tts { get; set; } = new TtsSettings();
+
+		// ─── Fault tolerance for the LiveKit voice modes (retry + circuit-breaker) ───
+		public ResilienceOptions Resilience { get; set; } = new ResilienceOptions();
+	}
+
+	/// <summary>
+	/// Retry/back-off and circuit-breaker tuning for the long-lived LiveKit voice modes
+	/// (radio / record / dispatch). A run that faults is restarted with exponential
+	/// back-off; the breaker opens (faulting the service) once failures pile up without a
+	/// healthy run in between.
+	/// </summary>
+	public sealed class ResilienceOptions
+	{
+		public bool Enabled { get; set; } = true;
+		public int MaxConsecutiveFailures { get; set; } = 5;   // circuit-breaker trips after this many consecutive quick failures
+		public double InitialBackoffSeconds { get; set; } = 2;
+		public double MaxBackoffSeconds { get; set; } = 60;
+		public double HealthyRunSeconds { get; set; } = 30;     // a run lasting >= this resets the consecutive-failure counter
 	}
 
 	public sealed class RelayTelemetryOptions

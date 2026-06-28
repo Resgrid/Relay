@@ -16,5 +16,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Resgrid.Audio.Voice\Resgrid.Audio.Voice.csproj" />
+    <ProjectReference Include="..\Resgrid.Relay.Engine\Resgrid.Relay.Engine.csproj" />
   </ItemGroup>
 </Project>

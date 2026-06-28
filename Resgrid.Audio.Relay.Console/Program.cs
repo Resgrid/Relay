@@ -9,6 +9,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -84,6 +85,16 @@ namespace Resgrid.Audio.Relay.Console
 				cancellationTokenSource.Cancel();
 			};
 			Cli.CancelKeyPress += cancelHandler;
+
+			// Also shut down gracefully on SIGTERM — the default signal `systemctl stop` / `docker stop`
+			// send. Mirrors the Ctrl+C / SIGINT path so in-flight work (recordings, LiveKit) unwinds
+			// cleanly instead of the process being killed. Disposed before the CTS (reverse using order),
+			// so the handler can never fire against a disposed token source.
+			using var sigTermRegistration = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
+			{
+				context.Cancel = true;
+				cancellationTokenSource.Cancel();
+			});
 
 			try
 			{

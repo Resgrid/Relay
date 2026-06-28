@@ -1,0 +1,44 @@
+[Unit]
+Description=Resgrid Relay — LiveKit backend (SMTP dispatch / call recording / TTS dispatch tone-out)
+Documentation=https://docs.resgrid.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Dedicated unprivileged service account (see README.md to create it).
+User=resgrid
+Group=resgrid
+
+# Where you published the app. This assumes a framework-dependent publish run via the
+# dotnet host; for a self-contained publish, point ExecStart at the binary directly:
+#   ExecStart=/opt/resgrid-relay/Resgrid.Audio.Relay.Console run
+WorkingDirectory=/opt/resgrid-relay
+ExecStart=/usr/bin/dotnet /opt/resgrid-relay/Resgrid.Audio.Relay.Console.dll run
+
+# All configuration is via RESGRID__RELAY__* env vars; keep secrets here (chmod 600).
+EnvironmentFile=/etc/resgrid-relay/relay.env
+
+# The CLI traps SIGTERM (systemd's default stop signal) and SIGINT, shutting down gracefully —
+# cancelling in-flight work so recordings flush and LiveKit disconnects cleanly. No KillSignal
+# override is needed; TimeoutStopSec bounds the graceful drain before systemd escalates to KILL.
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=5
+
+# Writable state (recorder LocalPath, Resgrid token cache, etc.) → /var/lib/resgrid-relay
+StateDirectory=resgrid-relay
+
+# Sandboxing — safe defaults. Relax these if your recorder/output paths live elsewhere.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

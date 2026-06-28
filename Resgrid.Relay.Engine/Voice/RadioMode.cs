@@ -78,29 +78,66 @@ namespace Resgrid.Relay.Engine.Voice
 					status.Receiving = bridge.Receiving;
 				};
 
-			await bridge.StartAsync(session, cancellationToken).ConfigureAwait(false);
+			// A hard LiveKit disconnect cancels the linked token so the bridge unwinds; we then
+			// rethrow (below) so the resilience layer rejoins. A transient SDK "reconnecting"
+			// only degrades status and is left to auto-recover.
+			using var disconnectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			var disconnected = false;
+			EventHandler<VoiceConnectionStateChange> onConnectionChanged = (_, change) =>
+			{
+				if (change.Connected)
+				{
+					// A successful (re)connect clears a prior "reconnecting" degrade so the pill
+					// recovers to Connected instead of staying stuck at Degraded after auto-recovery.
+					if (status != null)
+						status.LiveKit = ConnectionState.Connected;
+					return;
+				}
+				if (string.Equals(change.Reason, "reconnecting", StringComparison.OrdinalIgnoreCase))
+				{
+					if (status != null)
+						status.LiveKit = ConnectionState.Degraded;
+					return;
+				}
+				disconnected = true;
+				try { disconnectCts.Cancel(); }
+				catch (ObjectDisposedException) { }
+			};
+			session.ConnectionChanged += onConnectionChanged;
 
 			TransmissionRecorder recorder = null;
 			List<IDisposable> recorderDisposables = null;
 			ITransmissionLog recorderLog = null;
-			if (options.Radio.RecordWhileBridging)
+			try
 			{
-				var (stores, disposables) = RecordMode.BuildStores(options.Recorder, logger);
-				recorderDisposables = disposables;
-				recorderLog = RecordMode.BuildLog(options.Recorder, logger);
-				recorder = new TransmissionRecorder(session, options.Recorder.Segmentation, stores, recorderLog, logger);
-				recorder.Start();
+				await bridge.StartAsync(session, disconnectCts.Token).ConfigureAwait(false);
+
+				if (options.Radio.RecordWhileBridging)
+				{
+					var (stores, disposables) = RecordMode.BuildStores(options.Recorder, logger);
+					recorderDisposables = disposables;
+					recorderLog = RecordMode.BuildLog(options.Recorder, logger);
+					recorder = new TransmissionRecorder(session, options.Recorder.Segmentation, stores, recorderLog, logger);
+					recorder.Start();
+				}
+
+				logger.Information($"Radio bridge running on '{channel.Name}'. Press Ctrl+C to stop.");
+				await VoiceModeRuntime.WaitForCancellationAsync(disconnectCts.Token).ConfigureAwait(false);
+
+				// Woken by a hard disconnect (not the user shutdown) ⇒ fault so resilience rejoins.
+				if (disconnected && !cancellationToken.IsCancellationRequested)
+					throw new InvalidOperationException("LiveKit radio session disconnected; reconnecting");
 			}
-
-			logger.Information($"Radio bridge running on '{channel.Name}'. Press Ctrl+C to stop.");
-			await VoiceModeRuntime.WaitForCancellationAsync(cancellationToken).ConfigureAwait(false);
-
-			if (recorder != null)
-				await recorder.DisposeAsync().ConfigureAwait(false);
-			if (recorderLog != null)
-				await recorderLog.DisposeAsync().ConfigureAwait(false);
-			if (recorderDisposables != null)
-				foreach (var d in recorderDisposables) d.Dispose();
+			finally
+			{
+				session.ConnectionChanged -= onConnectionChanged;
+				if (recorder != null)
+					await recorder.DisposeAsync().ConfigureAwait(false);
+				if (recorderLog != null)
+					await recorderLog.DisposeAsync().ConfigureAwait(false);
+				if (recorderDisposables != null)
+					foreach (var d in recorderDisposables) d.Dispose();
+			}
 
 			// bridge is disposed by its `await using` scope on method exit — no explicit call.
 			return 0;
