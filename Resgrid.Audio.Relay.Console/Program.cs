@@ -20,7 +20,7 @@ using NAudio.Wave;
 using Resgrid.Audio.Core;
 using Resgrid.Audio.Core.Model;
 using System.IO.Ports;
-using HidSharp;
+using Cm108Compatibility = Resgrid.Audio.Core.Radio.Cm108Compatibility;
 #endif
 
 namespace Resgrid.Audio.Relay.Console
@@ -141,7 +141,12 @@ namespace Resgrid.Audio.Relay.Console
 					await service.StartAsync(cancellationTokenSource.Token).ConfigureAwait(false);
 				}
 
-				return service.State == RelayServiceState.Faulted ? 1 : 0;
+				if (service.State != RelayServiceState.Faulted)
+					return 0;
+
+				// StartAsync reports a fault through State rather than throwing, so the catch in Main never sees a configuration
+				// error raised once the mode is running (e.g. record mode with the client_credentials grant); read it off the fault.
+				return (service as RelayServiceBase)?.Fault is RelayConfigurationException ? ConfigurationErrorExitCode : 1;
 			}
 			finally
 			{
@@ -461,7 +466,15 @@ namespace Resgrid.Audio.Relay.Console
 
 			if (watcher.Triggers[0].Count >= 2)
 			{
-				watcher.Triggers[0].Frequency2 = PromptDouble("Tone 2 frequency (Hz)", 794, 100, 4000);
+				// The detector works in whole hertz: two frequencies that round to the same tone can't be told apart, so one long tone
+				// would look like both. Ask again rather than save a trigger that pages on the wrong pattern.
+				while (true)
+				{
+					watcher.Triggers[0].Frequency2 = PromptDouble("Tone 2 frequency (Hz)", 794, 100, 4000);
+					if (Trigger.ToneKey(watcher.Triggers[0].Frequency2) != Trigger.ToneKey(watcher.Triggers[0].Frequency1))
+						break;
+					Cli.WriteLine($"  Tone 2 must differ from tone 1 by at least 1 Hz (both are detected as {Trigger.ToneKey(watcher.Triggers[0].Frequency1)} Hz).");
+				}
 				watcher.Triggers[0].Time2 = PromptInt("Tone 2 length in milliseconds", 500, 50, 10000);
 			}
 
@@ -518,20 +531,36 @@ namespace Resgrid.Audio.Relay.Console
 			foreach (var port in ports)
 				Cli.WriteLine($"  {port}");
 
-			Cli.WriteLine("CM108-class USB HID devices (PTT GPIO):");
-			var hids = DeviceList.Local.GetHidDevices(0x0D8C, null).ToList();
+			Cli.WriteLine("CM108-compatible USB HID interfaces (PTT GPIO):");
+			var allHids = Cm108Compatibility.EnumerateHidDevices();
+			var hids = Cm108Compatibility.SelectCompatible(allHids);
 			if (hids.Count == 0)
-				Cli.WriteLine("  (none found at VID 0x0D8C)");
+				Cli.WriteLine($"  (none found; looked for {string.Join(", ", Cm108Compatibility.KnownInterfaces)})");
+
+			// Which one Cm108 PTT would key with the current settings; an unreadable settings file must not break the listing.
+			RadioModeOptions radio = null;
+			try { radio = LoadHostOptions().Radio; }
+			catch (Exception) { /* list the devices without the configured marker */ }
+
+			var selected = radio == null ? null : Cm108Compatibility.FindSelected(allHids, radio.Cm108VendorId, radio.Cm108ProductId);
 			foreach (var hid in hids)
-				Cli.WriteLine($"  VID=0x{hid.VendorID:X4} PID=0x{hid.ProductID:X4} {SafeName(hid)}");
+			{
+				var note = ReferenceEquals(hid, selected)
+					? "  <- selected by the current settings"
+					: $"  (to use it: {Cm108Compatibility.SettingsFor(hid)})";
+				Cli.WriteLine($"  {Cm108Compatibility.Describe(hid)}{note}");
+			}
+
+			if (radio != null)
+			{
+				var ids = Cm108Compatibility.FormatIds(radio.Cm108VendorId, radio.Cm108ProductId);
+				if (selected == null)
+					Cli.WriteLine($"  The current settings ({ids}) select no connected device: Cm108 PTT keying would fail.");
+				else if (!hids.Contains(selected))
+					Cli.WriteLine($"  The current settings ({ids}) select {Cm108Compatibility.Describe(selected)}, not a known CM108-compatible interface.");
+			}
 
 			return 0;
-		}
-
-		private static string SafeName(HidDevice device)
-		{
-			try { return device.GetFriendlyName(); }
-			catch { return "(unnamed)"; }
 		}
 
 		private static async Task<int> TuneAsync(string[] args)
@@ -591,11 +620,14 @@ namespace Resgrid.Audio.Relay.Console
 			}
 			catch (OperationCanceledException)
 			{
+				// The engine throws this only once PTT is confirmed released (or was never keyed); a failed release surfaces as
+				// PttReleaseException below instead, so this never claims a release that did not happen.
 				Cli.WriteLine("Cancelled; PTT released.");
 				return 1;
 			}
 			catch (Exception ex)
 			{
+				// Includes PttReleaseException: the radio may still be transmitting, and the message says to disconnect it.
 				Cli.Error.WriteLine($"Transmit test failed: {ex.Message}");
 				return 1;
 			}

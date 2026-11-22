@@ -82,6 +82,12 @@ namespace Resgrid.Audio.Core
 								{
 									var addedTone = AddTone(Trigger.ToneKey(trigger.Frequency2));
 									trigger.Tones.Add(addedTone);
+
+									// The detector works in whole hertz, so it cannot tell these two tones apart: the trigger then needs
+									// two separate bursts of that tone, never one long tone.
+									if (Trigger.ToneKey(trigger.Frequency1) == Trigger.ToneKey(trigger.Frequency2))
+										_logger?.Warning("Watcher {Watcher}: tones {Frequency1} Hz and {Frequency2} Hz are both detected as {Tone} Hz, so the trigger needs two separate tones at that frequency",
+											watcher.Name, trigger.Frequency1, trigger.Frequency2, Trigger.ToneKey(trigger.Frequency1));
 								}
 							}
 						}
@@ -234,16 +240,19 @@ namespace Resgrid.Audio.Core
 
 			lock (_lock)
 			{
+				// The detector stamps tones with local time; compare in UTC so a daylight-saving change does not make every tone
+				// look an hour older (swept mid-page) or younger.
+				var now = DateTime.UtcNow;
 				foreach (var tone in _finishedTones)
 				{
-					if (DateTime.Now.Subtract(tone.TimeStamp).TotalMinutes > 5)
+					if (now.Subtract(tone.TimeStamp.ToUniversalTime()).TotalMinutes > 5)
 						tonesToCleanUp.Add(tone);
 				}
 
 				foreach (var tone in tonesToCleanUp)
 				{
 					_logger.Debug(
-						$"AudioEvaluator->CleanUpTones: Cleaning up tone {tone.DtmfTone.HighTone} that has been around for {DateTime.Now.Subtract(tone.TimeStamp).TotalMinutes}m");
+						$"AudioEvaluator->CleanUpTones: Cleaning up tone {tone.DtmfTone.HighTone} that has been around for {now.Subtract(tone.TimeStamp.ToUniversalTime()).TotalMinutes}m");
 					_finishedTones.Remove(tone);
 				}
 			}

@@ -73,6 +73,38 @@ namespace Resgrid.Audio.Voice.Tests
 			new TaskCompletionSource<StoredLocation>().Task;
 	}
 
+	/// <summary>
+	/// A store on an unreachable network share: the call itself blocks before it returns a task, as
+	/// <see cref="LocalFileTransmissionStore"/>'s synchronous folder creation would. Dispose releases the blocked thread.
+	/// </summary>
+	internal sealed class BlockingTransmissionStore : ITransmissionStore, IDisposable
+	{
+		private readonly ManualResetEventSlim _release = new ManualResetEventSlim(false);
+		private int _calls;
+
+		public string Kind => "s3";
+
+		public int Calls => Volatile.Read(ref _calls);
+
+		public Task<StoredLocation> SaveAsync(string objectName, byte[] data, CancellationToken cancellationToken = default)
+		{
+			Interlocked.Increment(ref _calls);
+			_release.Wait();
+			return Task.FromException<StoredLocation>(new System.IO.IOException("The network path was not found."));
+		}
+
+		public void Dispose() => _release.Set();
+	}
+
+	/// <summary>A store that always takes the recording, in memory.</summary>
+	internal sealed class MemoryTransmissionStore : ITransmissionStore
+	{
+		public string Kind => "memory";
+
+		public Task<StoredLocation> SaveAsync(string objectName, byte[] data, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new StoredLocation { Kind = Kind, Location = "memory://" + objectName, SizeBytes = data.LongLength });
+	}
+
 	internal static class TestAudio
 	{
 		public static short[] Tone(int ms, double frequency = 1000, double amplitude = 8000)

@@ -75,7 +75,8 @@ namespace Resgrid.Audio.Relay.Services
 			catch (RelayConfigurationException ex)
 			{
 				LoadError = ex.Message;
-				Serilog.Log.Error("Relay settings could not be read; using defaults: {Error}", ex.Message);
+				// Log the exception itself (type + stack), not just its message, alongside the user settings path.
+				Serilog.Log.Error(ex, "Relay settings could not be read; using defaults (user settings: {ConfigPath})", RelayConfiguration.UserConfigPath);
 				return new RelayHostOptions();
 			}
 		}

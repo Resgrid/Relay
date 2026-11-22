@@ -50,6 +50,16 @@ namespace Resgrid.Audio.Relay.ViewModels
 		[ObservableProperty]
 		private string _summaryText = "No services running";
 
+		/// <summary>
+		/// The outcome of the last Start or tile Restart issued here (e.g. why a restarted mode did not come back). Kept apart from
+		/// <see cref="SummaryText"/>, which every state change rewrites, and from the tiles, which go away with their service.
+		/// </summary>
+		[ObservableProperty]
+		[NotifyPropertyChangedFor(nameof(HasStatusMessage))]
+		private string _statusMessage = "";
+
+		public bool HasStatusMessage => !string.IsNullOrWhiteSpace(StatusMessage);
+
 		[ObservableProperty]
 		private int _runningCount;
 
@@ -70,9 +80,10 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private async System.Threading.Tasks.Task StartDefaults()
 		{
 			var problems = await _launcher.StartDefaultModesAsync().ConfigureAwait(true);
-			if (problems.Count > 0)
-				SummaryText = problems[0];
+			StatusMessage = string.Join(Environment.NewLine, problems);
 		}
+
+		private void ReportStatus(string message) => StatusMessage = message ?? "";
 
 		private void OnRunningServicesChanged(object sender, NotifyCollectionChangedEventArgs e)
 		{
@@ -94,7 +105,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 			Tiles.Clear();
 
 			foreach (var service in _controller.RunningServices)
-				Tiles.Add(new ServiceTileViewModel(service, _launcher));
+				Tiles.Add(new ServiceTileViewModel(service, _launcher, ReportStatus));
 		}
 
 		private void UpdateSummary()

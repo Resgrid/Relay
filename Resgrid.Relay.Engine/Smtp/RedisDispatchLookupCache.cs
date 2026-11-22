@@ -22,8 +22,9 @@ namespace Resgrid.Relay.Engine.Smtp
 	/// single-department relays sharing one Redis would read each other's group ids.
 	///
 	/// Redis is only an optimisation. While it is unreachable the cache is skipped (every call is a miss / no-op) instead of
-	/// holding up a dispatch: commands fail fast rather than queueing, and after a failed connect the cache is not tried
-	/// again for <see cref="ReconnectBackoff"/>.
+	/// holding up a dispatch: the connection is opened in the background (lookups skip the cache until it is up), commands fail
+	/// fast rather than queueing, and after a connect that fails outright the cache is not tried again for
+	/// <see cref="ReconnectBackoff"/>.
 	/// </summary>
 	internal sealed class RedisDispatchLookupCache : IDispatchLookupCache
 	{
@@ -37,11 +38,14 @@ namespace Resgrid.Relay.Engine.Smtp
 
 		private readonly RedisCacheOptions _options;
 		private readonly string _keyPrefix;
-		private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
+
+		// Guards _redis/_db/_connecting/_retryConnectAfterTicks changes and _disposed's effect on them; never held across an await.
+		private readonly object _gate = new object();
 		private ConnectionMultiplexer _redis;
 		private IDatabase _db;
-		private DateTimeOffset _retryConnectAfterUtc = DateTimeOffset.MinValue;
-		private bool _disposed;
+		private Task _connecting;
+		private long _retryConnectAfterTicks = DateTimeOffset.MinValue.UtcTicks;
+		private volatile bool _disposed;
 
 		public RedisDispatchLookupCache(RedisCacheOptions options, string credentialScope = null)
 		{
@@ -49,84 +53,109 @@ namespace Resgrid.Relay.Engine.Smtp
 			_keyPrefix = String.IsNullOrWhiteSpace(credentialScope) ? "relay:lookup:" : $"relay:lookup:{credentialScope.Trim()}:";
 		}
 
-		/// <summary>The database, or null when Redis cannot be used right now (the caller then skips the cache).</summary>
-		private async Task<IDatabase> GetDatabaseAsync()
+		private bool InReconnectBackoff => DateTimeOffset.UtcNow.UtcTicks < Interlocked.Read(ref _retryConnectAfterTicks);
+
+		/// <summary>
+		/// The database, or null when Redis cannot be used right now (the caller then skips the cache). Never waits: the first
+		/// lookup starts the connect in the background and every lookup skips the cache until it is up, since StackExchange.Redis
+		/// waits out its whole connect timeout before ConnectAsync returns (whatever the backlog policy), and an unreachable Redis
+		/// must not hold up a dispatch.
+		/// </summary>
+		private IDatabase GetDatabase()
 		{
 			if (_disposed)
 				return null;
 
-			if (_db != null)
+			var redis = Volatile.Read(ref _redis);
+			if (redis != null)
 				// The multiplexer keeps reconnecting in the background (abortConnect=false); until it is back, skip the cache.
-				return _redis.IsConnected ? _db : null;
+				return redis.IsConnected ? Volatile.Read(ref _db) : null;
 
-			if (DateTimeOffset.UtcNow < _retryConnectAfterUtc)
+			if (InReconnectBackoff)
 				return null;
 
-			// One connect at a time, and nobody waits behind it: a lookup that finds a connect in progress just skips the cache.
-			if (!await _lock.WaitAsync(0).ConfigureAwait(false))
-				return null;
+			lock (_gate)
+			{
+				// Checked again here: DisposeAsync may have run, or a connect may have failed and started the backoff, since the
+				// checks above. One connect at a time.
+				if (_disposed || _redis != null || _connecting != null || InReconnectBackoff)
+					return null;
 
+				_connecting = Task.Run(ConnectAsync);
+			}
+
+			return null;
+		}
+
+		/// <summary>Never throws: a connect that fails starts the backoff, one that finishes after disposal closes itself.</summary>
+		private async Task ConnectAsync()
+		{
+			ConnectionMultiplexer redis;
 			try
 			{
-				if (_db != null)
-					return _redis.IsConnected ? _db : null;
+				var configuration = ConfigurationOptions.Parse(_options.ConnectionString);
+				configuration.AbortOnConnectFail = false;
+				configuration.BacklogPolicy = BacklogPolicy.FailFast;
 
-				try
-				{
-					var configuration = ConfigurationOptions.Parse(_options.ConnectionString);
-					configuration.AbortOnConnectFail = false;
-					configuration.BacklogPolicy = BacklogPolicy.FailFast;
-
-					_redis = await ConnectionMultiplexer.ConnectAsync(configuration).ConfigureAwait(false);
-				}
-				catch (Exception)
-				{
-					_retryConnectAfterUtc = DateTimeOffset.UtcNow.Add(ReconnectBackoff);
-					return null;
-				}
-
-				_db = _redis.GetDatabase();
-				if (!_redis.IsConnected)
-				{
-					// The first attempt failed; the multiplexer retries on its own, and the cache is skipped until it succeeds.
-					_retryConnectAfterUtc = DateTimeOffset.UtcNow.Add(ReconnectBackoff);
-					return null;
-				}
-
-				return _db;
+				redis = await ConnectionMultiplexer.ConnectAsync(configuration).ConfigureAwait(false);
 			}
-			finally
+			catch (Exception)
 			{
-				_lock.Release();
+				redis = null;
 			}
+
+			lock (_gate)
+			{
+				_connecting = null;
+
+				if (redis == null)
+				{
+					Interlocked.Exchange(ref _retryConnectAfterTicks, DateTimeOffset.UtcNow.Add(ReconnectBackoff).UtcTicks);
+					return;
+				}
+
+				if (!_disposed)
+				{
+					// Kept even when this first attempt did not get through: the multiplexer retries on its own, and the cache is
+					// skipped until it is connected.
+					Volatile.Write(ref _db, redis.GetDatabase());
+					Volatile.Write(ref _redis, redis);
+					return;
+				}
+			}
+
+			// Disposed while connecting: DisposeAsync did not see this connection, so it is closed here.
+			await CloseAsync(redis).ConfigureAwait(false);
 		}
 
 		public async ValueTask DisposeAsync()
 		{
-			_disposed = true;
-			await _lock.WaitAsync().ConfigureAwait(false);
+			ConnectionMultiplexer redis;
+			lock (_gate)
+			{
+				// A connect still running sees this once it finishes and closes its own connection.
+				_disposed = true;
+				redis = _redis;
+				Volatile.Write(ref _redis, null);
+				Volatile.Write(ref _db, null);
+			}
+
+			if (redis != null)
+				await CloseAsync(redis).ConfigureAwait(false);
+		}
+
+		private static async Task CloseAsync(ConnectionMultiplexer redis)
+		{
 			try
 			{
-				if (_redis != null)
-				{
-					try
-					{
-						await _redis.CloseAsync().ConfigureAwait(false);
-					}
-					catch (Exception)
-					{
-						// Closing a connection that never came up must not fail the relay's shutdown.
-					}
-
-					_redis.Dispose();
-					_redis = null;
-					_db = null;
-				}
+				await redis.CloseAsync().ConfigureAwait(false);
 			}
-			finally
+			catch (Exception)
 			{
-				_lock.Release();
+				// Closing a connection that never came up must not fail the relay's shutdown.
 			}
+
+			redis.Dispose();
 		}
 
 		private TimeSpan Ttl => TimeSpan.FromMinutes(_options.TtlMinutes > 0 ? _options.TtlMinutes : 60);
@@ -142,7 +171,7 @@ namespace Resgrid.Relay.Engine.Smtp
 		{
 			try
 			{
-				var db = await GetDatabaseAsync().ConfigureAwait(false);
+				var db = GetDatabase();
 				if (db == null)
 					return null;
 
@@ -163,7 +192,7 @@ namespace Resgrid.Relay.Engine.Smtp
 		{
 			try
 			{
-				var db = await GetDatabaseAsync().ConfigureAwait(false);
+				var db = GetDatabase();
 				if (db == null)
 					return;
 

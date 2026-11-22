@@ -66,7 +66,14 @@ namespace Resgrid.Relay.Engine.Configuration
 		public string PttMethod { get; set; } = "Vox";
 
 		public string SerialPort { get; set; } = "";
+
+		/// <summary>USB vendor id of the CM108 PTT interface: 0x0D8C (3468) for C-Media fobs, 0x1209 (4617) for the AIOC.</summary>
 		public int Cm108VendorId { get; set; } = 0x0D8C;
+
+		/// <summary>
+		/// USB product id of the CM108 PTT interface: 0 for any product of the vendor (for 0x1209, only the AIOC), 0x7388
+		/// (29576) for the AIOC.
+		/// </summary>
 		public int Cm108ProductId { get; set; } = 0;
 		public int Cm108GpioPin { get; set; } = 3;
 

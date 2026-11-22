@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using NUnit.Framework;
@@ -97,6 +98,66 @@ namespace Resgrid.Audio.Voice.Tests
 			var location = log.Records.Should().ContainSingle().Which.Locations.Should().ContainSingle().Subject;
 			location.Kind.Should().Be("fallback");
 			File.Exists(location.Location).Should().BeTrue();
+		}
+
+		[Test]
+		public async Task StoreThatBlocksBeforeReturningItsTask_DoesNotHangShutdown()
+		{
+			var log = new CapturingTransmissionLog();
+			using var store = new BlockingTransmissionStore();
+			var recorder = Recorder(new ITransmissionStore[] { store }, log, FallbackDir);
+			recorder.StoreTimeout = TimeSpan.FromMinutes(5);
+			recorder.ShutdownGrace = TimeSpan.FromMilliseconds(200);
+			recorder.Start();
+
+			RecordOneTransmission(recorder);
+			var stopwatch = Stopwatch.StartNew();
+			// On the pool and bounded, so a regression fails here instead of hanging the run: the store call used to run on
+			// the disposing thread itself, where WaitAsync could not bound it.
+			var dispose = Task.Run(async () => await recorder.DisposeAsync());
+			(await Task.WhenAny(dispose, Task.Delay(TimeSpan.FromSeconds(10)))).Should().BeSameAs(dispose, "shutdown must not wait on a blocked store");
+			await dispose;
+
+			stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5), "the blocked upload is abandoned after the grace period");
+			store.Calls.Should().Be(1);
+			var location = log.Records.Should().ContainSingle().Which.Locations.Should().ContainSingle().Subject;
+			location.Kind.Should().Be("fallback");
+			File.Exists(location.Location).Should().BeTrue();
+		}
+
+		[Test]
+		public async Task ShutdownDuringRollovers_FinishesEveryTransmissionBeforeItReturns_AndStartsNoneAfter()
+		{
+			var log = new CapturingTransmissionLog();
+			// Every 1 s frame fills a 1 s segment, so each one rolls over (and is finalized) from inside the frame callback.
+			var recorder = new TransmissionRecorder(new TestVoiceSession(), new RecorderSettings { ScanIntervalMs = 60_000, MaxSegmentSeconds = 1 },
+				new ITransmissionStore[] { new MemoryTransmissionStore() }, log, logger: null, FallbackDir);
+			recorder.Start();
+			var participant = new VoiceParticipant("PA_1", "unit-1", "Engine 1", "standard");
+			var second = TestAudio.Tone(1000);
+
+			using var stop = new CancellationTokenSource();
+			var fed = 0;
+			var feeder = Task.Run(() =>
+			{
+				while (!stop.IsCancellationRequested)
+				{
+					recorder.Record(new VoiceAudioFrame(participant, "TR_1", second, DateTime.UtcNow));
+					Interlocked.Increment(ref fed);
+				}
+			});
+			SpinWait.SpinUntil(() => Volatile.Read(ref fed) >= 5, TimeSpan.FromSeconds(10)).Should().BeTrue();
+
+			await recorder.DisposeAsync();
+			var recordedAtShutdown = log.Records.Count;
+			stop.Cancel();
+			await feeder;
+			recorder.Record(new VoiceAudioFrame(participant, "TR_1", second, DateTime.UtcNow));
+			await Task.Delay(300);
+
+			recordedAtShutdown.Should().BeGreaterThan(0);
+			log.Records.Should().HaveCount(recordedAtShutdown,
+				"a rollover under way at shutdown is finished before DisposeAsync returns, and frames after it start nothing");
 		}
 
 		[Test]

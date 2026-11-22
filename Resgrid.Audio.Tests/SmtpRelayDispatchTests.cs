@@ -36,7 +36,7 @@ namespace Resgrid.Audio.Tests
 			{
 				var client = new FakeResgridCallsClient { CurrentUserId = currentUserId };
 				var telemetry = new FakeSmtpTelemetry();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client, usesSystemApiKey: false);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client, usesSystemApiKey: false);
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("abc123@dispatch.resgrid.com"),
 					CreateMessageBuffer("msg-token-files@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com" }, "Fire", "Body",
@@ -62,7 +62,7 @@ namespace Resgrid.Audio.Tests
 			{
 				var client = new FakeResgridCallsClient { CurrentUserId = null };
 				var lookups = new FakeLookupsApi { Departments = { ["abc123"] = "42" } };
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("abc123@dispatch.resgrid.com"),
 					CreateMessageBuffer("msg-system-files@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com" }, "Fire", "Body",
@@ -92,7 +92,7 @@ namespace Resgrid.Audio.Tests
 				var lookups = new FakeLookupsApi { Groups = { [("station5", "42")] = "7", [("engine2", "99")] = "8" } };
 				var client = new FakeResgridCallsClient();
 				var telemetry = new FakeSmtpTelemetry();
-				var store = new RelayMessageStore(options, telemetry, callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+				await using var store = new RelayMessageStore(options, telemetry, callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
 				var buffer = CreateMessageBuffer("msg-two-departments@cad.example", "cad@county.example",
 					new[] { "station5@42.groups.resgrid.com", "engine2@99.groups.resgrid.com" }, "Mutual aid", "Body");
 
@@ -122,7 +122,7 @@ namespace Resgrid.Audio.Tests
 				var options = CreateHostedOptions(dataDirectory);
 				var lookups = new FakeLookupsApi { Groups = { [("station5", "42")] = "7", [("engine2", "99")] = "8" } };
 				var client = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
 				var transaction = new FakeMessageTransaction("station5@42.groups.resgrid.com", "engine2@99.groups.resgrid.com");
 				var buffer = CreateMessageBuffer("msg-one-transaction@cad.example", "cad@county.example",
 					new[] { "station5@42.groups.resgrid.com", "engine2@99.groups.resgrid.com" }, "Mutual aid", "Body");
@@ -149,7 +149,7 @@ namespace Resgrid.Audio.Tests
 			{
 				var lookups = new FakeLookupsApi { Departments = { ["abc123"] = "42", ["xyz789"] = "99" } };
 				var client = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("abc123@dispatch.resgrid.com", "xyz789@dispatch.resgrid.com"),
 					CreateMessageBuffer("msg-two-codes@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com", "xyz789@dispatch.resgrid.com" }, "Fire", "Body"),
@@ -174,7 +174,7 @@ namespace Resgrid.Audio.Tests
 				var options = CreateHostedOptions(dataDirectory);
 				var lookups = new FakeLookupsApi { Groups = { [("station5", "42")] = "7", [("engine2", "99")] = "8" } };
 				var client = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
 				var transaction = new FakeMessageTransaction("station5@42.groups.resgrid.com", "engine2@99.groups.resgrid.com");
 				var buffer = CreateMessageBuffer("msg-partial@cad.example", "cad@county.example",
 					new[] { "station5@42.groups.resgrid.com", "engine2@99.groups.resgrid.com" }, "Mutual aid", "Body");
@@ -214,7 +214,7 @@ namespace Resgrid.Audio.Tests
 				var lookups = new FakeLookupsApi { Departments = { ["abc123"] = "42" }, MessageGroups = { ["crew"] = "11" } };
 				var client = new FakeResgridCallsClient();
 				var messages = new FakeMessagesClient();
-				var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, messagesClient: messages, usesSystemApiKey: false);
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, messagesClient: messages, usesSystemApiKey: false);
 				var buffer = CreateMessageBuffer("msg-split@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com", "crew@gm.resgrid.com" }, "Fire", "Body");
 
 				(await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("abc123@dispatch.resgrid.com"), buffer, CancellationToken.None))
@@ -224,6 +224,193 @@ namespace Resgrid.Audio.Tests
 
 				client.SaveCallKeys.Should().OnlyContain(x => x == "msg-split@cad.example");
 				messages.Sent.Should().ContainSingle();
+			}
+			finally
+			{
+				DeleteDirectory(dataDirectory);
+			}
+		}
+
+		[Test]
+		public async Task SaveAsync_Should_Message_Only_The_Groups_An_Earlier_Transaction_Did_Not_Reach()
+		{
+			// The sender delivers each Bcc recipient in its own transaction: the first names only crew22 (the To header), the
+			// second adds the Bcc'd crew11. crew22 has its message already; only crew11 gets one now.
+			var dataDirectory = CreateTempDirectory();
+			try
+			{
+				var options = CreateOptions(dataDirectory);
+				options.GroupMessageAddressDomains = new[] { "gm.resgrid.com" };
+				var lookups = new FakeLookupsApi { MessageGroups = { ["crew11"] = "11", ["crew22"] = "22" } };
+				var messages = new FakeMessagesClient();
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: new FakeResgridCallsClient(), lookupsApi: lookups,
+					messagesClient: messages, usesSystemApiKey: false);
+				var buffer = CreateMessageBuffer("msg-bcc-groups@cad.example", "cad@county.example", new[] { "crew22@gm.resgrid.com" }, "Fire", "Body");
+
+				(await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("crew22@gm.resgrid.com"), buffer, CancellationToken.None))
+					.ReplyCode.Should().Be(SmtpReplyCode.Ok);
+				(await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("crew11@gm.resgrid.com"), buffer, CancellationToken.None))
+					.ReplyCode.Should().Be(SmtpReplyCode.Ok);
+				(await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("crew11@gm.resgrid.com"), buffer, CancellationToken.None))
+					.ReplyCode.Should().Be(SmtpReplyCode.Ok);
+
+				messages.Sent.Select(x => String.Join(",", x.Recipients.Select(r => r.Id))).Should().Equal(new[] { "G:22", "G:11" },
+					"every group gets the message once, however the transactions overlap");
+			}
+			finally
+			{
+				DeleteDirectory(dataDirectory);
+			}
+		}
+
+		[Test]
+		public async Task SaveAsync_Should_Bounce_An_Accepted_Group_Message_Address_Whose_Message_Resgrid_Rejects_Even_When_A_Call_Went_Out()
+		{
+			// The envelope holds only the group-message address; the department address is in the To header (its own transaction
+			// dispatches it), which puts this transaction on the call path too. The call works, the message is rejected: the
+			// recipient this transaction was accepted for got nothing, so a 250 would hide it.
+			var dataDirectory = CreateTempDirectory();
+			try
+			{
+				var options = CreateOptions(dataDirectory);
+				options.GroupMessageAddressDomains = new[] { "gm.resgrid.com" };
+				var lookups = new FakeLookupsApi { Departments = { ["abc123"] = "42" }, MessageGroups = { ["crew"] = "11" } };
+				var client = new FakeResgridCallsClient();
+				var messages = new FakeMessagesClient { SendException = new HttpRequestException("rejected", null, HttpStatusCode.UnprocessableEntity) };
+				var telemetry = new FakeSmtpTelemetry();
+				await using var store = new RelayMessageStore(options, telemetry, callsClient: client, lookupsApi: lookups, messagesClient: messages, usesSystemApiKey: false);
+				var transaction = new FakeMessageTransaction("crew@gm.resgrid.com");
+				var buffer = CreateMessageBuffer("msg-gm-rejected@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com", "crew@gm.resgrid.com" }, "Fire", "Body");
+
+				var reply = await store.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None);
+
+				reply.ReplyCode.Should().Be(SmtpReplyCode.TransactionFailed);
+				reply.Message.Should().StartWith("5.6.0").And.Contain("group message").And.Contain("422");
+				client.SaveCallInputs.Should().ContainSingle();
+				telemetry.FailedMessages.Should().ContainSingle().Which.Message.UnresolvedTargets.Should().ContainSingle().Which.Should().Contain("crew");
+
+				// A redelivery gets the same answer; the call comes back from Resgrid's idempotency key.
+				(await store.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None)).ReplyCode.Should().Be(SmtpReplyCode.TransactionFailed);
+				client.SaveCallKeys.Should().OnlyContain(x => x == "msg-gm-rejected@cad.example");
+			}
+			finally
+			{
+				DeleteDirectory(dataDirectory);
+			}
+		}
+
+		[Test]
+		public async Task SaveAsync_Should_Still_Accept_A_Call_Whose_Header_Only_Group_Message_Address_Resgrid_Rejects()
+		{
+			// The group-message address is only in the headers: this transaction was accepted for the department address alone,
+			// which got its call. The rejected message is reported, not bounced.
+			var dataDirectory = CreateTempDirectory();
+			try
+			{
+				var options = CreateOptions(dataDirectory);
+				options.GroupMessageAddressDomains = new[] { "gm.resgrid.com" };
+				var lookups = new FakeLookupsApi { Departments = { ["abc123"] = "42" }, MessageGroups = { ["crew"] = "11" } };
+				var client = new FakeResgridCallsClient();
+				var messages = new FakeMessagesClient { SendException = new HttpRequestException("rejected", null, HttpStatusCode.UnprocessableEntity) };
+				var telemetry = new FakeSmtpTelemetry();
+				await using var store = new RelayMessageStore(options, telemetry, callsClient: client, lookupsApi: lookups, messagesClient: messages, usesSystemApiKey: false);
+
+				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("abc123@dispatch.resgrid.com"),
+					CreateMessageBuffer("msg-gm-header@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com", "crew@gm.resgrid.com" }, "Fire", "Body"),
+					CancellationToken.None);
+
+				reply.ReplyCode.Should().Be(SmtpReplyCode.Ok);
+				client.SaveCallInputs.Should().ContainSingle();
+				telemetry.ProcessedMessages.Should().ContainSingle().Which.UnresolvedTargets.Should().ContainSingle().Which.Should().Contain("message rejected");
+			}
+			finally
+			{
+				DeleteDirectory(dataDirectory);
+			}
+		}
+
+		[Test]
+		public async Task SaveAsync_Should_Dispatch_A_Header_Address_Of_The_Default_Department_Next_To_A_Bare_Envelope_Code()
+		{
+			// The bare group code names no department of its own; DefaultDepartmentId is the dispatch's department, so a hosted
+			// header address of that department belongs to it, and one of another department does not.
+			var dataDirectory = CreateTempDirectory();
+			try
+			{
+				var options = CreateHostedOptions(dataDirectory);
+				options.DefaultDepartmentId = "42";
+				var lookups = new FakeLookupsApi { Groups = { [("station5", "42")] = "7", [("ladder1", "42")] = "8", [("engine2", "99")] = "9" } };
+				var client = new FakeResgridCallsClient();
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+
+				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("station5@groups.resgrid.com"),
+					CreateMessageBuffer("msg-default-header@cad.example", "cad@county.example",
+						new[] { "station5@groups.resgrid.com", "ladder1@42.groups.resgrid.com", "engine2@99.groups.resgrid.com" }, "Fire", "Body"),
+					CancellationToken.None);
+
+				reply.ReplyCode.Should().Be(SmtpReplyCode.Ok);
+				var call = client.SaveCallInputs.Should().ContainSingle().Subject;
+				call.DepartmentId.Should().Be("42");
+				call.DispatchList.Should().Be("G:7|G:8");
+			}
+			finally
+			{
+				DeleteDirectory(dataDirectory);
+			}
+		}
+
+		[Test]
+		public async Task SaveAsync_Should_Bounce_A_Hosted_Envelope_Address_Of_Another_Department_Than_The_Default_One()
+		{
+			// Refused at RCPT TO already; should one still be accepted, it is bounced as not served rather than dispatched as the
+			// default department (whose group of the same code would be paged) or dropped with a 250.
+			var dataDirectory = CreateTempDirectory();
+			try
+			{
+				var options = CreateHostedOptions(dataDirectory);
+				options.DefaultDepartmentId = "42";
+				var lookups = new FakeLookupsApi { Groups = { [("engine2", "42")] = "7", [("engine2", "99")] = "9" } };
+				var client = new FakeResgridCallsClient();
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+
+				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("engine2@99.groups.resgrid.com"),
+					CreateMessageBuffer("msg-other-subdomain@cad.example", "cad@county.example", new[] { "engine2@99.groups.resgrid.com" }, "Fire", "Body"),
+					CancellationToken.None);
+
+				reply.ReplyCode.Should().Be(SmtpReplyCode.MailboxUnavailable);
+				reply.Message.Should().Contain("does not dispatch for");
+				client.SaveCallInputs.Should().BeEmpty();
+			}
+			finally
+			{
+				DeleteDirectory(dataDirectory);
+			}
+		}
+
+		[TestCase("<html><head><title>CAD page</title><meta charset=\"utf-8\"><body><p>STRUCTURE FIRE</p><div>123 Main St</div></body></html>")]
+		[TestCase("<html><head><title>CAD page</title><style>p{color:red}</style><p>STRUCTURE FIRE</p><div>123 Main St</div></html>")]
+		[TestCase("<head><title>CAD page</title>STRUCTURE FIRE<br>123 Main St")]
+		public async Task SaveAsync_Should_Keep_The_Body_Of_Html_That_Leaves_Out_The_End_Of_Its_Head(string html)
+		{
+			// HTML lets a page leave out </head> (and <body>); the head then ends at the first element or text that cannot be in it.
+			var dataDirectory = CreateTempDirectory();
+			try
+			{
+				var message = new MimeMessage { MessageId = $"msg-{Guid.NewGuid():N}@cad.example", Subject = "Dispatch" };
+				message.From.Add(MailboxAddress.Parse("cad@county.example"));
+				message.To.Add(MailboxAddress.Parse("abc123@dispatch.resgrid.com"));
+				message.Body = new TextPart("html") { Text = html };
+
+				using var stream = new MemoryStream();
+				message.WriteTo(stream);
+
+				var client = new FakeResgridCallsClient();
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client);
+				await store.SaveAsync(new FakeSessionContext(), null, new ReadOnlySequence<byte>(stream.ToArray()), CancellationToken.None);
+
+				var call = client.SaveCallInputs.Should().ContainSingle().Subject;
+				call.Nature.Should().Be("STRUCTURE FIRE");
+				call.Note.Should().Contain("123 Main St").And.NotContain("CAD page").And.NotContain("color:red").And.NotContain("(No message body)");
 			}
 			finally
 			{
@@ -357,7 +544,7 @@ namespace Resgrid.Audio.Tests
 				var lookups = new FakeLookupsApi { Departments = { ["abc123"] = "42", ["xyz789"] = "99" } };
 				var client = new FakeResgridCallsClient();
 				var telemetry = new FakeSmtpTelemetry();
-				var store = new RelayMessageStore(options, telemetry, callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+				await using var store = new RelayMessageStore(options, telemetry, callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
 				var transaction = new FakeMessageTransaction("abc123@dispatch.resgrid.com", "xyz789@dispatch.resgrid.com");
 				var buffer = CreateMessageBuffer("msg-not-served@cad.example", "cad@county.example",
 					new[] { "abc123@dispatch.resgrid.com", "xyz789@dispatch.resgrid.com" }, "Mutual aid", "Body");
@@ -370,6 +557,16 @@ namespace Resgrid.Audio.Tests
 				var unroutable = telemetry.UnroutableMessages.Should().ContainSingle().Subject;
 				unroutable.SmtpReplyCode.Should().Be(550);
 				unroutable.UnresolvedTargets.Should().ContainSingle().Which.Should().Contain("xyz789").And.Contain("different department");
+
+				// The 550 never reached the sender (the connection dropped), so it sends the same envelope again: it must get the
+				// same bounce, not a 250 for the default department's "duplicate" that hides the unserved recipient.
+				var redelivery = await store.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None);
+
+				redelivery.ReplyCode.Should().Be(SmtpReplyCode.MailboxUnavailable);
+				redelivery.Message.Should().Contain("does not dispatch for");
+				client.SaveCallKeys.Should().Equal(new[] { "msg-not-served@cad.example", "msg-not-served@cad.example" },
+					"the default department's pass runs again, and Resgrid's idempotency key returns the call it already saved");
+				telemetry.DuplicateMessages.Should().BeEmpty();
 			}
 			finally
 			{
@@ -389,7 +586,7 @@ namespace Resgrid.Audio.Tests
 				options.DefaultDepartmentId = "42";
 				var lookups = new FakeLookupsApi { Departments = { ["abc123"] = "42", ["xyz789"] = "99" } };
 				var client = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("xyz789@dispatch.resgrid.com"),
 					CreateMessageBuffer("msg-not-served-alone@cad.example", "cad@county.example",
@@ -417,7 +614,7 @@ namespace Resgrid.Audio.Tests
 				options.DefaultDepartmentId = "42";
 				var lookups = new FakeLookupsApi { Departments = { ["abc123"] = "42" } };
 				var client = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("abc123@dispatch.resgrid.com", "typo@dispatch.resgrid.com"),
 					CreateMessageBuffer("msg-typo@cad.example", "cad@county.example",
@@ -444,7 +641,7 @@ namespace Resgrid.Audio.Tests
 				options.DefaultDepartmentId = "42";
 				var lookups = new FakeLookupsApi { Departments = { ["abc123"] = "42", ["xyz789"] = "99" } };
 				var client = new FakeResgridCallsClient { SaveCallException = new HttpRequestException("unavailable", null, HttpStatusCode.ServiceUnavailable) };
-				var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups, usesSystemApiKey: true);
 				var transaction = new FakeMessageTransaction("abc123@dispatch.resgrid.com", "xyz789@dispatch.resgrid.com");
 				var buffer = CreateMessageBuffer("msg-not-served-retry@cad.example", "cad@county.example",
 					new[] { "abc123@dispatch.resgrid.com", "xyz789@dispatch.resgrid.com" }, "Mutual aid", "Body");
@@ -479,9 +676,10 @@ namespace Resgrid.Audio.Tests
 		public async Task SaveAsync_Should_Ask_A_Concurrent_Redelivery_To_Retry_While_The_First_Is_Still_Processing()
 		{
 			var dataDirectory = CreateTempDirectory();
+			var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+			Task<SmtpResponse> first = null;
 			try
 			{
-				var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 				var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 				var client = new FakeResgridCallsClient();
 				client.BeforeSaveCall = async () =>
@@ -491,28 +689,40 @@ namespace Resgrid.Audio.Tests
 				};
 
 				var telemetry = new FakeSmtpTelemetry();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client);
-				var transaction = new FakeMessageTransaction("abc123@dispatch.resgrid.com");
-				var buffer = CreateMessageBuffer("msg-concurrent@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com" }, "Fire", "Body");
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client);
+				try
+				{
+					var transaction = new FakeMessageTransaction("abc123@dispatch.resgrid.com");
+					var buffer = CreateMessageBuffer("msg-concurrent@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com" }, "Fire", "Body");
 
-				var first = store.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None);
-				await entered.Task;
+					first = store.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None);
+					(await Task.WhenAny(entered.Task, first, Task.Delay(TimeSpan.FromSeconds(30)))).Should().BeSameAs(entered.Task,
+						"the first delivery is held inside SaveCall (not finished early, not stuck before it)");
 
-				var concurrent = await store.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None);
-				concurrent.ReplyCode.Should().Be(SmtpReplyCode.Aborted, "250 now would be a promise the first attempt may not keep");
-				telemetry.InProgressMessages.Should().ContainSingle();
+					var concurrent = await store.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None);
+					concurrent.ReplyCode.Should().Be(SmtpReplyCode.Aborted, "250 now would be a promise the first attempt may not keep");
+					telemetry.InProgressMessages.Should().ContainSingle();
 
-				// Nothing is on disk while the first attempt runs: a crash now leaves the redelivery free to dispatch.
-				var afterRestart = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: new FakeResgridCallsClient());
-				(await afterRestart.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None)).ReplyCode.Should().Be(SmtpReplyCode.Ok);
+					// Nothing is on disk while the first attempt runs: a crash now leaves the redelivery free to dispatch.
+					await using (var afterRestart = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: new FakeResgridCallsClient()))
+						(await afterRestart.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None)).ReplyCode.Should().Be(SmtpReplyCode.Ok);
 
-				release.SetResult(true);
-				(await first).ReplyCode.Should().Be(SmtpReplyCode.Ok);
+					release.SetResult(true);
+					(await first).ReplyCode.Should().Be(SmtpReplyCode.Ok);
 
-				client.BeforeSaveCall = null;
-				(await store.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None)).ReplyCode.Should().Be(SmtpReplyCode.Ok);
-				client.SaveCallInputs.Should().ContainSingle("the last delivery came after the first had worked: a duplicate");
-				telemetry.DuplicateMessages.Should().ContainSingle();
+					client.BeforeSaveCall = null;
+					(await store.SaveAsync(new FakeSessionContext(), transaction, buffer, CancellationToken.None)).ReplyCode.Should().Be(SmtpReplyCode.Ok);
+					client.SaveCallInputs.Should().ContainSingle("the last delivery came after the first had worked: a duplicate");
+					telemetry.DuplicateMessages.Should().ContainSingle();
+				}
+				finally
+				{
+					// Never leave the first delivery parked (an assertion above may have failed): let it finish before the store
+					// is disposed and its directory deleted.
+					release.TrySetResult(true);
+					if (first != null)
+						await Task.WhenAny(first, Task.Delay(TimeSpan.FromSeconds(30)));
+				}
 			}
 			finally
 			{
@@ -528,7 +738,7 @@ namespace Resgrid.Audio.Tests
 			{
 				var lookups = new FakeLookupsApi();
 				var client = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups);
 				var transaction = new FakeMessageTransaction("abc123@dispatch.resgrid.com");
 				var buffer = CreateMessageBuffer("msg-new-code@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com" }, "Fire", "Body");
 
@@ -555,7 +765,7 @@ namespace Resgrid.Audio.Tests
 			{
 				var options = CreateOptions(dataDirectory);
 				options.SaveRawMessages = true;
-				var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: new FakeResgridCallsClient(), lookupsApi: new FakeLookupsApi());
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: new FakeResgridCallsClient(), lookupsApi: new FakeLookupsApi());
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("guess@dispatch.resgrid.com"),
 					CreateMessageBuffer("msg-guess@cad.example", "cad@county.example", new[] { "guess@dispatch.resgrid.com" }, "Fire", "Body"),
@@ -580,10 +790,12 @@ namespace Resgrid.Audio.Tests
 				options.SaveRawMessages = true;
 				var telemetry = new FakeSmtpTelemetry();
 				var client = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(options, telemetry, callsClient: client);
+				await using var store = new RelayMessageStore(options, telemetry, callsClient: client);
 
-				// A directory where the copy's file would go makes the write fail.
-				Directory.CreateDirectory(Path.Combine(dataDirectory, "messages", "msg-unwritable@cad.example.eml"));
+				// A file where the copies' directory should be makes the write fail.
+				var messages = Path.Combine(dataDirectory, "messages");
+				Directory.Delete(messages, recursive: true);
+				File.WriteAllText(messages, "not a directory");
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("abc123@dispatch.resgrid.com"),
 					CreateMessageBuffer("msg-unwritable@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com" }, "Fire", "Body"),
@@ -600,7 +812,7 @@ namespace Resgrid.Audio.Tests
 		}
 
 		[Test]
-		public void RelayMessageStore_Should_Prune_Old_Raw_Copies_At_Startup()
+		public async Task RelayMessageStore_Should_Prune_Old_Raw_Copies_At_Startup()
 		{
 			var dataDirectory = CreateTempDirectory();
 			try
@@ -618,7 +830,7 @@ namespace Resgrid.Audio.Tests
 
 				var options = CreateOptions(dataDirectory);
 				options.DuplicateWindowHours = 72;
-				_ = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: new FakeResgridCallsClient());
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: new FakeResgridCallsClient());
 
 				File.Exists(old).Should().BeFalse("copies are kept for the larger of the duplicate window and 7 days");
 				File.Exists(recent).Should().BeTrue();
@@ -640,7 +852,7 @@ namespace Resgrid.Audio.Tests
 			{
 				var client = new FakeResgridCallsClient();
 				var telemetry = new FakeSmtpTelemetry();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client);
 				var transaction = new FakeMessageTransaction("abc123@dispatch.resgrid.com");
 
 				var monday = CreateMessageWithoutId(new DateTimeOffset(2026, 11, 16, 7, 0, 0, TimeSpan.Zero));
@@ -664,14 +876,52 @@ namespace Resgrid.Audio.Tests
 		public void GetStableMessageId_Should_Tell_Apart_Messages_Without_An_Id_That_Differ_Only_In_Their_Attachments()
 		{
 			var date = new DateTimeOffset(2026, 11, 16, 7, 0, 0, TimeSpan.Zero);
-			var plain = MimeMessage.Load(new MemoryStream(CreateMessageWithoutId(date).ToArray()));
-			var withMap = MimeMessage.Load(new MemoryStream(CreateMessageWithoutId(date, ("map.pdf", new byte[] { 1, 2, 3 })).ToArray()));
-			var withBiggerMap = MimeMessage.Load(new MemoryStream(CreateMessageWithoutId(date, ("map.pdf", new byte[] { 1, 2, 3, 4 })).ToArray()));
+			var plain = LoadMessage(CreateMessageWithoutId(date));
+			var withMap = LoadMessage(CreateMessageWithoutId(date, ("map.pdf", new byte[] { 1, 2, 3 })));
+			var withBiggerMap = LoadMessage(CreateMessageWithoutId(date, ("map.pdf", new byte[] { 1, 2, 3, 4 })));
+			var withAnotherMapOfTheSameSize = LoadMessage(CreateMessageWithoutId(date, ("map.pdf", new byte[] { 9, 8, 7 })));
 
-			var ids = new[] { plain, withMap, withBiggerMap }.Select(RelayMessageStore.GetStableMessageId).ToList();
+			var ids = new[] { plain, withMap, withBiggerMap, withAnotherMapOfTheSameSize }.Select(RelayMessageStore.GetStableMessageId).ToList();
 
-			ids.Should().OnlyHaveUniqueItems();
-			RelayMessageStore.GetStableMessageId(MimeMessage.Load(new MemoryStream(CreateMessageWithoutId(date).ToArray()))).Should().Be(ids[0]);
+			ids.Should().OnlyHaveUniqueItems("a new map of the same name and size is a different page");
+			RelayMessageStore.GetStableMessageId(LoadMessage(CreateMessageWithoutId(date))).Should().Be(ids[0]);
+			RelayMessageStore.GetStableMessageId(LoadMessage(CreateMessageWithoutId(date, ("map.pdf", new byte[] { 1, 2, 3 })))).Should().Be(ids[1],
+				"the same email delivered again keeps its id");
+		}
+
+		// ─── Raw copies of messages whose ids sanitize alike ───
+
+		[Test]
+		public async Task SaveAsync_Should_Keep_A_Separate_Raw_Copy_For_Message_Ids_That_Sanitize_Alike()
+		{
+			var dataDirectory = CreateTempDirectory();
+			try
+			{
+				var options = CreateOptions(dataDirectory);
+				options.SaveRawMessages = true;
+				var telemetry = new FakeSmtpTelemetry();
+				await using var store = new RelayMessageStore(options, telemetry, callsClient: new FakeResgridCallsClient());
+				var transaction = new FakeMessageTransaction("abc123@dispatch.resgrid.com");
+
+				// "/" cannot be in a file name, so both ids sanitize to "a_b@cad.example".
+				foreach (var messageId in new[] { "a/b@cad.example", "a_b@cad.example", "a/b@cad.example" })
+				{
+					(await store.SaveAsync(new FakeSessionContext(), transaction,
+						CreateMessageBuffer(messageId, "cad@county.example", new[] { "abc123@dispatch.resgrid.com" }, "Fire", $"Body of {messageId}"),
+						CancellationToken.None)).ReplyCode.Should().Be(SmtpReplyCode.Ok);
+				}
+
+				var copies = Directory.GetFiles(Path.Combine(dataDirectory, "messages"), "*.eml");
+				copies.Should().HaveCount(2, "the redelivery of the first message is a duplicate");
+				var paths = telemetry.ProcessedMessages.Select(x => x.RawMessagePath).ToList();
+				paths.Should().OnlyHaveUniqueItems();
+				File.ReadAllText(paths[0]).Should().Contain("a/b@cad.example");
+				File.ReadAllText(paths[1]).Should().Contain("a_b@cad.example");
+			}
+			finally
+			{
+				DeleteDirectory(dataDirectory);
+			}
 		}
 
 		// ─── 404 from the lookup endpoints (finding 9) ───
@@ -688,7 +938,7 @@ namespace Resgrid.Audio.Tests
 					DepartmentLookupException = new HttpRequestException("not found", null, HttpStatusCode.NotFound)
 				};
 				var client = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups);
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("abc123@dispatch.resgrid.com"),
 					CreateMessageBuffer("msg-404@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com" }, "Fire", "Body"),
@@ -696,6 +946,39 @@ namespace Resgrid.Audio.Tests
 
 				reply.ReplyCode.Should().Be(SmtpReplyCode.Aborted, "a 404 is a routing or deploy problem, not an unknown code");
 				client.SaveCallInputs.Should().BeEmpty();
+			}
+			finally
+			{
+				DeleteDirectory(dataDirectory);
+			}
+		}
+
+		// ─── Redis lookup cache ───
+
+		[Test]
+		public async Task SaveAsync_Should_Not_Wait_For_An_Unreachable_Redis_On_The_First_Lookup()
+		{
+			// StackExchange.Redis waits out its whole connect timeout before ConnectAsync returns, whatever the backlog policy; the
+			// dispatch must not wait with it.
+			var dataDirectory = CreateTempDirectory();
+			try
+			{
+				var options = CreateOptions(dataDirectory);
+				// TEST-NET-1 (RFC 5737) is never routed, so the connect attempt runs into its timeout.
+				options.RedisCache = new RedisCacheOptions { Enabled = true, ConnectionString = "192.0.2.1:6379,connectTimeout=10000" };
+				var lookups = new FakeLookupsApi { Departments = { ["abc123"] = "42" } };
+				var client = new FakeResgridCallsClient();
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client, lookupsApi: lookups);
+
+				var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction("abc123@dispatch.resgrid.com"),
+					CreateMessageBuffer("msg-redis-down@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com" }, "Fire", "Body"),
+					CancellationToken.None);
+				stopwatch.Stop();
+
+				reply.ReplyCode.Should().Be(SmtpReplyCode.Ok);
+				client.SaveCallInputs.Should().ContainSingle();
+				stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5), "the cache is skipped until Redis is up");
 			}
 			finally
 			{
@@ -711,6 +994,12 @@ namespace Resgrid.Audio.Tests
 			options.HostedMode = true;
 			options.DepartmentDomainSeparator = ".";
 			return options;
+		}
+
+		private static MimeMessage LoadMessage(ReadOnlySequence<byte> buffer)
+		{
+			using var stream = new MemoryStream(buffer.ToArray());
+			return MimeMessage.Load(stream);
 		}
 
 		private static ReadOnlySequence<byte> CreateMessageWithoutId(DateTimeOffset date, params (string Name, byte[] Data)[] attachments)

@@ -173,6 +173,67 @@ namespace Resgrid.Audio.Voice.Tests
 
 			svc.State.Should().Be(RelayServiceState.Faulted);
 			svc.Attempts.Should().Be(1, "retrying cannot fix a configuration error");
+			svc.Fault.Should().BeOfType<RelayConfigurationException>("the console maps it to the configuration-error exit code");
+		}
+
+		[Test]
+		public async Task RuntimeFault_IsNotReportedAsAConfigurationError()
+		{
+			var svc = new ScriptedRelayService(OptionsWith(FastResilience(maxFailures: 1, keepRetrying: false)));
+			svc.ExecuteBehavior = (_, __) => throw new InvalidOperationException("LiveKit unreachable");
+
+			await svc.StartAsync(CancellationToken.None);
+
+			svc.State.Should().Be(RelayServiceState.Faulted);
+			svc.Fault.Should().NotBeOfType<RelayConfigurationException>();
+		}
+
+		[Test]
+		public async Task InvalidApiOptions_FaultAsAConfigurationError_BeforeTheFirstAttempt()
+		{
+			// Valid credentials but no API version: the API client's own validation throws a plain InvalidOperationException,
+			// which the resilience loop used to retry forever (KeepRetrying is on).
+			var options = OptionsWith(FastResilience(maxFailures: 3, keepRetrying: true));
+			options.Resgrid.ApiVersion = "";
+			options.Resgrid.ClientId = "client";
+			options.Resgrid.ClientSecret = "secret";
+			options.Resgrid.RefreshToken = "token";
+			await using var svc = new RecordRelayService(options, null);
+
+			await svc.StartAsync(CancellationToken.None);
+
+			svc.State.Should().Be(RelayServiceState.Faulted);
+			svc.Fault.Should().BeOfType<RelayConfigurationException>().Which.Message.Should().Contain("API version");
+		}
+
+		[Test]
+		public async Task VoiceModeWithAClientCredentialsGrant_FaultsAsAConfigurationError()
+		{
+			var options = OptionsWith(FastResilience(maxFailures: 3, keepRetrying: true));
+			options.Resgrid.GrantType = Resgrid.Providers.ApiClient.V4.ResgridAuthGrantType.ClientCredentials;
+			options.Resgrid.ClientId = "client";
+			options.Resgrid.ClientSecret = "secret";
+			await using var svc = new RecordRelayService(options, null);
+
+			await svc.StartAsync(CancellationToken.None);
+
+			svc.State.Should().Be(RelayServiceState.Faulted);
+			svc.Fault.Should().BeOfType<RelayConfigurationException>().Which.Message.Should().Contain("RefreshToken");
+		}
+
+		[Test]
+		public async Task Restart_ClearsThePreviousFault()
+		{
+			var svc = new ScriptedRelayService(OptionsWith(FastResilience(maxFailures: 1, keepRetrying: false)));
+			svc.ExecuteBehavior = (_, __) => throw new RelayConfigurationException("bad setting");
+			await svc.StartAsync(CancellationToken.None);
+			svc.Fault.Should().NotBeNull();
+
+			svc.ExecuteBehavior = (_, __) => Task.CompletedTask;
+			await svc.StartAsync(CancellationToken.None);
+
+			svc.State.Should().Be(RelayServiceState.Stopped);
+			svc.Fault.Should().BeNull();
 		}
 
 		/// <summary>Minimal LiveKit-mode service whose run is scripted by the test.</summary>

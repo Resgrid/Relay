@@ -125,6 +125,141 @@ namespace Resgrid.Audio.Voice.Tests
 			reloaded.Smtp.DepartmentAddressDomains.Should().Equal("dispatch.resgrid.com");
 		}
 
+		private static IConfigurationBuilder AddJson(IConfigurationBuilder builder, string json) =>
+			builder.AddJsonStream(new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)));
+
+		[Test]
+		public void RemovingADomainInAHigherLayerReplacesTheLowerLayersList()
+		{
+			// appsettings.json lists two domains; the user file (written by the desktop app) keeps only the first. Layers merge
+			// arrays by index, so the second used to come back from appsettings.json.
+			var builder = new ConfigurationBuilder();
+			AddJson(builder, "{ \"Smtp\": { \"GroupMessageAddressDomains\": [ \"gm.one.org\", \"gm.two.org\" ] } }");
+			AddJson(builder, "{ \"Smtp\": { \"GroupMessageAddressDomains\": [ \"gm.one.org\" ] } }");
+
+			var options = RelayConfiguration.Bind(builder.Build());
+
+			options.Smtp.GroupMessageAddressDomains.Should().Equal("gm.one.org");
+		}
+
+		[Test]
+		public void AddingADomainOverAnEmptyLowerList()
+		{
+			var builder = new ConfigurationBuilder();
+			AddJson(builder, "{ \"Smtp\": { \"ListAddressDomains\": [] } }");
+			AddJson(builder, "{ \"Smtp\": { \"ListAddressDomains\": [ \"lists.example.org\" ] } }");
+
+			RelayConfiguration.Bind(builder.Build()).Smtp.ListAddressDomains.Should().Equal("lists.example.org");
+		}
+
+		[Test]
+		public void AnEmptyHigherLayerListFallsThroughToTheLowerLayer()
+		{
+			var builder = new ConfigurationBuilder();
+			AddJson(builder, "{ \"Smtp\": { \"GroupAddressDomains\": [ \"groups.one.org\", \"groups.two.org\" ] } }");
+			AddJson(builder, "{ \"Smtp\": { \"GroupAddressDomains\": [] } }");
+
+			RelayConfiguration.Bind(builder.Build()).Smtp.GroupAddressDomains.Should().Equal("groups.one.org", "groups.two.org");
+		}
+
+		[Test]
+		public void AnEnvironmentDomainListReplacesTheSavedList()
+		{
+			const string name = "RESGRID__RELAY__Smtp__DepartmentAddressDomains__0";
+			var previous = System.Environment.GetEnvironmentVariable(name);
+			try
+			{
+				System.Environment.SetEnvironmentVariable(name, "env.example.org");
+				var saved = new RelayHostOptions();
+				saved.Smtp.DepartmentAddressDomains = new[] { "one.example.org", "two.example.org" };
+
+				RelayConfiguration.WithEnvironment(saved).Smtp.DepartmentAddressDomains.Should().Equal("env.example.org");
+			}
+			finally
+			{
+				System.Environment.SetEnvironmentVariable(name, previous);
+			}
+		}
+
+		[Test]
+		public void ClearingAValueSetInAppSettingsIsSavedAsAnOverride()
+		{
+			var appSettings = new RelayHostOptions();
+			appSettings.Smtp.DefaultDepartmentId = "dept123";
+			var edited = new RelayHostOptions();
+			edited.Smtp.DefaultDepartmentId = null;
+			edited.Smtp.RedisCache = null;
+
+			var json = System.Text.Json.Nodes.JsonNode.Parse(RelayConfiguration.BuildUserFileJson(edited, appSettings)).AsObject();
+
+			json["Smtp"].AsObject().ContainsKey("DefaultDepartmentId").Should().BeTrue("an explicit null must override appsettings.json");
+			json["Smtp"]["DefaultDepartmentId"].Should().BeNull();
+			json["Smtp"].AsObject().ContainsKey("RedisCache").Should().BeFalse("a null section is not written over the defaults");
+
+			var builder = new ConfigurationBuilder();
+			AddJson(builder, JsonSerializer.Serialize(appSettings));
+			AddJson(builder, json.ToJsonString());
+			RelayConfiguration.Bind(builder.Build()).Smtp.DefaultDepartmentId.Should().BeNullOrEmpty();
+		}
+
+		[Test]
+		public void UnchangedValuesAreStillLeftOut()
+		{
+			var appSettings = new RelayHostOptions();
+			appSettings.Smtp.DefaultDepartmentId = "dept123";
+			var edited = new RelayHostOptions();
+			edited.Smtp.DefaultDepartmentId = "dept123";
+
+			RelayConfiguration.BuildUserFileJson(edited, appSettings).Trim().Should().Be("{}");
+		}
+
+		[Test]
+		public void WithEnvironmentResolvesARelativeTokenCachePathAgainstTheBaseDirectory()
+		{
+			const string name = "RESGRID__RELAY__Resgrid__TokenCachePath";
+			var previous = System.Environment.GetEnvironmentVariable(name);
+			try
+			{
+				System.Environment.SetEnvironmentVariable(name, "cache/token.json");
+
+				var effective = RelayConfiguration.WithEnvironment(new RelayHostOptions());
+
+				effective.Resgrid.TokenCachePath.Should().Be(
+					System.IO.Path.GetFullPath(System.IO.Path.Combine(System.AppContext.BaseDirectory, "cache/token.json")));
+			}
+			finally
+			{
+				System.Environment.SetEnvironmentVariable(name, previous);
+			}
+		}
+
+		[Test]
+		public void EnvironmentValueReadsTheEnvironmentLayer()
+		{
+			const string name = "RESGRID__RELAY__Resgrid__ClientId";
+			var previous = System.Environment.GetEnvironmentVariable(name);
+			try
+			{
+				System.Environment.SetEnvironmentVariable(name, "client-from-env");
+				RelayConfiguration.EnvironmentValue("Resgrid:ClientId").Should().Be("client-from-env");
+
+				System.Environment.SetEnvironmentVariable(name, null);
+				RelayConfiguration.EnvironmentValue("Resgrid:ClientId").Should().BeNull();
+			}
+			finally
+			{
+				System.Environment.SetEnvironmentVariable(name, previous);
+			}
+		}
+
+		[Test]
+		public void TheUserFileParserAcceptsWhatTheConfigurationLoaderAccepts()
+		{
+			var root = RelayConfiguration.ParseUserFile("{\n  // tuned on site\n  \"Radio\": { \"TxLeadMs\": 650, },\n}");
+
+			root["Radio"]["TxLeadMs"].GetValue<int>().Should().Be(650);
+		}
+
 		[Test]
 		public void RadioProfileIsBound()
 		{
@@ -172,6 +307,15 @@ namespace Resgrid.Audio.Voice.Tests
 			radio.SerialPort.Should().Be("COM7");
 			radio.InputDevice.Should().Be(2);
 			radio.OutputDevice.Should().Be(3);
+		}
+
+		[Test]
+		public void RapidRadiosNotesGiveTheAiocUsbIds()
+		{
+			// The AIOC is not a C-Media chip: with the default VID 0x0D8C the CM108 PTT controller does not find it.
+			var notes = RadioProfiles.Find(RadioProfiles.RapidRadiosKey).SetupNotes;
+
+			notes.Should().Contain("0x1209").And.Contain("0x7388").And.Contain("Cm108VendorId").And.Contain("Cm108ProductId");
 		}
 
 		[Test]

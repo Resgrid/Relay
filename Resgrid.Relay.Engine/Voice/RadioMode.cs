@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.IO.Ports;
@@ -62,8 +63,9 @@ namespace Resgrid.Relay.Engine.Voice
 			}, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 			await monitor.EnsureConnectedAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
 
-			// Session joined and still connected — LiveKit is up.
-			if (status != null)
+			// Session joined and still connected — LiveKit is up. A session the SDK is already reconnecting keeps the Degraded
+			// pill the monitor set (it recovers to Connected on the SDK's reconnect) instead of being reported Connected here.
+			if (status != null && monitor.IsUsable)
 				status.LiveKit = ConnectionState.Connected;
 
 			var radioSettings = MapSettings(options.Radio, logger);
@@ -192,62 +194,204 @@ namespace Resgrid.Relay.Engine.Voice
 		/// <summary>
 		/// Keys the radio and plays a 1 kHz test tone (after the configured key-up lead) without joining a channel, so the PTT
 		/// wiring, transmit audio level and <see cref="RadioModeOptions.TxLeadMs"/> can be checked against a listener on the far
-		/// side. Throws when the audio device, serial port or CM108 interface can't be opened.
+		/// side. Throws when the audio device, serial port or CM108 interface can't be opened, <see cref="OperationCanceledException"/>
+		/// when cancelled (PTT released), and <see cref="PttReleaseException"/> when PTT could not be released.
 		/// </summary>
 		public static async Task RunTransmitTestAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken, int toneMs = 2000)
 		{
+			if (options == null)
+				throw new ArgumentNullException(nameof(options));
+
+			// A cancel that arrived while this was queued must not open the hardware, let alone key it.
+			cancellationToken.ThrowIfCancellationRequested();
+
 			var settings = MapSettings(options.Radio, logger);
+			using var sharedSerialPort = TryCreateSharedSerialPort(settings);
+			using var device = new NAudioRadioDevice(settings.InputDevice, settings.OutputDevice, logger);
+			using var ptt = CreatePtt(settings, logger, sharedSerialPort);
+
+			await RunTransmitTestAsync(device, ptt, settings, logger, cancellationToken, toneMs).ConfigureAwait(false);
+		}
+
+		// The transmit test hands the tone to the device in small pieces, never more than this far ahead of playback: the
+		// NAudio device buffers 5 s and silently drops what overflows, so a 10 s tone (plus lead) queued at once lost its end.
+		private const int TransmitTestChunkMs = 100;
+		private static readonly TimeSpan TransmitTestMaxQueued = TimeSpan.FromMilliseconds(1000);
+
+		/// <summary>
+		/// The transmit test on an already-open <paramref name="device"/> and <paramref name="ptt"/> line (which the caller owns
+		/// and disposes). Never keys after <paramref name="cancellationToken"/> is cancelled; once keyed, PTT is released on every
+		/// path — completion, cancellation, a device fault or any other failure — before this returns or throws.
+		/// <list type="bullet">
+		/// <item>PTT could not be released (every retry failed): <see cref="PttReleaseException"/>, whatever else went wrong.</item>
+		/// <item>The device faulted (<see cref="IRadioDevice.Faulted"/>) or stopped playing: <see cref="InvalidOperationException"/>.</item>
+		/// <item>Cancelled: <see cref="OperationCanceledException"/>, with PTT released.</item>
+		/// </list>
+		/// </summary>
+		public static async Task RunTransmitTestAsync(IRadioDevice device, IPttController ptt, RadioSettings settings, ILogger logger,
+			CancellationToken cancellationToken, int toneMs = 2000)
+		{
+			if (device == null)
+				throw new ArgumentNullException(nameof(device));
+			if (ptt == null)
+				throw new ArgumentNullException(nameof(ptt));
+			if (settings == null)
+				throw new ArgumentNullException(nameof(settings));
+
+			cancellationToken.ThrowIfCancellationRequested();
+
 			var leadMs = settings.Ptt == PttKeyingMethod.Vox ? 0 : Math.Clamp(settings.TxLeadMs, 0, 3000);
 			toneMs = Math.Clamp(toneMs, 200, 10000);
+			var audio = BuildTransmitTestAudio(settings, leadMs, toneMs);
 
+			// Watch the device from before playback starts: an output that stops mid-tone (USB glitch/unplug) otherwise let the
+			// test sit out its delays and report success for a tone nobody heard.
+			RadioFaultEventArgs fault = null;
+			using var testCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			EventHandler<RadioFaultEventArgs> onFault = (_, e) =>
+			{
+				Interlocked.CompareExchange(ref fault, e ?? new RadioFaultEventArgs(null), null);
+				try { testCts.Cancel(); }
+				catch (ObjectDisposedException) { }
+			};
+
+			var keyAttempted = false;
+			var keyed = false;
+			var released = true;
+			ExceptionDispatchInfo failure = null;
+			device.Faulted += onFault;
+			try
+			{
+				try
+				{
+					device.StartTransmit();
+
+					// Last point before anything goes on the air: a cancel (or fault) that arrived while the devices opened must
+					// not key the radio.
+					testCts.Token.ThrowIfCancellationRequested();
+					keyAttempted = true;
+					if (!ptt.Key())
+						throw new InvalidOperationException($"Transmit test: could not key the radio's PTT line ({settings.Ptt}). Check the interface cable and port.");
+					keyed = true;
+					logger?.Information("Transmit test: PTT keyed ({Ptt}), {Lead} ms lead, {Tone} ms 1 kHz tone", settings.Ptt, leadMs, toneMs);
+
+					await PlayTransmitTestAudioAsync(device, audio, testCts.Token).ConfigureAwait(false);
+
+					// Hold PTT until the output device's own buffers have played out, then the tail. Unkeying as soon as the queue
+					// emptied cut the end of the tone off by the output latency.
+					await Task.Delay(device.OutputLatency + TimeSpan.FromMilliseconds(Math.Max(settings.TxTailMs, 100)), testCts.Token).ConfigureAwait(false);
+				}
+				catch (Exception ex)
+				{
+					failure = ExceptionDispatchInfo.Capture(ex);
+				}
+
+				if (keyed || (keyAttempted && ptt.IsKeyed))
+					released = await ReleasePttAsync(ptt).ConfigureAwait(false);
+				else if (keyAttempted)
+					TryUnkey(ptt); // Key() failed and left the line unkeyed; drop it anyway in case the write half-happened.
+			}
+			finally
+			{
+				// Device cleanup is unconditional; only then is the outcome reported.
+				try { device.StopTransmit(); }
+				catch (Exception ex) { logger?.Warning(ex, "Transmit test: closing the transmit audio path failed"); }
+				device.Faulted -= onFault;
+			}
+
+			if (!released)
+			{
+				logger?.Error("Transmit test: the PTT line ({Ptt}) could not be released — the radio may still be transmitting. Disconnect the interface.", settings.Ptt);
+				throw new PttReleaseException(settings.Ptt.ToString(), failure?.SourceException);
+			}
+
+			if (keyed)
+				logger?.Information("Transmit test: PTT released");
+
+			var deviceFault = Volatile.Read(ref fault);
+			if (deviceFault != null)
+				throw new InvalidOperationException($"Transmit test: {deviceFault.Reason}; the test tone was interrupted.", deviceFault.Exception);
+
+			failure?.Throw();
+		}
+
+		/// <summary>The key-up lead (silence) followed by the 1 kHz tone at the configured transmit gain.</summary>
+		private static short[] BuildTransmitTestAudio(RadioSettings settings, int leadMs, int toneMs)
+		{
 			var tones = new ToneGenerator(AudioFormat.SampleRate);
 			var tone = tones.Sine(1000, toneMs, 0.3);
 			if (Math.Abs(settings.TxGain - 1.0) > 1e-6)
 				Resampler.ApplyGain(tone, settings.TxGain);
 
-			using var sharedSerialPort = TryCreateSharedSerialPort(settings);
-			using var device = new NAudioRadioDevice(settings.InputDevice, settings.OutputDevice, logger);
-			using var ptt = CreatePtt(settings, logger, sharedSerialPort);
+			var lead = leadMs > 0 ? tones.Silence(leadMs) : Array.Empty<short>();
+			var audio = new short[lead.Length + tone.Length];
+			Array.Copy(tone, 0, audio, lead.Length, tone.Length);
+			return audio;
+		}
 
-			device.StartTransmit();
-			try
+		/// <summary>
+		/// Feeds <paramref name="audio"/> to the device in <see cref="TransmitTestChunkMs"/> pieces, keeping at most
+		/// <see cref="TransmitTestMaxQueued"/> ahead of playback (by the device's own backlog and by the clock, for a device that
+		/// cannot report one), then waits for the queue to drain. Throws when the output stops consuming audio.
+		/// </summary>
+		private static async Task PlayTransmitTestAudioAsync(IRadioDevice device, short[] audio, CancellationToken cancellationToken)
+		{
+			var samplesPerMs = AudioFormat.SampleRate / 1000;
+			var chunkSamples = TransmitTestChunkMs * samplesPerMs;
+			var total = TimeSpan.FromMilliseconds((double)audio.Length / samplesPerMs);
+			var started = DateTime.UtcNow;
+			var deadline = started + total + TimeSpan.FromSeconds(2);
+
+			var offset = 0;
+			while (offset < audio.Length)
 			{
-				if (!ptt.Key())
-					throw new InvalidOperationException($"Transmit test: could not key the radio's PTT line ({settings.Ptt}). Check the interface cable and port.");
-				logger?.Information("Transmit test: PTT keyed ({Ptt}), {Lead} ms lead, {Tone} ms 1 kHz tone", settings.Ptt, leadMs, toneMs);
-				if (leadMs > 0)
-					device.Transmit(tones.Silence(leadMs));
-				device.Transmit(tone);
-
-				// Hold PTT until the tone has actually played: the queue has drained (bounded, in case the device never reports
-				// empty) and the output device's own buffers have played out, then the tail. Unkeying on a fixed lead+tone delay
-				// cut the end of the tone off by the output latency.
-				var queued = TimeSpan.FromMilliseconds(leadMs + toneMs);
-				var started = DateTime.UtcNow;
-				await Task.Delay(queued, cancellationToken).ConfigureAwait(false);
-				var drainDeadline = started + queued + TimeSpan.FromSeconds(2);
-				while (device.BufferedTransmit > TimeSpan.Zero && DateTime.UtcNow < drainDeadline)
-					await Task.Delay(20, cancellationToken).ConfigureAwait(false);
-
-				await Task.Delay(device.OutputLatency + TimeSpan.FromMilliseconds(Math.Max(settings.TxTailMs, 100)), cancellationToken).ConfigureAwait(false);
-			}
-			finally
-			{
-				if (!ptt.Unkey())
+				cancellationToken.ThrowIfCancellationRequested();
+				var sent = TimeSpan.FromMilliseconds((double)offset / samplesPerMs);
+				var elapsed = DateTime.UtcNow - started;
+				if (device.BufferedTransmit < TransmitTestMaxQueued && sent < elapsed + TransmitTestMaxQueued)
 				{
-					// A failed unkey leaves the transmitter on the air: retry before giving up and saying so loudly.
-					var released = false;
-					for (int attempt = 0; attempt < 10 && !released; attempt++)
-					{
-						Thread.Sleep(100);
-						released = ptt.Unkey();
-					}
-					if (!released)
-						logger?.Error("Transmit test: the PTT line could not be released — the radio may still be transmitting. Disconnect the interface.");
+					var count = Math.Min(chunkSamples, audio.Length - offset);
+					var chunk = new short[count];
+					Array.Copy(audio, offset, chunk, 0, count);
+					device.Transmit(chunk);
+					offset += count;
+					continue;
 				}
-				device.StopTransmit();
-				logger?.Information("Transmit test: PTT released");
+
+				if (DateTime.UtcNow >= deadline)
+					throw new InvalidOperationException("Transmit test: the output device stopped playing audio; the test tone was cut short.");
+				await Task.Delay(20, cancellationToken).ConfigureAwait(false);
 			}
+
+			// Everything is queued: hold until it has left the queue (and, for a device that can't report a backlog, until it
+			// has had time to play).
+			while (device.BufferedTransmit > TimeSpan.Zero || DateTime.UtcNow - started < total)
+			{
+				if (DateTime.UtcNow >= deadline)
+					throw new InvalidOperationException("Transmit test: the output device stopped playing audio; the test tone was cut short.");
+				await Task.Delay(20, cancellationToken).ConfigureAwait(false);
+			}
+		}
+
+		/// <summary>Unkeys, retrying for about a second: a failed unkey leaves the transmitter on the air. False when every attempt failed.</summary>
+		private static async Task<bool> ReleasePttAsync(IPttController ptt)
+		{
+			if (TryUnkey(ptt))
+				return true;
+
+			for (int attempt = 0; attempt < 10; attempt++)
+			{
+				await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
+				if (TryUnkey(ptt))
+					return true;
+			}
+			return false;
+		}
+
+		private static bool TryUnkey(IPttController ptt)
+		{
+			try { return ptt.Unkey(); }
+			catch { return false; }
 		}
 
 		private static void WarnAboutProfile(RadioModeOptions o, RadioSettings settings, ILogger logger)
@@ -403,6 +547,25 @@ namespace Resgrid.Relay.Engine.Voice
 				departmentId, TimeSpan.FromSeconds(Math.Max(0, o.CooldownSeconds)));
 			return (mdc, emergency, sink);
 		}
+	}
+
+	/// <summary>
+	/// The radio's PTT line could not be released (every unkey attempt failed), so the transmitter may still be on the air.
+	/// Thrown by <see cref="RadioMode.RunTransmitTestAsync(RelayHostOptions, ILogger, CancellationToken, int)"/> in place of any
+	/// other outcome (completion, cancellation or another failure, which is kept as <see cref="Exception.InnerException"/>): the
+	/// operator has to disconnect the radio interface or turn the radio off.
+	/// </summary>
+	public sealed class PttReleaseException : InvalidOperationException
+	{
+		public PttReleaseException(string pttMethod, Exception innerException = null)
+			: base($"The radio's PTT line ({pttMethod}) could not be released, so the radio may still be transmitting. " +
+				"Unplug the radio interface (its USB or serial cable) or turn the radio off now, then check the wiring.", innerException)
+		{
+			PttMethod = pttMethod;
+		}
+
+		/// <summary>The PTT keying method that failed to release (Cm108, SerialRts, SerialDtr, Vox).</summary>
+		public string PttMethod { get; }
 	}
 }
 #endif

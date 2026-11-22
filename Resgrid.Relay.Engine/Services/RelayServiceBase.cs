@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Relay.Engine.Telemetry;
+using Resgrid.Providers.ApiClient.V4;
 using Serilog;
 
 namespace Resgrid.Relay.Engine.Services
@@ -43,6 +44,13 @@ namespace Resgrid.Relay.Engine.Services
 
 		public IRelayStatus Status => MutableStatus;
 
+		/// <summary>
+		/// What faulted the last run; null unless <see cref="State"/> is <see cref="RelayServiceState.Faulted"/>. A
+		/// <see cref="RelayConfigurationException"/> means the settings must change before the mode can run (the console exits
+		/// with its configuration-error code for it, so a service manager stops restarting the relay).
+		/// </summary>
+		public Exception Fault { get; private set; }
+
 		/// <summary>The concrete, writable status a subclass mutates while running.</summary>
 		protected RelayStatus MutableStatus { get; } = new RelayStatus();
 
@@ -54,6 +62,34 @@ namespace Resgrid.Relay.Engine.Services
 		/// cancelled; throw to fault the service.
 		/// </summary>
 		protected abstract Task ExecuteAsync(CancellationToken token);
+
+		/// <summary>
+		/// Checks, once before the first attempt, settings the mode can never run without. Throw
+		/// <see cref="RelayConfigurationException"/> so the service faults at once instead of retrying a run that cannot succeed.
+		/// </summary>
+		protected virtual void ValidateConfiguration()
+		{
+		}
+
+		/// <summary>
+		/// Runs the Resgrid API client's own option validation, which throws a plain <see cref="InvalidOperationException"/> that
+		/// the resilience loop would retry as if it were an outage, and reports a failure as a
+		/// <see cref="RelayConfigurationException"/>.
+		/// </summary>
+		protected static void ValidateApiOptions(ResgridApiClientOptions apiOptions)
+		{
+			if (apiOptions == null)
+				throw new RelayConfigurationException("The Resgrid API settings are missing.");
+
+			try
+			{
+				apiOptions.Validate();
+			}
+			catch (InvalidOperationException ex)
+			{
+				throw new RelayConfigurationException($"Invalid Resgrid API settings: {ex.Message}");
+			}
+		}
 
 		/// <summary>
 		/// Faults the service when a mode runner returns a non-zero exit code (a pre-flight
@@ -78,6 +114,7 @@ namespace Resgrid.Relay.Engine.Services
 					throw new InvalidOperationException($"The '{Mode}' relay service is already active (state: {_state}).");
 				previous = _state;
 				_state = RelayServiceState.Starting;
+				Fault = null;
 				// Publish the CTS inside the same lock as the state change so a StopAsync arriving
 				// during the startup window cancels THIS source — no stop can slip through.
 				_cts = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -108,6 +145,7 @@ namespace Resgrid.Relay.Engine.Services
 				// State/StateChanged rather than throwing back to the caller.
 				Logger?.Error(ex, "Relay mode '{Mode}' faulted", Mode);
 				_telemetry.ModeFaulted(Mode, ex);
+				Fault = ex;
 				TransitionTo(RelayServiceState.Faulted, ex.Message);
 			}
 		}
@@ -150,11 +188,13 @@ namespace Resgrid.Relay.Engine.Services
 		/// <see cref="ResilienceOptions.MaxConsecutiveFailures"/> failures occur without a healthy run resetting the counter.
 		/// An open breaker then retries every <see cref="ResilienceOptions.MaxBackoffSeconds"/> while the service stays
 		/// Running (<see cref="ResilienceOptions.KeepRetrying"/>, the default), or rethrows so <see cref="StartAsync"/> faults
-		/// the service. A <see cref="RelayConfigurationException"/> always faults at once. Non-LiveKit modes,
-		/// and any mode with resilience disabled, run <see cref="ExecuteAsync"/> once directly.
+		/// the service. A <see cref="RelayConfigurationException"/>, including one from <see cref="ValidateConfiguration"/>,
+		/// always faults at once. Non-LiveKit modes, and any mode with resilience disabled, run <see cref="ExecuteAsync"/> once directly.
 		/// </summary>
 		private async Task RunWithResilienceAsync(CancellationToken token)
 		{
+			ValidateConfiguration();
+
 			var r = Options.Resilience ?? new ResilienceOptions();
 			if (!IsLiveKitMode || !r.Enabled)
 			{

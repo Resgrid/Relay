@@ -172,6 +172,13 @@ namespace Resgrid.Audio.Relay.ViewModels
 			Entries.Clear();
 		}
 
+		/// <summary>Why the log folder could not be opened, shown on the Logs screen; empty when it opened.</summary>
+		[ObservableProperty]
+		[NotifyPropertyChangedFor(nameof(HasLogFolderError))]
+		private string _logFolderError = "";
+
+		public bool HasLogFolderError => !string.IsNullOrWhiteSpace(LogFolderError);
+
 		[RelayCommand]
 		private void OpenLogFolder()
 		{
@@ -179,10 +186,13 @@ namespace Resgrid.Audio.Relay.ViewModels
 			{
 				System.IO.Directory.CreateDirectory(App.LogDirectory);
 				System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(App.LogDirectory) { UseShellExecute = true });
+				LogFolderError = "";
 			}
-			catch
+			catch (Exception ex)
 			{
-				// Explorer unavailable — nothing useful to show.
+				// Access denied, a broken profile path, no shell: say where and why instead of a button that does nothing.
+				Serilog.Log.Warning(ex, "Could not open the log folder {LogDirectory}", App.LogDirectory);
+				LogFolderError = $"Could not open the log folder {App.LogDirectory}: {ex.Message}";
 			}
 		}
 

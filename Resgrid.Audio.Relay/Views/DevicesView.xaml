@@ -84,7 +84,7 @@
                 <!-- CM108 HID -->
                 <ui:Card Padding="16" Margin="0,12,0,0">
                     <StackPanel>
-                        <TextBlock Text="CM108-class HID (PTT GPIO)" FontWeight="SemiBold" Margin="0,0,0,8" />
+                        <TextBlock Text="CM108-compatible interfaces (PTT GPIO): C-Media fobs and the AIOC" FontWeight="SemiBold" Margin="0,0,0,8" />
                         <ItemsControl ItemsSource="{Binding Cm108Devices}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
@@ -92,7 +92,7 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock Text="No CM108 devices found."
+                        <TextBlock Text="No CM108-compatible interfaces found (looked for C-Media VID 0x0D8C and the AIOC, VID 0x1209 PID 0x7388)."
                                    Opacity="0.5" FontStyle="Italic"
                                    Visibility="{Binding Cm108Devices.Count, Converter={x:Static conv:CountToVisibilityConverter.ZeroVisible}}" />
                     </StackPanel>

@@ -82,7 +82,10 @@ namespace Resgrid.Audio.Core.Model
 
 					foreach (var firstTone in firstTones)
 					{
-						var secondTone = tones.FirstOrDefault(x => x.DtmfTone.HighTone == tone2 && x.Duration >= TimeSpan.FromMilliseconds(Time2) &&
+						// A different occurrence: when both frequencies round to the same whole-hertz tone (368.5 and 369.4 Hz),
+						// one long tone otherwise filled both slots and paged on its own.
+						var secondTone = tones.FirstOrDefault(x => !ReferenceEquals(x, firstTone) &&
+							x.DtmfTone.HighTone == tone2 && x.Duration >= TimeSpan.FromMilliseconds(Time2) &&
 							x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds >= 0 &&
 							x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds <= ((Time1 + Time2) * 6));
 

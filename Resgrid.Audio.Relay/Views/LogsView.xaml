@@ -14,6 +14,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -32,7 +33,7 @@
             </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <ui:Button Content="Open log folder" Icon="{ui:SymbolIcon FolderOpen24}" Appearance="Secondary" Margin="0,0,8,0"
-                           ToolTip="Daily log files, kept for 14 days"
+                           ToolTip="Log files: a new one each day or at 50 MB; the newest 14 files are kept"
                            Command="{Binding OpenLogFolderCommand}" />
                 <ui:Button Content="Copy" Appearance="Secondary" Margin="0,0,8,0"
                            Command="{Binding CopyCommand}" />
@@ -41,7 +42,12 @@
             </StackPanel>
         </Grid>
 
-        <Border Grid.Row="2" BorderThickness="1" BorderBrush="#33FFFFFF" CornerRadius="4">
+        <Border Grid.Row="2" Margin="0,0,0,8" Padding="10,8" CornerRadius="4" Background="#33C42B1C"
+                Visibility="{Binding HasLogFolderError, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}">
+            <TextBlock Text="{Binding LogFolderError}" TextWrapping="Wrap" />
+        </Border>
+
+        <Border Grid.Row="3" BorderThickness="1" BorderBrush="#33FFFFFF" CornerRadius="4">
             <ListBox x:Name="LogList"
                      ItemsSource="{Binding Entries}"
                      Background="Transparent"

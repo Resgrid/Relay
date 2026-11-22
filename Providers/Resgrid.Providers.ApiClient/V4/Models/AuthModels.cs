@@ -42,5 +42,12 @@ namespace Resgrid.Providers.ApiClient.V4.Models
 		/// from the one the cache already rotated past.
 		/// </summary>
 		public string ConfiguredRefreshTokenHash { get; set; }
+
+		/// <summary>
+		/// A random id given to the credential chain this cache holds, kept across every refresh-token rotation. Without a
+		/// configured refresh token it is what tells relays apart that are configured alike (same client id, same cache path)
+		/// but authenticate as different departments, so they never share a lookup cache namespace.
+		/// </summary>
+		public string CredentialId { get; set; }
 	}
 }

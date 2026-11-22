@@ -160,12 +160,12 @@ namespace Resgrid.Providers.ApiClient.V4
 			// No catch for 404: every lookup endpoint exists and reports a miss as 200 + "not_found", so a 404 means the request
 			// never reached it (a proxy or deploy problem, a wrong base URL or API version). It must surface and be retried, not
 			// read as "no such code", which would bounce real dispatches.
-			catch (HttpRequestException ex) when (otherDepartmentIsNotFound && !_client.IsSystemCaller &&
-				(ex.StatusCode == HttpStatusCode.Unauthorized || ex.StatusCode == HttpStatusCode.Forbidden))
+			catch (HttpRequestException ex) when (otherDepartmentIsNotFound && !_client.IsSystemCaller && ex.StatusCode == HttpStatusCode.Unauthorized)
 			{
 				// A token caller already holding a fresh token (the client retries a 401 once after refreshing) is told 401 when the
 				// code belongs to another department: for this relay that code does not exist. With the system key a 401 means the
-				// key itself is wrong, which must surface (and be retried) instead of silently dropping every dispatch.
+				// key itself is wrong, which must surface (and be retried) instead of silently dropping every dispatch. A 403 is
+				// never that answer (it is a key, permission or gateway problem), so it surfaces and is retried too.
 				return null;
 			}
 		}

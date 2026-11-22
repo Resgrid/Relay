@@ -33,14 +33,13 @@ namespace Resgrid.Relay.Engine.Smtp
 		/// </summary>
 		public DispatchParseResult ParseRecipients(IEnumerable<string> addresses)
 		{
-			var result = new DispatchParseResult();
+			var result = CreateResult();
 			if (addresses == null)
 				return result;
 
 			foreach (var address in addresses)
 				AddRecipient(result, address, mayChooseDepartment: true);
 
-			ApplyDefaultDepartment(result);
 			return result;
 		}
 
@@ -56,7 +55,7 @@ namespace Resgrid.Relay.Engine.Smtp
 			var envelope = envelopeAddresses?.Where(x => !String.IsNullOrWhiteSpace(x)).ToList() ?? new List<string>();
 			var headers = headerAddresses?.Where(x => !String.IsNullOrWhiteSpace(x)).ToList() ?? new List<string>();
 
-			var result = new DispatchParseResult();
+			var result = CreateResult();
 			foreach (var address in envelope)
 				AddRecipient(result, address, mayChooseDepartment: true);
 
@@ -66,7 +65,6 @@ namespace Resgrid.Relay.Engine.Smtp
 			foreach (var address in headers.Where(x => !envelope.Contains(x, StringComparer.OrdinalIgnoreCase)))
 				AddRecipient(result, address, mayChooseDepartment: false);
 
-			ApplyDefaultDepartment(result);
 			return result;
 		}
 
@@ -101,11 +99,18 @@ namespace Resgrid.Relay.Engine.Smtp
 				result.DepartmentId = departmentId;
 		}
 
-		private void ApplyDefaultDepartment(DispatchParseResult result)
+		/// <summary>
+		/// A static DefaultDepartmentId overrides domain-based detection. It is the dispatch's department from the start, before
+		/// any address is parsed: a hosted-mode address is then kept only when its subdomain is that department, whether it is on
+		/// the envelope or only in the headers, and an address of any other department is recorded as another department's.
+		/// </summary>
+		private DispatchParseResult CreateResult()
 		{
-			// A static DefaultDepartmentId overrides domain-based detection.
+			var result = new DispatchParseResult();
 			if (!String.IsNullOrWhiteSpace(_options.DefaultDepartmentId))
 				result.DepartmentId = _options.DefaultDepartmentId;
+
+			return result;
 		}
 
 		public bool TryParse(string address, out DispatchCode dispatchCode)

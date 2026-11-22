@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 
@@ -108,6 +109,10 @@ namespace Resgrid.Relay.Engine.Configuration
 		/// or empty list (the shipped appsettings.json has <c>[]</c>) keeps the default, as before, so existing deployments
 		/// that relied on the resgrid.com domains keep serving them. Throws <see cref="RelayConfigurationException"/> for
 		/// values that can't be converted.
+		///
+		/// Configuration layers merge arrays by index, so a two-domain list in appsettings.json under a one-domain list in
+		/// relay.user.json still bound both (removing a domain in the desktop app never took effect). For an
+		/// <see cref="IConfigurationRoot"/> the domain lists come whole from the highest layer that sets a non-empty one.
 		/// </summary>
 		public static RelayHostOptions Bind(IConfiguration configuration)
 		{
@@ -131,11 +136,40 @@ namespace Resgrid.Relay.Engine.Configuration
 			}
 
 			options.Smtp ??= new SmtpRelayOptions();
+			if (configuration is IConfigurationRoot root)
+			{
+				options.Smtp.DepartmentAddressDomains = TopLayerList(root, SmtpKey(nameof(SmtpRelayOptions.DepartmentAddressDomains))) ?? options.Smtp.DepartmentAddressDomains;
+				options.Smtp.GroupAddressDomains = TopLayerList(root, SmtpKey(nameof(SmtpRelayOptions.GroupAddressDomains))) ?? options.Smtp.GroupAddressDomains;
+				options.Smtp.GroupMessageAddressDomains = TopLayerList(root, SmtpKey(nameof(SmtpRelayOptions.GroupMessageAddressDomains))) ?? options.Smtp.GroupMessageAddressDomains;
+				options.Smtp.ListAddressDomains = TopLayerList(root, SmtpKey(nameof(SmtpRelayOptions.ListAddressDomains))) ?? options.Smtp.ListAddressDomains;
+			}
 			options.Smtp.DepartmentAddressDomains = OrDefault(options.Smtp.DepartmentAddressDomains, defaults.DepartmentAddressDomains);
 			options.Smtp.GroupAddressDomains = OrDefault(options.Smtp.GroupAddressDomains, defaults.GroupAddressDomains);
 			options.Smtp.GroupMessageAddressDomains = OrDefault(options.Smtp.GroupMessageAddressDomains, defaults.GroupMessageAddressDomains);
 			options.Smtp.ListAddressDomains = OrDefault(options.Smtp.ListAddressDomains, defaults.ListAddressDomains);
 			return options;
+		}
+
+		private static string SmtpKey(string property) => ConfigurationPath.Combine(nameof(RelayHostOptions.Smtp), property);
+
+		/// <summary>
+		/// The list at <paramref name="path"/> as the highest-precedence layer that sets a non-empty one defines it, with no
+		/// entries merged in from lower layers; null when no layer sets one (an empty list falls through, as before).
+		/// </summary>
+		private static string[] TopLayerList(IConfigurationRoot root, string path)
+		{
+			foreach (var provider in root.Providers.Reverse())
+			{
+				var values = provider.GetChildKeys(Enumerable.Empty<string>(), path)
+					.Distinct(StringComparer.OrdinalIgnoreCase)
+					.Select(key => provider.TryGet(ConfigurationPath.Combine(path, key), out var value) ? value : null)
+					.Where(value => !string.IsNullOrWhiteSpace(value))
+					.ToArray();
+				if (values.Length > 0)
+					return values;
+			}
+
+			return null;
 		}
 
 		/// <summary>
@@ -153,7 +187,25 @@ namespace Resgrid.Relay.Engine.Configuration
 				.AddJsonStream(new MemoryStream(json))
 				.AddEnvironmentVariables(EnvPrefix)
 				.Build();
-			return Bind(configuration);
+			var options = Bind(configuration);
+
+			// A relative path from the environment resolves against the base directory, as Load() does: otherwise a test run
+			// from here resolved it against the working directory and used a different token cache than the running relay.
+			ResolvePaths(options);
+			return options;
+		}
+
+		/// <summary>
+		/// The value the <c>RESGRID__RELAY__</c> environment layer sets for configuration <paramref name="key"/> (e.g.
+		/// <c>Resgrid:ClientId</c>), or null when it sets none — so the UI can accept a field it leaves blank because the
+		/// environment supplies it.
+		/// </summary>
+		public static string EnvironmentValue(string key)
+		{
+			if (string.IsNullOrWhiteSpace(key))
+				return null;
+
+			return new ConfigurationBuilder().AddEnvironmentVariables(EnvPrefix).Build()[key];
 		}
 
 		/// <summary>
@@ -170,7 +222,7 @@ namespace Resgrid.Relay.Engine.Configuration
 			{
 				try
 				{
-					root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(UserConfigPath)) as System.Text.Json.Nodes.JsonObject;
+					root = ParseUserFile(File.ReadAllText(UserConfigPath));
 				}
 				catch (JsonException ex)
 				{
@@ -189,6 +241,20 @@ namespace Resgrid.Relay.Engine.Configuration
 			File.Move(tempPath, UserConfigPath, overwrite: true);
 		}
 
+		/// <summary>The JSON syntax Microsoft.Extensions.Configuration.Json accepts.</summary>
+		private static readonly JsonDocumentOptions UserFileParseOptions = new JsonDocumentOptions
+		{
+			AllowTrailingCommas = true,
+			CommentHandling = JsonCommentHandling.Skip
+		};
+
+		/// <summary>
+		/// Parses the per-user file with the syntax the configuration loader accepts (trailing commas, comments), so a file the
+		/// relay runs with can also be patched. Comments are not kept when the file is rewritten. Null for a non-object root.
+		/// </summary>
+		internal static System.Text.Json.Nodes.JsonObject ParseUserFile(string text) =>
+			System.Text.Json.Nodes.JsonNode.Parse(text, documentOptions: UserFileParseOptions) as System.Text.Json.Nodes.JsonObject;
+
 		/// <summary>The per-user file content for <paramref name="options"/>: only the values that differ from appsettings.json + defaults.</summary>
 		internal static string BuildUserFileJson(RelayHostOptions options)
 		{
@@ -206,16 +272,23 @@ namespace Resgrid.Relay.Engine.Configuration
 				defaults = new RelayHostOptions();
 			}
 
-			// Path-like values are resolved to absolute paths on load; resolve both sides the same way (on a copy of the
-			// options) so an unchanged relative path doesn't count as a difference.
+			return BuildUserFileJson(options, defaults);
+		}
+
+		/// <summary>The per-user file content for <paramref name="options"/> over <paramref name="defaults"/> (the layers beneath it).</summary>
+		internal static string BuildUserFileJson(RelayHostOptions options, RelayHostOptions defaults)
+		{
+			// Path-like values are resolved to absolute paths on load; resolve both sides the same way (on copies) so an
+			// unchanged relative path doesn't count as a difference.
 			var current = JsonSerializer.Deserialize<RelayHostOptions>(JsonSerializer.Serialize(options)) ?? new RelayHostOptions();
-			ResolvePaths(defaults);
+			var basis = JsonSerializer.Deserialize<RelayHostOptions>(JsonSerializer.Serialize(defaults ?? new RelayHostOptions())) ?? new RelayHostOptions();
+			ResolvePaths(basis);
 			ResolvePaths(current);
 
-			var full = JsonSerializer.SerializeToNode(current);
-			var basis = JsonSerializer.SerializeToNode(defaults);
-			var diff = Diff(full, basis) as System.Text.Json.Nodes.JsonObject ?? new System.Text.Json.Nodes.JsonObject();
-			return diff.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+			var diff = TryDiff(JsonSerializer.SerializeToNode(current), JsonSerializer.SerializeToNode(basis), out var changed)
+				? changed as System.Text.Json.Nodes.JsonObject
+				: null;
+			return (diff ?? new System.Text.Json.Nodes.JsonObject()).ToJsonString(new JsonSerializerOptions { WriteIndented = true });
 		}
 
 		private static void ResolvePaths(RelayHostOptions o)
@@ -226,7 +299,12 @@ namespace Resgrid.Relay.Engine.Configuration
 				o.Resgrid.TokenCachePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, o.Resgrid.TokenCachePath));
 		}
 
-		private static System.Text.Json.Nodes.JsonNode Diff(System.Text.Json.Nodes.JsonNode value, System.Text.Json.Nodes.JsonNode baseline)
+		/// <summary>
+		/// True when <paramref name="value"/> differs from <paramref name="baseline"/>, with <paramref name="diff"/> holding what
+		/// to write. A changed setting can be an explicit null (a value cleared over one appsettings.json sets), so the change
+		/// is reported apart from the node: dropping it as "unchanged" let the lower layer's value come back on the next load.
+		/// </summary>
+		private static bool TryDiff(System.Text.Json.Nodes.JsonNode value, System.Text.Json.Nodes.JsonNode baseline, out System.Text.Json.Nodes.JsonNode diff)
 		{
 			if (value is System.Text.Json.Nodes.JsonObject obj)
 			{
@@ -234,15 +312,30 @@ namespace Resgrid.Relay.Engine.Configuration
 				var result = new System.Text.Json.Nodes.JsonObject();
 				foreach (var property in obj)
 				{
-					var changed = Diff(property.Value, baseObj?[property.Key]);
-					if (changed != null)
+					if (TryDiff(property.Value, baseObj?[property.Key], out var changed))
 						result[property.Key] = changed;
 				}
-				return result.Count > 0 ? result : null;
+				diff = result;
+				return result.Count > 0;
 			}
 
 			// Leaves and arrays: kept whole when they differ (an array is one setting).
-			return System.Text.Json.Nodes.JsonNode.DeepEquals(value, baseline) ? null : value?.DeepClone();
+			if (System.Text.Json.Nodes.JsonNode.DeepEquals(value, baseline))
+			{
+				diff = null;
+				return false;
+			}
+
+			// Null over a scalar is written out so it overrides that value. Null over a section or a list is left out: the
+			// binder would null the whole section (which code expects to exist), and an empty domain list keeps the default.
+			if (value == null && !(baseline is System.Text.Json.Nodes.JsonValue))
+			{
+				diff = null;
+				return false;
+			}
+
+			diff = value?.DeepClone();
+			return true;
 		}
 
 		private static string[] OrDefault(string[] configured, string[] fallback) =>

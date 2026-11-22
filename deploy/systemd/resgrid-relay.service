@@ -24,6 +24,10 @@ ExecStart=/usr/bin/dotnet /opt/resgrid-relay/Resgrid.Audio.Relay.Console.dll run
 Environment=RESGRID__RELAY__Smtp__DataDirectory=/var/lib/resgrid-relay/smtp
 Environment=RESGRID__RELAY__Resgrid__TokenCachePath=/var/lib/resgrid-relay/resgrid-token.json
 Environment=RESGRID__RELAY__Recorder__LocalPath=/var/lib/resgrid-relay/recordings
+# The release archives are single-file binaries that extract bundled native libraries at startup, by default under
+# $HOME/.net. The service account has no home directory and ProtectHome=true hides /home anyway, so extract into the
+# writable state directory instead. Harmless for a framework-dependent publish (nothing is extracted).
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/var/lib/resgrid-relay/bundle-cache
 
 # All configuration is via RESGRID__RELAY__* env vars; keep secrets here (chmod 600).
 EnvironmentFile=/etc/resgrid-relay/relay.env

@@ -56,6 +56,32 @@ namespace Resgrid.Audio.Tests
 			}
 		}
 
+		/// <summary>
+		/// A channel producer running until stopped. Declared (<c>await using</c>) after the bridge, it is stopped and awaited
+		/// before the bridge is disposed, also when an assertion failed, so it never outlives its test.
+		/// </summary>
+		private sealed class Producer : IAsyncDisposable
+		{
+			private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+			private readonly Task _loop;
+
+			public Producer(Func<CancellationToken, Task> loop) => _loop = loop(_cts.Token);
+
+			public async Task StopAsync()
+			{
+				_cts.Cancel();
+				await _loop;
+			}
+
+			public async ValueTask DisposeAsync()
+			{
+				await StopAsync();
+				_cts.Dispose();
+			}
+		}
+
+		private static Producer Talking(FakeSession session) => new Producer(token => Talk(session, token));
+
 		// ---- 1: device faults ---------------------------------------------------------------------------------------------
 
 		[Test]
@@ -128,8 +154,7 @@ namespace Resgrid.Audio.Tests
 			var ptt = new FakePtt { FailWrites = true };
 			var session = new FakeSession();
 			await using var bridge = await Start(device, ptt, session, Settings(s => s.TxHangMs = 300));
-			using var cts = new CancellationTokenSource();
-			var talking = Talk(session, cts.Token);
+			await using var talker = Talking(session);
 
 			(await WaitUntil(() => bridge.Transmitting)).Should().BeTrue();
 			ptt.IsKeyed.Should().BeFalse();
@@ -137,9 +162,6 @@ namespace Resgrid.Audio.Tests
 			ptt.FailWrites = false;
 			(await WaitUntil(() => ptt.IsKeyed, 1500)).Should().BeTrue("the bridge re-drives a PTT line a failed write left unkeyed");
 			ptt.KeyCalls.Should().BeGreaterThan(1);
-
-			cts.Cancel();
-			await talking;
 		}
 
 		[Test]
@@ -197,8 +219,7 @@ namespace Resgrid.Audio.Tests
 			}));
 
 			var stopwatch = Stopwatch.StartNew();
-			using var cts = new CancellationTokenSource();
-			var talking = Talk(session, cts.Token);
+			await using var talker = Talking(session);
 
 			(await WaitUntil(() => ptt.IsKeyed)).Should().BeTrue();
 			(await WaitUntil(() => !ptt.IsKeyed, 3000)).Should().BeTrue("the transmit time-out drops PTT although the talker keeps talking");
@@ -209,8 +230,7 @@ namespace Resgrid.Audio.Tests
 			ptt.IsKeyed.Should().BeFalse();
 			ptt.KeyCalls.Should().Be(1);
 
-			cts.Cancel();
-			await talking;
+			await talker.StopAsync();
 
 			// Quiet for longer than the talker hang (500 ms): the next transmission keys again.
 			await Task.Delay(700);
@@ -239,6 +259,7 @@ namespace Resgrid.Audio.Tests
 			device.BufferedTransmit = TimeSpan.Zero;
 			(await WaitUntil(() => !ptt.IsKeyed)).Should().BeTrue();
 			drained.ElapsedMilliseconds.Should().BeGreaterOrEqualTo(140, "output latency (100 ms) + tail (50 ms) play out after the queue drains");
+			device.ClearCalls.Should().Be(0, "a normal unkey plays the queue out rather than discarding it");
 		}
 
 		// ---- 9: key-up records the new transmission before the line is driven ----------------------------------------------
@@ -444,8 +465,7 @@ namespace Resgrid.Audio.Tests
 			var fault = NextFault(bridge);
 
 			// A talker who keeps talking keeps the radio keyed: only the stall detection can end this transmission.
-			using var cts = new CancellationTokenSource();
-			var talking = Talk(session, cts.Token);
+			await using var talker = Talking(session);
 			(await WaitUntil(() => ptt.IsKeyed)).Should().BeTrue();
 
 			// The device took the first audio and then stopped pulling any (no PlaybackStopped): its backlog never shrinks.
@@ -457,9 +477,33 @@ namespace Resgrid.Audio.Tests
 			fault.Result.Reason.Should().Contain("Transmit output stalled");
 			ptt.IsKeyed.Should().BeFalse("a dead transmit path must not hold the transmitter keyed");
 			bridge.Transmitting.Should().BeFalse();
+		}
 
-			cts.Cancel();
-			await talking;
+		[Test]
+		public async Task SteadyTransmitBacklog_WhileTheDeviceKeepsPlaying_IsNotAStall()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt();
+			var session = new FakeSession();
+			await using var bridge = await Start(device, ptt, session, Settings(s =>
+			{
+				s.MaxTransmitSeconds = 0;
+				s.TxHangMs = 300;
+			}));
+
+			// A healthy device behind a lead, refilled exactly as fast as it plays: the backlog reads the same on every tick,
+			// but the device's playback counter keeps advancing.
+			var clock = Stopwatch.StartNew();
+			device.BufferedTransmit = TimeSpan.FromMilliseconds(600);
+			device.PlayedTransmitSource = () => clock.Elapsed;
+
+			await using var talker = Talking(session);
+			(await WaitUntil(() => ptt.IsKeyed)).Should().BeTrue();
+
+			await Task.Delay(2800);
+			bridge.Fault.Should().BeNull("the device is playing; only the queue depth holds steady");
+			ptt.IsKeyed.Should().BeTrue();
+			ptt.KeyCalls.Should().Be(1);
 		}
 
 		[Test]
@@ -479,17 +523,13 @@ namespace Resgrid.Audio.Tests
 			device.BufferedTransmitSource = () =>
 				TimeSpan.FromMilliseconds(1000) - TimeSpan.FromTicks(clock.Elapsed.Ticks % TimeSpan.FromMilliseconds(400).Ticks);
 
-			using var cts = new CancellationTokenSource();
-			var talking = Talk(session, cts.Token);
+			await using var talker = Talking(session);
 			(await WaitUntil(() => ptt.IsKeyed)).Should().BeTrue();
 
 			await Task.Delay(2800);
 			bridge.Fault.Should().BeNull();
 			ptt.IsKeyed.Should().BeTrue();
 			ptt.KeyCalls.Should().Be(1);
-
-			cts.Cancel();
-			await talking;
 		}
 
 		// ---- 17: the transmit time-out is per talker ---------------------------------------------------------------------
@@ -525,14 +565,233 @@ namespace Resgrid.Audio.Tests
 
 			// A talker who does hold the floor past the limit is still cut off, timed from when they took it.
 			var turn = Stopwatch.StartNew();
-			using var cts = new CancellationTokenSource();
-			var talking = TalkFor(session, "track-b", 10_000, cts.Token);
+			await using var talker = new Producer(token => TalkFor(session, "track-b", 10_000, token));
 			(await WaitUntil(() => !ptt.IsKeyed, 5000)).Should().BeTrue("the transmit time-out still cuts off a stuck talker");
 			turn.ElapsedMilliseconds.Should().BeGreaterOrEqualTo(1800, "the time-out runs from when this talker took the floor");
 			ptt.KeyCalls.Should().Be(1);
+		}
 
-			cts.Cancel();
-			await talking;
+		// ---- 18: a transmission cut off by the time-out does not play into the next one ----------------------------------
+
+		[Test]
+		public async Task TransmitTimeOut_DiscardsTheCutOffAudio_BeforeTheNextKeyUp()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt();
+			var session = new FakeSession();
+			// A 2 s lead behind a 1 s time-out: the talker is cut off with all of their speech still queued.
+			await using var bridge = await Start(device, ptt, session, Settings(s =>
+			{
+				s.MaxTransmitSeconds = 1;
+				s.TxLeadMs = 2000;
+				s.TxHangMs = 300;
+			}));
+
+			await using (var talker = new Producer(token => TalkFor(session, "track-a", 10_000, token)))
+			{
+				(await WaitUntil(() => ptt.IsKeyed)).Should().BeTrue();
+				(await WaitUntil(() => !ptt.IsKeyed, 3000)).Should().BeTrue();
+				(await WaitUntil(() => device.ClearCalls > 0)).Should().BeTrue("the cut-off talker's queued audio is discarded at the time-out");
+				device.ClearCalls.Should().Be(1);
+			}
+			var writesAtTimeOut = device.WritesAtLastClear;
+
+			// Quiet past the talker hang: someone else keys up, and their transmission starts clean with its own lead.
+			await Task.Delay(700);
+			session.Raise(AudibleFrame("track-b"));
+			ptt.IsKeyed.Should().BeTrue();
+			var writes = device.Writes;
+			writes.Count.Should().Be(writesAtTimeOut + 2, "nothing was queued between the discard and the next key-up");
+			writes[writesAtTimeOut].Length.Should().Be(2000 * SamplesPerMs);
+			writes[writesAtTimeOut].Should().OnlyContain(s => s == 0);
+		}
+
+		// ---- 19: a failed key-up holds the audio until the line keys -----------------------------------------------------
+
+		[Test]
+		public async Task FailedKey_HoldsTheTransmitAudio_ThenStartsTheLeadWhenTheLineKeys()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt { FailWrites = true };
+			var session = new FakeSession();
+			await using var bridge = await Start(device, ptt, session, Settings(s =>
+			{
+				s.TxLeadMs = 200;
+				s.TxHangMs = 300;
+			}));
+			await using var talker = Talking(session);
+
+			(await WaitUntil(() => bridge.Transmitting)).Should().BeTrue();
+			await Task.Delay(100);
+			device.Writes.Should().BeEmpty("lead and speech played to a radio that is not keyed are lost");
+
+			ptt.FailWrites = false;
+			(await WaitUntil(() => ptt.IsKeyed, 1500)).Should().BeTrue();
+			(await WaitUntil(() => device.Writes.Count >= 2)).Should().BeTrue();
+
+			var writes = device.Writes;
+			writes[0].Length.Should().Be(200 * SamplesPerMs, "the lead runs from when the line actually keyed");
+			writes[0].Should().OnlyContain(s => s == 0);
+			writes[1].Should().Contain(s => s != 0, "the held speech follows the lead");
+			bridge.Fault.Should().BeNull();
+		}
+
+		// ---- 20: a release the PTT line has not confirmed ---------------------------------------------------------------
+
+		[Test]
+		public async Task FailedUnkey_KeepsReceiveSuppressed_UntilTheLineReleases()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt();
+			var session = new FakeSession();
+			await using var bridge = await Start(device, ptt, session, Settings(s =>
+			{
+				s.AntiLoop = true;
+				s.Squelch = new SquelchSettings { Mode = SquelchMode.Off, OpenDbfs = -38, HangMs = 100 };
+			}));
+			var forwarded = 0;
+			bridge.RadioAudioForwarded += (_, __) => Interlocked.Increment(ref forwarded);
+
+			session.Raise(AudibleFrame());
+			ptt.IsKeyed.Should().BeTrue();
+
+			ptt.FailWrites = true;
+			(await WaitUntil(() => !bridge.Transmitting)).Should().BeTrue();
+			ptt.IsKeyed.Should().BeTrue();
+
+			// Well past the 150 ms squelch guard, with the transmitter still on the air: what a loopback interface hears now is
+			// our own transmission.
+			await Task.Delay(300);
+			device.Receive(Tone(20, 8000));
+			forwarded.Should().Be(0, "receive stays suppressed while the PTT line has not released");
+			bridge.Receiving.Should().BeFalse();
+
+			ptt.FailWrites = false;
+			(await WaitUntil(() => !ptt.IsKeyed, 1500)).Should().BeTrue();
+
+			// Past the guard that started when the line actually released: real traffic gets through again.
+			await Task.Delay(250);
+			device.Receive(Tone(20, 8000));
+			forwarded.Should().Be(1);
+			bridge.Receiving.Should().BeTrue();
+		}
+
+		// ---- 21: receive squelch reset when capture pauses across the guard ---------------------------------------------
+
+		[Test]
+		public async Task Squelch_OpenedByOwnTransmission_IsResetOnTheNextFrame_EvenAfterTheGuard()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt();
+			var session = new FakeSession();
+			await using var bridge = await Start(device, ptt, session, Settings(s =>
+			{
+				s.AntiLoop = true;
+				s.Squelch = new SquelchSettings { Mode = SquelchMode.Vox, OpenDbfs = -38, CloseDbfs = -45, HangMs = 600 };
+			}));
+			var forwarded = 0;
+			bridge.RadioAudioForwarded += (_, __) => Interlocked.Increment(ref forwarded);
+
+			session.Raise(AudibleFrame());
+			for (int i = 0; i < 5; i++)
+				device.Receive(Tone(20, 10000)); // our own transmission opens the gate (600 ms hang)
+			(await WaitUntil(() => !bridge.Transmitting)).Should().BeTrue();
+
+			// No frame at all during the 150 ms guard (capture paused), then residual noise below the open threshold.
+			await Task.Delay(250);
+			device.Receive(Tone(20, 368)); // about -42 dBFS: between CloseDbfs and OpenDbfs
+			forwarded.Should().Be(0, "the hang our own transmission armed is cleared on the first frame after it");
+			bridge.Receiving.Should().BeFalse();
+
+			device.Receive(Tone(20, 10000));
+			forwarded.Should().Be(1);
+		}
+
+		// ---- 22: a fault releases a line that a failed unkey left keyed -------------------------------------------------
+
+		[Test]
+		public async Task Fault_ReleasesALineAFailedUnkeyLeftKeyed_AndDiscardsTheQueue()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt();
+			var session = new FakeSession();
+			await using var bridge = await Start(device, ptt, session, Settings());
+
+			session.Raise(AudibleFrame());
+			ptt.FailWrites = true;
+			(await WaitUntil(() => !bridge.Transmitting)).Should().BeTrue("the bridge has released");
+			ptt.IsKeyed.Should().BeTrue("but the line did not follow");
+
+			ptt.FailWrites = false;
+			device.Fail("USB audio interface removed");
+
+			ptt.IsKeyed.Should().BeFalse("the fault unkeys the line itself, not only a transmission the bridge still wanted");
+			device.ClearCalls.Should().Be(1);
+			bridge.Fault.Should().NotBeNull();
+		}
+
+		// ---- 23: shutdown --------------------------------------------------------------------------------------------------
+
+		[Test]
+		public async Task Dispose_AChannelCallbackStillInFlight_DoesNotKeyTheRadioAgain()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt();
+			var session = new FakeSession();
+			var bridge = await Start(device, ptt, session, Settings());
+
+			await bridge.DisposeAsync();
+
+			// A frame the transport had already started delivering when the bridge unsubscribed.
+			session.RaiseInFlight(AudibleFrame());
+
+			ptt.KeyCalls.Should().Be(0, "nothing keys the radio after the final unkey: no tail timer is left to release it");
+			ptt.IsKeyed.Should().BeFalse();
+			bridge.Transmitting.Should().BeFalse();
+			device.Writes.Should().BeEmpty();
+		}
+
+		[Test]
+		public async Task Dispose_RetriesAFailedFinalUnkey()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt();
+			var session = new FakeSession();
+			var bridge = await Start(device, ptt, session, Settings(s => s.TxHangMs = 1000));
+
+			session.Raise(AudibleFrame());
+			ptt.IsKeyed.Should().BeTrue();
+
+			ptt.FailWrites = true;
+			var disposing = bridge.DisposeAsync().AsTask();
+			await Task.Delay(150);
+			ptt.IsKeyed.Should().BeTrue("the final unkey failed");
+			ptt.FailWrites = false;
+
+			(await Task.WhenAny(disposing, Task.Delay(3000))).Should().BeSameAs(disposing);
+			await disposing;
+			ptt.IsKeyed.Should().BeFalse("the shutdown keeps re-driving the line for a while; the tail timer is gone");
+		}
+
+		// ---- 24: a publish write that never completes ---------------------------------------------------------------------
+
+		[Test]
+		public async Task HungPublishWrite_IsCountedAsAFailure_AndPublishingCarriesOn()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt();
+			var session = new FakeSession();
+			session.Publisher.HangFirst = 1; // never completes, and ignores cancellation
+			await using var bridge = await Start(device, ptt, session, Settings());
+
+			for (int i = 0; i < 20; i++)
+				device.Receive(Tone(20, 8000));
+
+			// The bridge gives a write 2 s.
+			(await WaitUntil(() => session.Publisher.Written == 19, 5000))
+				.Should().BeTrue("a write that does not complete is given up on, and the frames behind it are published");
+			session.Publisher.Attempts.Should().Be(20);
+			bridge.Fault.Should().BeNull("one stalled frame is not a dead channel");
 		}
 
 		/// <summary>Raises audible frames from one track in real time (10 ms of audio per 10 ms elapsed) for <paramref name="durationMs"/>.</summary>

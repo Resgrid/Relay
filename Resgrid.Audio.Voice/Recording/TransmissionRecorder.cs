@@ -39,6 +39,12 @@ namespace Resgrid.Audio.Voice.Recording
 		private Timer _scanTimer;
 		private int _started;
 
+		// Set when DisposeAsync begins; frames arriving after it are dropped. Together with the in-flight count it lets
+		// DisposeAsync wait out a frame callback already running: a rollover takes its segment out of _segments before it
+		// registers the finalization, and shutdown must not take its snapshot in between and miss that transmission.
+		private int _disposing;
+		private int _framesInFlight;
+
 		/// <summary>Raised after a transmission is fully persisted.</summary>
 		public event EventHandler<TransmissionRecord> TransmissionRecorded;
 
@@ -86,6 +92,22 @@ namespace Resgrid.Audio.Voice.Recording
 		}
 
 		private void OnAudioFrame(object sender, VoiceAudioFrame frame)
+		{
+			// Counted before the disposing check (both are full fences), so DisposeAsync either sees this callback in flight or
+			// this callback sees DisposeAsync has begun.
+			Interlocked.Increment(ref _framesInFlight);
+			try
+			{
+				if (Volatile.Read(ref _disposing) == 0)
+					AppendFrame(frame);
+			}
+			finally
+			{
+				Interlocked.Decrement(ref _framesInFlight);
+			}
+		}
+
+		private void AppendFrame(VoiceAudioFrame frame)
 		{
 			if (frame?.Pcm == null || frame.Pcm.Length == 0 || string.IsNullOrEmpty(frame.TrackSid))
 				return;
@@ -216,7 +238,8 @@ namespace Resgrid.Audio.Voice.Recording
 					try
 					{
 						using var cts = new CancellationTokenSource(StoreTimeout);
-						await _log.AppendAsync(record, cts.Token).WaitAsync(cts.Token).ConfigureAwait(false);
+						var token = cts.Token;
+						await RunBounded(() => _log.AppendAsync(record, token), token).ConfigureAwait(false);
 					}
 					catch (Exception ex)
 					{
@@ -251,9 +274,10 @@ namespace Resgrid.Audio.Voice.Recording
 				? CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token)
 				: new CancellationTokenSource();
 			cts.CancelAfter(StoreTimeout);
+			var token = cts.Token;   // read here: the call can still be starting on the pool after cts is disposed
 			try
 			{
-				var location = await store.SaveAsync(objectName, wav, cts.Token).WaitAsync(cts.Token).ConfigureAwait(false);
+				var location = await RunBounded(() => store.SaveAsync(objectName, wav, token), token).ConfigureAwait(false);
 				if (location == null)
 					throw new InvalidOperationException($"The {store.Kind} store returned no location.");
 				return location;
@@ -265,6 +289,15 @@ namespace Resgrid.Audio.Voice.Recording
 					: $"The {store.Kind} store did not respond within {StoreTimeout.TotalSeconds:0} s.");
 			}
 		}
+
+		// WaitAsync can only bound a task it has been handed, and an async store or log can block before it returns one
+		// (LocalFileTransmissionStore creates its folder synchronously, which hangs on an unreachable network share). Starting
+		// the call on the thread pool puts that part inside the timeout too, and off the finalization (or disposing) thread.
+		private static Task<T> RunBounded<T>(Func<Task<T>> call, CancellationToken token) =>
+			Task.Run(call, token).WaitAsync(token);
+
+		private static Task RunBounded(Func<Task> call, CancellationToken token) =>
+			Task.Run(call, token).WaitAsync(token);
 
 		private async Task<StoredLocation> SaveFallbackAsync(string objectName, byte[] wav, IReadOnlyList<string> failedStores)
 		{
@@ -312,7 +345,16 @@ namespace Resgrid.Audio.Voice.Recording
 
 		public async ValueTask DisposeAsync()
 		{
+			Interlocked.Exchange(ref _disposing, 1);
 			_session.AudioFrameReceived -= OnAudioFrame;
+
+			// Unsubscribing does not stop a delivery already under way (nor a Record call from another thread). Wait those out
+			// so a rollover that already took its segment out of _segments has registered its finalization before the snapshot
+			// below; later frames see _disposing and are dropped.
+			while (Volatile.Read(ref _framesInFlight) > 0)
+				await Task.Delay(1).ConfigureAwait(false);
+
+			// Also waits for a scan callback that is running.
 			if (_scanTimer != null)
 				await _scanTimer.DisposeAsync().ConfigureAwait(false);
 
@@ -324,13 +366,14 @@ namespace Resgrid.Audio.Voice.Recording
 					StartFinalize(seg);
 			}
 
+			// Uploads get ShutdownGrace to finish; whatever is still uploading then is saved to the fallback folder. Armed even
+			// when nothing is pending, so no upload can outlast it.
+			try { _shutdownCts.CancelAfter(ShutdownGrace); }
+			catch (ObjectDisposedException) { }
+
 			var pending = _pendingFinalizations.Keys.ToArray();
 			if (pending.Length > 0)
 			{
-				// Uploads get ShutdownGrace to finish; whatever is still uploading then is saved to the fallback folder.
-				try { _shutdownCts.CancelAfter(ShutdownGrace); }
-				catch (ObjectDisposedException) { }
-
 				try
 				{
 					await Task.WhenAll(pending).ConfigureAwait(false);

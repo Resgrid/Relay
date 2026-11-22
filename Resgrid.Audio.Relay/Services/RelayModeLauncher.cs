@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using NAudio.Wave;
 using Resgrid.Providers.ApiClient.V4;
@@ -21,10 +23,22 @@ namespace Resgrid.Audio.Relay.Services
 	{
 		public static readonly IReadOnlyList<string> AllModes = new[] { "smtp", "audio", "radio", "record", "dispatch" };
 
+		/// <summary>How long a start waits for a stop, another start or a radio claim on the same mode before giving up.</summary>
+		private static readonly TimeSpan LifecycleWaitTimeout = TimeSpan.FromSeconds(30);
+
 		private readonly RelayController _controller;
 		private readonly ConfigurationService _configuration;
 		private readonly DesktopSettingsService _desktop;
 		private readonly ILogger _logger;
+
+		// One gate per mode, shared by its start and stop paths: a restart of a faulted instance awaits its teardown, and a
+		// second start that ran in that window found nothing tracked and started its own copy, leaving two of the same mode
+		// running. Modes don't share a gate, so unrelated modes still start independently.
+		private readonly ConcurrentDictionary<string, SemaphoreSlim> _lifecycleGates =
+			new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+
+		// Set while a diagnostic (the Configuration screen's transmit test) holds the "radio" gate through TryClaimRadio.
+		private volatile bool _radioClaimed;
 
 		public RelayModeLauncher(RelayController controller, ConfigurationService configuration, DesktopSettingsService desktop, ILogger logger)
 		{
@@ -32,6 +46,58 @@ namespace Resgrid.Audio.Relay.Services
 			_configuration = configuration;
 			_desktop = desktop;
 			_logger = logger;
+		}
+
+		private SemaphoreSlim Gate(string mode) => _lifecycleGates.GetOrAdd(mode ?? "", _ => new SemaphoreSlim(1, 1));
+
+		/// <summary>
+		/// Claims the radio's audio devices and PTT line for a diagnostic outside the Radio Bridge (the transmit test), so the
+		/// bridge cannot start while the diagnostic holds or is still releasing them — a bridge start waits for the claim —
+		/// and the diagnostic cannot start while the bridge runs, starts or stops. Returns null, with the reason, when the radio
+		/// is busy. Dispose the claim only once the diagnostic has finished its cleanup (PTT released, devices closed).
+		/// </summary>
+		public IDisposable TryClaimRadio(out string reason)
+		{
+			var gate = Gate("radio");
+			if (!gate.Wait(0))
+			{
+				reason = _radioClaimed
+					? "The radio is already in use by another test."
+					: "The Radio Bridge is starting or stopping; try again in a moment.";
+				return null;
+			}
+
+			if (IsActive("radio"))
+			{
+				gate.Release();
+				reason = "Stop the Radio Bridge first — it already owns the radio's audio and PTT.";
+				return null;
+			}
+
+			_radioClaimed = true;
+			reason = null;
+			return new RadioClaim(this, gate);
+		}
+
+		private sealed class RadioClaim : IDisposable
+		{
+			private RelayModeLauncher _owner;
+			private readonly SemaphoreSlim _gate;
+
+			public RadioClaim(RelayModeLauncher owner, SemaphoreSlim gate)
+			{
+				_owner = owner;
+				_gate = gate;
+			}
+
+			public void Dispose()
+			{
+				var owner = Interlocked.Exchange(ref _owner, null);
+				if (owner == null)
+					return;
+				owner._radioClaimed = false;
+				_gate.Release();
+			}
 		}
 
 		public RelayController Controller => _controller;
@@ -164,47 +230,77 @@ namespace Resgrid.Audio.Relay.Services
 
 		/// <summary>
 		/// Starts <paramref name="mode"/>. A faulted instance of the same mode is cleared first. Returns null on success, or the
-		/// reason it was not started.
+		/// reason it was not started. Serialized with every other start and stop of the same mode; a Radio Bridge start also
+		/// waits for a transmit test to give the radio back (<see cref="TryClaimRadio"/>).
 		/// </summary>
 		public async Task<string> StartAsync(string mode)
 		{
-			var existing = _controller.Find(mode);
-			if (existing != null)
+			var gate = Gate(mode);
+			if (!await gate.WaitAsync(LifecycleWaitTimeout).ConfigureAwait(true))
 			{
-				if (existing.State != RelayServiceState.Faulted && existing.State != RelayServiceState.Stopped)
-					return $"{FriendlyName(mode)} is already running.";
-				await _controller.StopAsync(existing).ConfigureAwait(true);
+				return string.Equals(mode, "radio", StringComparison.OrdinalIgnoreCase) && _radioClaimed
+					? $"{FriendlyName(mode)} not started: the radio transmit test (Configuration) is still using the radio. Stop it and try again."
+					: $"{FriendlyName(mode)} not started: it is still starting or stopping. Try again in a moment.";
 			}
-
-			var errors = Validate(mode);
-			if (errors.Count > 0)
-				return $"{FriendlyName(mode)} not started: {errors[0]}";
 
 			try
 			{
-				var options = CloneOptions(_configuration.Current);
-				options.Mode = mode;
-				_controller.Start(options);
-				_logger?.Information("Started {Mode}", FriendlyName(mode));
-				return null;
+				// Checked inside the gate, after any teardown: nothing else can start this mode meanwhile.
+				var existing = _controller.Find(mode);
+				if (existing != null)
+				{
+					if (existing.State != RelayServiceState.Faulted && existing.State != RelayServiceState.Stopped)
+						return $"{FriendlyName(mode)} is already running.";
+					await _controller.StopAsync(existing).ConfigureAwait(true);
+				}
+
+				var errors = Validate(mode);
+				if (errors.Count > 0)
+					return $"{FriendlyName(mode)} not started: {errors[0]}";
+
+				try
+				{
+					var options = CloneOptions(_configuration.Current);
+					options.Mode = mode;
+					_controller.Start(options);
+					_logger?.Information("Started {Mode}", FriendlyName(mode));
+					return null;
+				}
+				catch (Exception ex)
+				{
+					_logger?.Error(ex, "Could not start {Mode}", FriendlyName(mode));
+					return $"{FriendlyName(mode)} not started: {ex.Message}";
+				}
 			}
-			catch (Exception ex)
+			finally
 			{
-				_logger?.Error(ex, "Could not start {Mode}", FriendlyName(mode));
-				return $"{FriendlyName(mode)} not started: {ex.Message}";
+				gate.Release();
 			}
 		}
 
 		public async Task StopAsync(string mode)
 		{
-			var service = _controller.Find(mode);
-			if (service != null)
-				await _controller.StopAsync(service).ConfigureAwait(true);
+			var gate = Gate(mode);
+			await gate.WaitAsync().ConfigureAwait(true);
+			try
+			{
+				var service = _controller.Find(mode);
+				if (service != null)
+					await _controller.StopAsync(service).ConfigureAwait(true);
+			}
+			finally
+			{
+				gate.Release();
+			}
 		}
 
 		public async Task<string> RestartAsync(string mode)
 		{
+			// A stop-all (footer, tray, quit) issued while the old instance is being torn down must not be reversed by the start.
+			var stopAllRequests = _controller.StopAllRequests;
 			await StopAsync(mode).ConfigureAwait(true);
+			if (_controller.StopAllRequests != stopAllRequests)
+				return $"{FriendlyName(mode)} stopped; restart cancelled.";
 			return await StartAsync(mode).ConfigureAwait(true);
 		}
 

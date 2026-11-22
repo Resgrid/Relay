@@ -126,7 +126,7 @@
                 <ContextMenu>
                     <MenuItem Header="Open Resgrid Relay" FontWeight="SemiBold" Click="TrayOpen_OnClick" />
                     <Separator />
-                    <MenuItem Header="Start default modes" Click="TrayStart_OnClick" />
+                    <MenuItem x:Name="TrayStartItem" Header="Start default modes" Click="TrayStart_OnClick" />
                     <MenuItem Header="Stop all modes" Click="TrayStop_OnClick" />
                     <Separator />
                     <MenuItem Header="Quit" Click="TrayQuit_OnClick" />

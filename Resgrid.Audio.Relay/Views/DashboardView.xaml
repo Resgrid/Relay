@@ -37,6 +37,9 @@
                              Fill="{Binding OverallState, Converter={StaticResource StateBrush}}" />
                     <TextBlock Text="{Binding SummaryText}" VerticalAlignment="Center" TextWrapping="Wrap" />
                 </StackPanel>
+                <!-- Outcome of the last Start/Restart here (survives the tile going away with its service). -->
+                <TextBlock Text="{Binding StatusMessage}" Margin="0,6,0,0" Opacity="0.8" TextWrapping="Wrap"
+                           Visibility="{Binding HasStatusMessage, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}" />
             </StackPanel>
             <ui:Button HorizontalAlignment="Right" VerticalAlignment="Top"
                        Content="Start default modes" Icon="{ui:SymbolIcon Play24}" Appearance="Primary"

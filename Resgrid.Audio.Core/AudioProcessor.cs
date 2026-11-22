@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
+using System.Threading.Tasks;
 using Resgrid.Audio.Core.Events;
 using Serilog;
 using Timer = System.Timers.Timer;
@@ -21,8 +21,10 @@ namespace Resgrid.Audio.Core
 		// Per instance: the desktop app stops and starts audio mode in one process, and a stopped pipeline must not share its
 		// lock or "timer busy" flag with the new one.
 		private readonly object _lock = new object();
-		private int _timerProcessing;
-		private volatile bool _stopped;
+		// Both guarded by _lock. The tick claims _tickInFlight in the same lock Stop sets _stopped in, so a tick is either
+		// admitted before the stop (and Stop waits for it) or sees the stop and returns.
+		private TaskCompletionSource<bool> _tickInFlight;
+		private bool _stopped;
 
 		private bool _initialized = false;
 		private Config _config;
@@ -66,38 +68,39 @@ namespace Resgrid.Audio.Core
 		/// </summary>
 		private void _timer_Elapsed(object sender, ElapsedEventArgs e)
 		{
-			if (_stopped || Interlocked.Exchange(ref _timerProcessing, 1) == 1)
-				return;
+			// One tick at a time (System.Timers.Timer overlaps a slow handler), claimed in the lock Stop sets _stopped in.
+			TaskCompletionSource<bool> tick;
+			lock (_lock)
+			{
+				if (_stopped || _tickInFlight != null)
+					return;
+
+				tick = _tickInFlight = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+			}
 
 			try
 			{
-				List<Watcher> finished = null;
+				var finished = new List<Watcher>();
 				lock (_lock)
 				{
-					if (_startedWatchers.Count > 0)
+					var now = DateTime.UtcNow;
+					foreach (var startedWatcher in _startedWatchers.Values)
 					{
-						var now = DateTime.UtcNow;
-						finished = new List<Watcher>();
-						foreach (var startedWatcher in _startedWatchers.Values)
-						{
-							startedWatcher.LastCheckedTimestamp = now;
-							if ((now - startedWatcher.TriggerFiredTimestamp).TotalSeconds >= _config.AudioLength + 5)
-								finished.Add(startedWatcher);
-						}
-
-						foreach (var watcher in finished)
-							_startedWatchers.Remove(watcher.Id);
+						startedWatcher.LastCheckedTimestamp = now;
+						if ((now - startedWatcher.TriggerFiredTimestamp).TotalSeconds >= _config.AudioLength + 5)
+							finished.Add(startedWatcher);
 					}
-				}
 
-				if (finished == null)
-				{
-					CleanUpCheck();
-					return;
+					foreach (var watcher in finished)
+						_startedWatchers.Remove(watcher.Id);
 				}
 
 				foreach (var watcher in finished)
 					FinishWatcher(watcher);
+
+				// Every tick counts toward the cleanup, busy or idle: counting only idle ticks meant a pipeline that was paged
+				// back to back never swept its stale tones.
+				CleanUpCheck();
 			}
 			catch (Exception ex)
 			{
@@ -105,7 +108,9 @@ namespace Resgrid.Audio.Core
 			}
 			finally
 			{
-				Interlocked.Exchange(ref _timerProcessing, 0);
+				lock (_lock)
+					_tickInFlight = null;
+				tick.TrySetResult(true);
 			}
 		}
 
@@ -113,8 +118,18 @@ namespace Resgrid.Audio.Core
 		{
 			try
 			{
-				var mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
-				_watcherAudioStorage.FinishWatcher(watcher.Id);
+				byte[] mp3Audio;
+				try
+				{
+					mp3Audio = _audioRecorder.SaveWatcherAudio(watcher);
+				}
+				finally
+				{
+					// Drop the buffer whether or not the encoding worked, before the watcher is released below: StartNewAudio keeps
+					// a buffer it finds, so one left behind by a failed encode was sent again with the watcher's next dispatch.
+					_watcherAudioStorage.FinishWatcher(watcher.Id);
+				}
+
 				TriggerProcessingFinished?.Invoke(this, new TriggerProcessedEventArgs(watcher, watcher.GetTrigger(), DateTime.UtcNow, mp3Audio));
 			}
 			catch (Exception ex)
@@ -123,32 +138,42 @@ namespace Resgrid.Audio.Core
 			}
 			finally
 			{
+				// Snapshot the riders and clear this dispatch BEFORE releasing any id. A released watcher can page again at once
+				// and start a new recording on this same Watcher object (and another watcher can ride along on it); clearing
+				// after the release erased that new dispatch's trigger and riders, and a rider erased that way was never
+				// released, so the evaluator skipped its later pages.
+				var riders = watcher.GetAdditionalWatchers()?.ToList() ?? new List<Watcher>();
+				watcher.Clear();
+
 				// Release the watchers that rode along on this recording too (Multiple=false): they were marked active when they
 				// triggered, and left that way they were skipped by the evaluator forever and paged again with every later call.
 				_audioEvaluator.RemoveActiveWatcher(watcher.Id);
-				foreach (var additional in watcher.GetAdditionalWatchers() ?? new List<Watcher>())
-					_audioEvaluator.RemoveActiveWatcher(additional.Id);
-
-				watcher.Clear();
+				foreach (var rider in riders)
+					_audioEvaluator.RemoveActiveWatcher(rider.Id);
 			}
 		}
 
 		/// <summary>
-		/// Stops the processing timer (the recorder is stopped separately). Waits, bounded, for an in-flight tick so its
-		/// Resgrid requests finish before the caller disposes the API client, then dispatches any watcher still inside its
-		/// recording window with the audio captured so far: a page that arrived just before a stop was otherwise dropped
-		/// without a trace.
+		/// Stops the processing timer (the recorder is stopped separately). Waits, bounded, for an in-flight tick, then
+		/// dispatches any watcher still inside its recording window with the audio captured so far: a page that arrived just
+		/// before a stop was otherwise dropped without a trace. A tick still sending its dispatch after the wait carries on in
+		/// the background; await <see cref="WaitForInFlightDispatchAsync"/> before disposing the API client it uses.
 		/// </summary>
 		public void Stop()
 		{
-			if (_stopped)
-				return;
-			_stopped = true;
+			Task inFlight;
+			lock (_lock)
+			{
+				if (_stopped)
+					return;
+
+				_stopped = true;
+				inFlight = _tickInFlight?.Task;
+			}
 			_timer.Enabled = false;
 
-			var deadline = DateTime.UtcNow.AddSeconds(30);
-			while (Volatile.Read(ref _timerProcessing) == 1 && DateTime.UtcNow < deadline)
-				Thread.Sleep(50);
+			if (inFlight != null && !inFlight.Wait(TimeSpan.FromSeconds(30)))
+				_logger?.Warning("Stopping: a dispatch is still being sent to Resgrid after 30s; it is left to finish");
 
 			List<Watcher> pending;
 			lock (_lock)
@@ -164,6 +189,17 @@ namespace Resgrid.Audio.Core
 			}
 
 			_timer.Dispose();
+		}
+
+		/// <summary>
+		/// Completes when the timer tick in flight (if any) has finished sending its dispatch. After <see cref="Stop"/> no new
+		/// tick starts, so this is the one Stop may have stopped waiting for: the caller awaits it before disposing the API
+		/// client, which otherwise failed that dispatch midway (a call saved without its audio).
+		/// </summary>
+		public Task WaitForInFlightDispatchAsync()
+		{
+			lock (_lock)
+				return _tickInFlight?.Task ?? Task.CompletedTask;
 		}
 
 		public void Init(Config config)
@@ -188,6 +224,14 @@ namespace Resgrid.Audio.Core
 		{
 			lock (_lock)
 			{
+				// Stop has already dispatched what was recording and nothing would ever finish this one (it would also stay
+				// marked active in the evaluator).
+				if (_stopped)
+				{
+					_logger?.Warning("Ignoring watcher {Watcher} triggered while the audio pipeline is stopping", e.Watcher?.Name);
+					return;
+				}
+
 				AddTriggeredWatcher(e.Watcher, e.Triggers.FirstOrDefault(), e.Timestamp);
 			}
 		}
@@ -203,29 +247,42 @@ namespace Resgrid.Audio.Core
 			if (e?.Buffer == null)
 				return;
 
-			// Snapshot under the lock: a trigger on the detector thread adds to the dictionary while this runs on the capture
-			// thread, and enumerating it live threw "Collection was modified".
-			Guid[] recordingWatchers;
+			// Appended in the same lock that starts and finishes recordings, so a block goes only to the recordings live at that
+			// moment. A snapshot of watcher ids taken here and appended after the lock was released could land in a NEW
+			// recording opened under the same id once the old one had finished. (Enumerating the dictionary outside the lock
+			// also threw "Collection was modified" when the detector thread added a watcher.)
 			lock (_lock)
 			{
 				if (_startedWatchers.Count == 0)
 					return;
 
-				recordingWatchers = _startedWatchers.Keys.ToArray();
-			}
+				var audio = GetRecordableAudio(e.Buffer, e.BytesRecorded);
+				if (audio.Length == 0)
+					return;
 
-			for (int index = 0; index + 1 < e.BytesRecorded; index += 2)
+				foreach (var watcherId in _startedWatchers.Keys)
+					_watcherAudioStorage.AddAudio(watcherId, audio);
+			}
+		}
+
+		/// <summary>The block's 16-bit samples, less the silent ones when silence detection is on.</summary>
+		private byte[] GetRecordableAudio(byte[] buffer, int bytesRecorded)
+		{
+			var length = Math.Min(bytesRecorded, buffer.Length);
+			var audio = new List<byte>(length);
+			for (int index = 0; index + 1 < length; index += 2)
 			{
-				short sample = (short)((e.Buffer[index + 1] << 8) | e.Buffer[index + 0]);
+				short sample = (short)((buffer[index + 1] << 8) | buffer[index + 0]);
 				float sample32 = sample / 32768f;
 
 				if (!IsSilence(sample32, _config.Threshold))
 				{
-					var data = new byte[] { e.Buffer[index + 0], e.Buffer[index + 1] };
-					foreach (var watcherId in recordingWatchers)
-						_watcherAudioStorage.AddAudio(watcherId, data);
+					audio.Add(buffer[index + 0]);
+					audio.Add(buffer[index + 1]);
 				}
 			}
+
+			return audio.ToArray();
 		}
 
 		private void AddTriggeredWatcher(Watcher watcher, Trigger trigger, DateTime timeStamp)
@@ -250,17 +307,19 @@ namespace Resgrid.Audio.Core
 			}
 		}
 
+		/// <summary>
+		/// About once a minute, drops tones the evaluator has held for over five minutes. Runs on the timer thread with no
+		/// processor lock held (the trigger callback takes the evaluator's lock and then this one). The tone sweep is by age
+		/// only, so it is safe while a watcher is recording. The audio buffers are no longer wiped here: each recording's
+		/// buffer is removed when it finishes, and the blanket clear raced a page that started after the idle check, removing
+		/// its new buffer so the call was skipped as empty.
+		/// </summary>
 		private void CleanUpCheck()
 		{
-			// Time1 gating this so were not constantly hitting the triggers
+			// Gated so we are not constantly sweeping the tone bank.
 			if (_checkCount >= 60)
 			{
-				if (_startedWatchers == null || _startedWatchers.Count <= 0)
-				{
-					_audioEvaluator.CleanUpTones();
-					_watcherAudioStorage.Clear();
-				}
-
+				_audioEvaluator.CleanUpTones();
 				_checkCount = 0;
 			}
 			else

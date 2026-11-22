@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -75,7 +76,17 @@ namespace Resgrid.Audio.Core.Radio
 		private long _pttMismatchSinceTicks;   // PTT line not in the wanted state since (0 = in sync)
 		private long _lastPttRetryTicks;
 		private long _lastDeviceBacklogTicks;  // the device's reported backlog at the previous tail tick
-		private long _backlogStuckSinceTicks;  // since when that backlog has not shrunk (0 = empty)
+		private long _lastDevicePlayedTicks;   // the device's reported playback progress at the previous tail tick
+		private long _backlogStuckSinceTicks;  // since when that backlog has not been played from (0 = empty)
+		private bool _stopping;                // DisposeAsync's final release has run: nothing keys the radio or queues audio after it
+
+		// A key-up whose PTT write failed: playing the lead and speech to a radio that is not keyed loses them (a retry that
+		// keys it 250 ms later would start mid-sentence), so the audio is held back until the line keys, then the lead starts
+		// from there. Bounded (the most recent audio is kept) and dropped if the transmission ends first.
+		private bool _keyPending;
+		private readonly Queue<short[]> _heldTransmit = new Queue<short[]>();
+		private int _heldTransmitSamples;
+		private static readonly int MaxHeldTransmitSamples = AudioFormat.SampleRate; // 1 s
 
 		// An output device that stops pulling audio without raising PlaybackStopped (a silent USB stall) reports the same backlog
 		// forever. Waiting for it to drain held the radio keyed until the transmit time-out (or for good with no time-out), so
@@ -89,8 +100,15 @@ namespace Resgrid.Audio.Core.Radio
 
 		// After unkeying on a loopback interface the receive gate still holds whatever our own transmission opened it with (up
 		// to the squelch hang), plus the capture buffers still carry the end of it; keep the gate shut briefly and start clean.
+		// The reset itself is applied on the capture thread's next frame even when that arrives after the guard (capture
+		// paused across it), so the first frame after the pause cannot ride the hang our own transmission armed.
 		private long _squelchGuardUntilTicks;
+		private int _squelchResetPending;
 		private static readonly long SquelchGuardTicks = TimeSpan.FromMilliseconds(150).Ticks;
+
+		// Released, but the PTT line has not confirmed it (a failed unkey write): the radio may still be on the air, so receive
+		// audio stays suppressed as while transmitting, and the squelch guard starts only once the line actually releases.
+		private volatile bool _unkeyPending;
 
 		// Squelch Off: what is left of the squelch hang since the last audible receive frame (capture thread only).
 		private double _offHangRemainingMs;
@@ -119,14 +137,24 @@ namespace Resgrid.Audio.Core.Radio
 		internal const int MaxConsecutivePublishFailures = 100;
 		internal static readonly TimeSpan PublishFailureWindow = TimeSpan.FromSeconds(10);
 		private static readonly long PublishWarnIntervalTicks = TimeSpan.FromSeconds(5).Ticks;
+		// A write that never completes (a stalled LiveKit audio source) blocked the pump with no fault while the bounded queue
+		// silently dropped the radio audio behind it. A frame normally waits at most one frame for back-pressure.
+		internal static readonly TimeSpan PublishWriteTimeout = TimeSpan.FromSeconds(2);
+
+		// Shutdown: a final unkey that fails is retried a few times before the bridge gives up and says so.
+		private const int FinalUnkeyRetries = 5;
+		private static readonly TimeSpan FinalUnkeyRetryDelay = TimeSpan.FromMilliseconds(100);
+		private static readonly TimeSpan DisposeWaitTimeout = TimeSpan.FromSeconds(5);
 
 		// Receive level reporting for the UI meter (throttled; the device delivers ~20 ms frames).
 		private static readonly long RxLevelIntervalTicks = TimeSpan.FromMilliseconds(100).Ticks;
 		private long _lastRxLevelTicks;
 		private long _lastRxErrorTicks;
 
+		// Lock order: _txLock, then _talkerLock (never the other way round).
 		private readonly object _talkerLock = new object();
 		private string _activeTalker;
+		private long _floorTurn;               // bumped whenever the floor is taken or cleared (under _talkerLock)
 		private long _activeTalkerLastAudibleTicks;
 		// When the most recent talker took the floor. Kept after their hang clears the floor, so the radio draining their last
 		// words (a PoC lead keeps it keyed for seconds) still counts against their turn, not against the whole keyed session.
@@ -273,6 +301,10 @@ namespace Resgrid.Audio.Core.Radio
 			_mdc?.Process(frame);
 			_emergency?.Process(frame);
 
+			// Read before the squelch: the unkey publishes the squelch guard/reset before it lifts this, so a frame that sees
+			// it lifted also sees the guard.
+			var ownTransmission = _settings.AntiLoop && (_transmitting || _unkeyPending);
+
 			bool open = IsSquelchOpen(frame);
 			ReportRxLevel(frame, open);
 
@@ -280,7 +312,8 @@ namespace Resgrid.Audio.Core.Radio
 			// not merely when squelch opens, and not while AntiLoop suppresses forwarding during
 			// transmit (a squelch opening then is our own TX feedback, not real RX, and counting
 			// it would make OnChannelAudio's anti-loop gate suppress the in-progress transmit).
-			if (!open || (_settings.AntiLoop && _transmitting) || Fault != null)
+			// That includes a release the PTT line has not confirmed yet: the radio may still be on the air.
+			if (!open || ownTransmission || Fault != null)
 			{
 				SetReceiving(false);
 				return;
@@ -330,34 +363,49 @@ namespace Resgrid.Audio.Core.Radio
 
 		private bool IsSquelchOpen(short[] frame)
 		{
-			switch (_settings.Squelch.Mode)
+			var mode = _settings.Squelch.Mode;
+			if (mode == SquelchMode.Carrier)
+				return _carrier.IsCarrierPresent;
+
+			// After our own transmission: the reset is consumed on this frame whenever it comes (pending first, then the
+			// guard: the unkey sets them in the opposite order), and frames inside the guard are discarded as well.
+			var reset = Volatile.Read(ref _squelchResetPending) != 0 && Interlocked.Exchange(ref _squelchResetPending, 0) != 0;
+			var inGuard = InSquelchGuard();
+			if (reset || inGuard)
+				ResetSquelch(mode);
+			if (inGuard)
+				return false;
+
+			switch (mode)
 			{
 				case SquelchMode.Off:
 					// Off is for radios with hardware squelch: while it is closed the radio passes (near) silence. Treating every
 					// frame as open held Receiving permanently, so with AntiLoop the radio was never keyed, the RX lamp stayed lit
 					// and silence streamed to the channel; only audible audio counts, held over speech pauses by the squelch hang.
-					if (InSquelchGuard())
-					{
-						_offHangRemainingMs = 0;
-						return false;
-					}
 					return IsHardwareSquelchedAudioPresent(frame);
-				case SquelchMode.Carrier: return _carrier.IsCarrierPresent;
 				case SquelchMode.Ctcss:
-					if (InSquelchGuard())
-					{
-						_ctcss.Reset();
-						return false;
-					}
 					return _ctcss.Process(frame);
 				case SquelchMode.Vox:
 				default:
-					if (InSquelchGuard())
-					{
-						_squelch.ForceClosed();
-						return false;
-					}
 					return _squelch.Process(frame);
+			}
+		}
+
+		// Capture thread only: closes whichever gate the mode uses and clears its hang.
+		private void ResetSquelch(SquelchMode mode)
+		{
+			switch (mode)
+			{
+				case SquelchMode.Off:
+					_offHangRemainingMs = 0;
+					break;
+				case SquelchMode.Ctcss:
+					_ctcss.Reset();
+					break;
+				case SquelchMode.Vox:
+				default:
+					_squelch.ForceClosed();
+					break;
 			}
 		}
 
@@ -397,7 +445,7 @@ namespace Resgrid.Audio.Core.Radio
 					// exception, leaving the radio side silent on the channel while the mode reported Running).
 					try
 					{
-						await publisher.WriteAsync(frame, token).ConfigureAwait(false);
+						await WriteFrameAsync(publisher, frame, token).ConfigureAwait(false);
 						if (consecutiveFailures > 0)
 						{
 							_logger?.Information("Publishing radio audio to the channel recovered after {Failures} failed frame(s)", consecutiveFailures);
@@ -434,6 +482,23 @@ namespace Resgrid.Audio.Core.Radio
 			}
 		}
 
+		// One publish write, bounded by PublishWriteTimeout: a write still pending then is abandoned (and asked to stop) and
+		// reported as a TimeoutException, which the pump counts as a failed frame. The bridge's token still ends it at once.
+		private static async Task WriteFrameAsync(IAudioPublisher publisher, short[] frame, CancellationToken token)
+		{
+			using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+			writeCts.CancelAfter(PublishWriteTimeout);
+			try
+			{
+				await publisher.WriteAsync(frame, writeCts.Token).AsTask().WaitAsync(PublishWriteTimeout, token).ConfigureAwait(false);
+			}
+			catch (Exception ex) when (!token.IsCancellationRequested && (ex is TimeoutException || (ex is OperationCanceledException && writeCts.IsCancellationRequested)))
+			{
+				try { writeCts.Cancel(); } catch { /* ignore */ }
+				throw new TimeoutException($"Publishing a radio audio frame did not complete within {PublishWriteTimeout.TotalSeconds:0} s", ex);
+			}
+		}
+
 		// ---- Channel → radio transmit --------------------------------------------
 
 		private void OnChannelAudio(object sender, VoiceAudioFrame frame)
@@ -453,11 +518,13 @@ namespace Resgrid.Audio.Core.Radio
 			var nowTicks = DateTime.UtcNow.Ticks;
 			var talkerHangTicks = TimeSpan.FromMilliseconds(Math.Max(_settings.TxHangMs, 500)).Ticks;
 
+			long turn;
 			lock (_talkerLock)
 			{
 				if (_activeTalker != null && nowTicks - _activeTalkerLastAudibleTicks > talkerHangTicks)
 				{
 					_activeTalker = null;
+					_floorTurn++;
 					// A talker cut off by the transmit time-out has finally gone quiet; the next one may key the radio.
 					_timeOutLockout = false;
 				}
@@ -469,6 +536,7 @@ namespace Resgrid.Audio.Core.Radio
 
 					_activeTalker = talker;
 					_activeTalkerSinceTicks = nowTicks;
+					_floorTurn++;
 				}
 				else if (!String.Equals(_activeTalker, talker, StringComparison.Ordinal))
 				{
@@ -483,6 +551,8 @@ namespace Resgrid.Audio.Core.Radio
 				// they have been quiet for the talker hang.
 				if (_timeOutLockout)
 					return;
+
+				turn = _floorTurn;
 			}
 
 			var tx = (short[])frame.Pcm.Clone();
@@ -495,10 +565,20 @@ namespace Resgrid.Audio.Core.Radio
 			{
 				changed = false;
 
-				// Checked again here: the time-out and a fault's unkey both happen under _txLock, and a frame that passed the
-				// checks above just before either must not key the radio straight back up.
-				if (_timeOutLockout || Fault != null)
+				// Checked again here: the time-out, a fault's unkey and the shutdown's final release all happen under _txLock,
+				// and a frame that passed the checks above just before one of them must not key the radio straight back up.
+				if (_stopping || Fault != null)
 					return;
+
+				// So is the floor. A frame held up between the two locks for longer than the talker hang must not key the radio,
+				// or queue audio, for a talker who has since lost the floor. Rechecked under _txLock (nested in the usual order),
+				// so the floor can only change hands at the radio between frames: whoever takes it next keys and queues through
+				// this same lock, after this frame.
+				lock (_talkerLock)
+				{
+					if (_timeOutLockout || _floorTurn != turn)
+						return;
+				}
 
 				if (!_wantKeyed)
 				{
@@ -539,7 +619,8 @@ namespace Resgrid.Audio.Core.Radio
 			_txQueuedUntilTicks = nowTicks;
 			_wantKeyed = true;
 
-			var keyed = _ptt.Key();
+			// A line still keyed after a failed unkey is keyed for this transmission too.
+			var keyed = _ptt.Key() || _ptt.IsKeyed;
 
 			// The transmission starts once the line is up (a HID/serial write can take a while): time it from there.
 			nowTicks = Math.Max(nowTicks, DateTime.UtcNow.Ticks);
@@ -551,52 +632,133 @@ namespace Resgrid.Audio.Core.Radio
 			if (keyed)
 			{
 				_pttMismatchSinceTicks = 0;
+				_keyPending = false;
 			}
 			else
 			{
 				_pttMismatchSinceTicks = nowTicks;
 				_lastPttRetryTicks = nowTicks;
-				_logger?.Warning("PTT key failed; retrying");
+				_keyPending = true;
+				_logger?.Warning("PTT key failed; holding the transmit audio and retrying");
 			}
 			_logger?.Debug("PTT keyed (channel audio from {Who})", who);
 
 			// The device plays its queue in real time, so audio queued behind this silence reaches the radio _txLeadMs
-			// after key-up, and stays that far behind for the rest of the transmission.
-			if (_txLeadMs > 0)
+			// after key-up, and stays that far behind for the rest of the transmission. After a failed key it is queued once
+			// the line does key (StartHeldTransmit).
+			if (_txLeadMs > 0 && !_keyPending)
 				QueueTransmit(_tones.Silence(_txLeadMs), nowTicks);
 
-			return UpdateTransmitting(true);
+			var changed = UpdateTransmitting(true);
+			// Receive is now held off by Transmitting itself (lifted only after it is set, so there is no gap between the two).
+			_unkeyPending = false;
+			return changed;
 		}
 
 		// Under _txLock.
 		private void QueueTransmit(short[] pcm, long nowTicks)
 		{
+			if (_keyPending)
+			{
+				HoldTransmit(pcm);
+				return;
+			}
+
 			_device.Transmit(pcm);
 			var startTicks = Math.Max(_txQueuedUntilTicks, nowTicks);
 			_txQueuedUntilTicks = startTicks + pcm.Length * TimeSpan.TicksPerSecond / AudioFormat.SampleRate;
+		}
+
+		// Under _txLock, while the key-up waits for the line: keeps the most recent MaxHeldTransmitSamples of audio.
+		private void HoldTransmit(short[] pcm)
+		{
+			_heldTransmit.Enqueue(pcm);
+			_heldTransmitSamples += pcm.Length;
+			while (_heldTransmitSamples > MaxHeldTransmitSamples && _heldTransmit.Count > 1)
+				_heldTransmitSamples -= _heldTransmit.Dequeue().Length;
+		}
+
+		// Under _txLock: the line has keyed after a failed key-up. The transmission starts now: the lead runs from here, then
+		// the held audio plays, and the live audio follows it.
+		private void StartHeldTransmit(long now)
+		{
+			_keyPending = false;
+			_keyedAtTicks = now;
+			_txQueuedUntilTicks = now;
+			_deviceDrainedAtTicks = now;
+
+			_logger?.Debug("Transmitting the {Ms:0} ms of channel audio held while the PTT line keyed",
+				_heldTransmitSamples * 1000.0 / AudioFormat.SampleRate);
+			if (_txLeadMs > 0)
+				QueueTransmit(_tones.Silence(_txLeadMs), now);
+			while (_heldTransmit.Count > 0)
+				QueueTransmit(_heldTransmit.Dequeue(), now);
+			_heldTransmitSamples = 0;
+		}
+
+		// Under _txLock.
+		private void DropHeldTransmit()
+		{
+			_keyPending = false;
+			_heldTransmit.Clear();
+			_heldTransmitSamples = 0;
+		}
+
+		// Under _txLock, on a forced unkey (the transmit time-out, a fault): throws away the transmit audio still queued. A
+		// cut-off talker's backlog (seconds of it behind a lead) would otherwise play into whoever keys the radio next, ahead
+		// of their own lead and speech; and with VOX keying the queued audio itself holds the radio on the air. What the
+		// output device has already taken (its OutputLatency) plays out within the talker hang, before anyone can key up.
+		private void DiscardQueuedTransmit(long now)
+		{
+			DropHeldTransmit();
+			_txQueuedUntilTicks = now;
+			_deviceDrainedAtTicks = now;
+			try
+			{
+				_device.ClearTransmit();
+			}
+			catch (Exception ex)
+			{
+				_logger?.Warning(ex, "Failed to discard the queued transmit audio");
+			}
 		}
 
 		// Under _txLock. Returns whether Transmitting changed.
 		private bool ReleaseTransmit(string reason, long nowTicks)
 		{
 			_wantKeyed = false;
-			if (_ptt.Unkey())
+			DropHeldTransmit();
+
+			// Unkeyed too if the write failed on a line that was never keyed (a key-up whose own write failed).
+			if (_ptt.Unkey() || !_ptt.IsKeyed)
 			{
 				_pttMismatchSinceTicks = 0;
+				OnUnkeyConfirmed(nowTicks);
 			}
 			else
 			{
 				if (_pttMismatchSinceTicks == 0)
 					_pttMismatchSinceTicks = nowTicks;
 				_lastPttRetryTicks = nowTicks;
+				// Receive stays suppressed (and the squelch guard waits) until the line has actually released.
+				_unkeyPending = true;
 				_logger?.Warning("PTT unkey failed ({Reason}); retrying", reason);
 			}
 
-			if (_settings.AntiLoop)
-				Interlocked.Exchange(ref _squelchGuardUntilTicks, nowTicks + SquelchGuardTicks);
-
 			_logger?.Debug("PTT unkeyed ({Reason}) after {Ms:0} ms keyed", reason, TimeSpan.FromTicks(nowTicks - _keyedAtTicks).TotalMilliseconds);
 			return UpdateTransmitting(false);
+		}
+
+		// Under _txLock: the PTT line is confirmed released. Receive audio is let through again, behind the squelch guard
+		// (published before the suppression is lifted, so the capture thread never sees neither).
+		private void OnUnkeyConfirmed(long nowTicks)
+		{
+			if (_settings.AntiLoop)
+			{
+				Interlocked.Exchange(ref _squelchGuardUntilTicks, nowTicks + SquelchGuardTicks);
+				Interlocked.Exchange(ref _squelchResetPending, 1);
+			}
+			_unkeyPending = false;
 		}
 
 		private void OnTxTimer()
@@ -622,7 +784,7 @@ namespace Resgrid.Audio.Core.Radio
 				fault = SyncPttLine(now);
 
 				var buffered = Math.Max(0, _device.BufferedTransmit.Ticks);
-				fault ??= CheckTransmitOutput(now, buffered);
+				fault ??= CheckTransmitOutput(now, buffered, _device.PlayedTransmit.Ticks);
 
 				if (_wantKeyed && fault == null)
 					changed = ManageKeyedTail(now, buffered);
@@ -645,6 +807,7 @@ namespace Resgrid.Audio.Core.Radio
 					_pttMismatchSinceTicks = 0;
 					_logger?.Information("PTT line back in step ({State})", _wantKeyed ? "keyed" : "unkeyed");
 				}
+				OnPttLineInStep(now);
 				return null;
 			}
 
@@ -659,6 +822,8 @@ namespace Resgrid.Audio.Core.Radio
 				{
 					_pttMismatchSinceTicks = 0;
 					_logger?.Information("PTT line {State} after retrying", _wantKeyed ? "keyed" : "unkeyed");
+					// Timed from when the write returned (a HID/serial write can take a while).
+					OnPttLineInStep(Math.Max(now, DateTime.UtcNow.Ticks));
 					return null;
 				}
 			}
@@ -669,11 +834,31 @@ namespace Resgrid.Audio.Core.Radio
 			return null;
 		}
 
-		// Under _txLock. Returns a fault reason once the device's reported transmit backlog has stopped shrinking: the output
-		// plays continuously whether or not PTT is keyed, so a backlog that holds (or only grows) means the device stopped
-		// pulling audio without reporting it. Checked while unkeyed too, since the bounded drain wait can unkey first.
-		private string CheckTransmitOutput(long now, long buffered)
+		// Under _txLock: the PTT line is in the state the bridge wants. A held key-up starts transmitting; an unconfirmed
+		// release lets receive audio through again.
+		private void OnPttLineInStep(long now)
 		{
+			if (_wantKeyed)
+			{
+				if (_keyPending)
+					StartHeldTransmit(now);
+			}
+			else if (_unkeyPending)
+			{
+				OnUnkeyConfirmed(now);
+			}
+		}
+
+		// Under _txLock. Returns a fault reason once the device has stopped playing its transmit backlog: the output plays
+		// continuously whether or not PTT is keyed, so a backlog it is not playing from means the device stopped pulling audio
+		// without reporting it. Progress is the device's own playback counter (a talker refilling the queue as fast as it
+		// plays can hold the backlog at one depth on every tick), or, for a device that cannot report one, the backlog
+		// shrinking. Checked while unkeyed too, since the bounded drain wait can unkey first.
+		private string CheckTransmitOutput(long now, long buffered, long played)
+		{
+			var progressed = played != _lastDevicePlayedTicks;
+			_lastDevicePlayedTicks = played;
+
 			if (buffered <= 0)
 			{
 				_backlogStuckSinceTicks = 0;
@@ -681,7 +866,7 @@ namespace Resgrid.Audio.Core.Radio
 				return null;
 			}
 
-			if (_backlogStuckSinceTicks == 0 || buffered < _lastDeviceBacklogTicks)
+			if (_backlogStuckSinceTicks == 0 || progressed || buffered < _lastDeviceBacklogTicks)
 				_backlogStuckSinceTicks = now; // just queued, or playing out
 			_lastDeviceBacklogTicks = buffered;
 
@@ -695,6 +880,11 @@ namespace Resgrid.Audio.Core.Radio
 		// Under _txLock, while keyed. Returns whether Transmitting changed.
 		private bool ManageKeyedTail(long now, long buffered)
 		{
+			// Not on the air yet (the key-up's PTT write failed): nothing has been queued to time a tail from. The line keys on
+			// a retry (StartHeldTransmit), or the PTT fault ends the transmission.
+			if (_keyPending)
+				return false;
+
 			// When the device's own queue empties (or will): pushed out while it reports a backlog, pulled in to now once it
 			// reports none. Never more than MaxDrainOverrun past the bridge's own estimate: the device holds only what the bridge
 			// queued, so a backlog beyond that is a device that has stopped playing, not audio still to come.
@@ -728,7 +918,10 @@ namespace Resgrid.Audio.Core.Radio
 				{
 					_logger?.Warning("Transmit time-out: {Talker} has held the radio keyed for {Seconds} s; unkeying and ignoring them until they stop talking",
 						talker ?? "the channel", maxTransmitSeconds);
-					return ReleaseTransmit("transmit time-out", now);
+					// Unkeyed first: discarding the cut-off audio must never be what stands between a time-out and the unkey.
+					var changed = ReleaseTransmit("transmit time-out", now);
+					DiscardQueuedTransmit(now);
+					return changed;
 				}
 			}
 
@@ -767,14 +960,18 @@ namespace Resgrid.Audio.Core.Radio
 
 			_logger?.Error(exception, "Radio bridge fault: {Reason}", reason);
 
-			// Don't hold the transmitter on a path that no longer carries audio.
+			// Don't hold the transmitter on a path that no longer carries audio: also when the bridge had already released but
+			// the line did not follow (a failed unkey), and whatever is still queued (with VOX keying it keys the radio). The
+			// tail timer keeps re-driving a line that stays keyed until the owner tears the bridge down.
 			bool changed = false;
 			try
 			{
 				lock (_txLock)
 				{
-					if (_wantKeyed)
-						changed = ReleaseTransmit("fault", DateTime.UtcNow.Ticks);
+					var now = DateTime.UtcNow.Ticks;
+					if (_wantKeyed || _unkeyPending || _ptt.IsKeyed)
+						changed = ReleaseTransmit("fault", now);
+					DiscardQueuedTransmit(now);
 				}
 			}
 			catch (Exception ex)
@@ -818,6 +1015,21 @@ namespace Resgrid.Audio.Core.Radio
 			try { _cts?.Cancel(); } catch { /* ignore */ }
 			_publishQueue.Writer.TryComplete();
 
+			// The bridge is gone: nothing is being transmitted or received any more. Fenced under _txLock before anything else:
+			// unsubscribing does not stop a channel callback already in flight, and one that reached _txLock after the final
+			// unkey would key the radio again with no tail timer left to release it. Callbacks that got there first are
+			// followed by this release; those that get there after it see _stopping and drop their audio.
+			bool changed;
+			bool released;
+			lock (_txLock)
+			{
+				_stopping = true;
+				_wantKeyed = false;
+				DropHeldTransmit();
+				released = TryUnkey();
+				changed = UpdateTransmitting(false);
+			}
+
 			if (_session != null)
 				_session.AudioFrameReceived -= OnChannelAudio;
 			_device.SamplesReceived -= OnRadioAudio;
@@ -826,14 +1038,16 @@ namespace Resgrid.Audio.Core.Radio
 			if (_txTimer != null)
 				await _txTimer.DisposeAsync().ConfigureAwait(false);
 
-			// The bridge is gone: nothing is being transmitted or received any more.
-			bool changed;
-			lock (_txLock)
+			// The tail timer used to re-drive a line a failed write left keyed; it is gone now, so retry here (briefly).
+			for (int attempt = 0; !released && attempt < FinalUnkeyRetries; attempt++)
 			{
-				_wantKeyed = false;
-				try { _ptt.Unkey(); } catch { /* ignore */ }
-				changed = UpdateTransmitting(false);
+				await Task.Delay(FinalUnkeyRetryDelay).ConfigureAwait(false);
+				lock (_txLock)
+					released = TryUnkey();
 			}
+			if (!released)
+				_logger?.Error("Radio bridge stopped but the PTT line could not be released: the radio may still be transmitting. Check or disconnect the radio interface.");
+
 			if (_receiving)
 			{
 				_receiving = false;
@@ -842,13 +1056,50 @@ namespace Resgrid.Audio.Core.Radio
 			if (changed)
 				RaiseTxRxChanged();
 
-			try { if (_publishPump != null) await _publishPump.ConfigureAwait(false); } catch { /* ignore */ }
-			if (_publisher != null)
-				await _publisher.DisposeAsync().ConfigureAwait(false);
+			// Bounded: a publish write that ignores cancellation must not hang teardown (the pump itself gives up on it at once).
+			var pump = _publishPump;
+			if (pump != null && !await WaitBoundedAsync(() => pump).ConfigureAwait(false))
+				_logger?.Warning("Radio publish pump did not stop within {Seconds} s; abandoning it", DisposeWaitTimeout.TotalSeconds);
+			var publisher = _publisher;
+			if (publisher != null && !await WaitBoundedAsync(() => publisher.DisposeAsync().AsTask()).ConfigureAwait(false))
+				_logger?.Warning("Radio channel publisher did not close within {Seconds} s; abandoning it", DisposeWaitTimeout.TotalSeconds);
 
 			_device.StopTransmit();
 			_device.StopReceive();
 			_cts?.Dispose();
+		}
+
+		// Under _txLock (or once nothing else can drive the line). True when the line is released, as far as the controller knows.
+		private bool TryUnkey()
+		{
+			try
+			{
+				return _ptt.Unkey() || !_ptt.IsKeyed;
+			}
+			catch (Exception ex)
+			{
+				_logger?.Warning(ex, "PTT unkey threw");
+				return false;
+			}
+		}
+
+		// Waits for a teardown step for at most DisposeWaitTimeout. False when it is still running then; its failure is ignored.
+		private async Task<bool> WaitBoundedAsync(Func<Task> step)
+		{
+			try
+			{
+				await step().WaitAsync(DisposeWaitTimeout).ConfigureAwait(false);
+				return true;
+			}
+			catch (TimeoutException)
+			{
+				return false;
+			}
+			catch (Exception ex)
+			{
+				_logger?.Debug(ex, "Radio bridge teardown step failed");
+				return true;
+			}
 		}
 	}
 }

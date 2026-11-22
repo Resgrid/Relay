@@ -69,6 +69,10 @@ namespace Resgrid.Providers.ApiClient.V4
 			}
 			_tokenState = LoadTokenState(options);
 
+			// A cache from before the id existed (or a new one) gets it now; it is written with the next rotated token.
+			if (UsesCachedCredentialIdentity(options) && String.IsNullOrWhiteSpace(_tokenState.CredentialId))
+				_tokenState.CredentialId = Guid.NewGuid().ToString("N");
+
 			_client = CreateClient(options.BaseUrl, handler);
 		}
 
@@ -88,14 +92,19 @@ namespace Resgrid.Providers.ApiClient.V4
 
 		public bool IsSystemCaller => _options.IsSystemCaller();
 
-		public string CredentialScope => _credentialScope ??= BuildCredentialScope(_options);
+		public string CredentialScope => _credentialScope ??= BuildCredentialScope(_options, _tokenState?.CredentialId);
+
+		/// <summary>A refresh-token relay without a configured refresh token: only its token cache knows which credential it is.</summary>
+		private static bool UsesCachedCredentialIdentity(ResgridApiClientOptions options) =>
+			options.GrantType == ResgridAuthGrantType.RefreshToken && String.IsNullOrWhiteSpace(options.RefreshToken) && !options.IsSystemCaller();
 
 		/// <summary>
 		/// A system caller sees every department, so all system callers share one scope. A token sees only its own department:
 		/// a client_credentials client is the department itself, and refresh-token relays usually share one app client id, so the
-		/// configured refresh token (or, without one, the token cache) tells them apart. Hashed: the scope ends up in cache keys.
+		/// configured refresh token tells them apart, or without one the random id their token cache carries across rotations (the
+		/// cache path alone would not: relays in containers commonly share it). Hashed: the scope ends up in cache keys.
 		/// </summary>
-		private static string BuildCredentialScope(ResgridApiClientOptions options)
+		private static string BuildCredentialScope(ResgridApiClientOptions options, string cachedCredentialId)
 		{
 			string identity;
 			if (options.IsSystemCaller())
@@ -105,7 +114,7 @@ namespace Resgrid.Providers.ApiClient.V4
 			else if (!String.IsNullOrWhiteSpace(options.RefreshToken))
 				identity = $"refresh_token|{options.ClientId?.Trim()}|{options.RefreshToken.Trim()}";
 			else
-				identity = $"refresh_token|{options.ClientId?.Trim()}|{Path.GetFullPath(options.TokenCachePath ?? String.Empty)}";
+				identity = $"refresh_token|{options.ClientId?.Trim()}|cache:{cachedCredentialId?.Trim()}";
 
 			var identityBaseUrl = NormalizeBaseUrl(options.BaseUrl ?? String.Empty).ToLowerInvariant();
 			return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes($"{identityBaseUrl}|{identity}")))
@@ -166,22 +175,32 @@ namespace Resgrid.Providers.ApiClient.V4
 			await EnsureAuthenticatedAsync(cancellationToken).ConfigureAwait(false);
 
 			var relativeUrl = BuildRelativeApiPath(url);
-			var response = await SendAuthorizedRequestAsync(method, relativeUrl, data, _tokenState.AccessToken, cancellationToken, headers).ConfigureAwait(false);
+			var sentToken = _tokenState.AccessToken;
+			var response = await SendAuthorizedRequestAsync(method, relativeUrl, data, sentToken, cancellationToken, headers).ConfigureAwait(false);
 
 			// 401 retry is only meaningful for token-based auth flows.
 			// SystemApiKey mode uses a static key — retrying would just fail again.
-			if (response.StatusCode == HttpStatusCode.Unauthorized && _options.GrantType != ResgridAuthGrantType.SystemApiKey &&
-				!IsFreshToken(DateTimeOffset.UtcNow))
-			{
-				response.Dispose();
-				_tokenState.AccessToken = null;
-				_tokenState.ExpiresAtUtc = DateTimeOffset.MinValue;
+			if (response.StatusCode != HttpStatusCode.Unauthorized || _options.GrantType == ResgridAuthGrantType.SystemApiKey)
+				return response;
 
+			if (!String.Equals(_tokenState.AccessToken, sentToken, StringComparison.Ordinal))
+			{
+				// Another request replaced (or is replacing) the token this one sent while it was in flight. The 401 is about that
+				// old token, so the current one's freshness says nothing about it: retry with the current token, which stays.
+				response.Dispose();
 				await EnsureAuthenticatedAsync(cancellationToken).ConfigureAwait(false);
 				return await SendAuthorizedRequestAsync(method, relativeUrl, data, _tokenState.AccessToken, cancellationToken, headers).ConfigureAwait(false);
 			}
 
-			return response;
+			if (IsFreshToken(DateTimeOffset.UtcNow))
+				return response;
+
+			response.Dispose();
+			_tokenState.AccessToken = null;
+			_tokenState.ExpiresAtUtc = DateTimeOffset.MinValue;
+
+			await EnsureAuthenticatedAsync(cancellationToken).ConfigureAwait(false);
+			return await SendAuthorizedRequestAsync(method, relativeUrl, data, _tokenState.AccessToken, cancellationToken, headers).ConfigureAwait(false);
 		}
 
 		private async Task<HttpResponseMessage> SendAuthorizedRequestAsync(HttpMethod method, string url, object data, string accessToken, CancellationToken cancellationToken,
@@ -260,7 +279,11 @@ namespace Resgrid.Providers.ApiClient.V4
 						!String.Equals(latest.RefreshToken, _tokenState.RefreshToken, StringComparison.Ordinal) &&
 						latest.ExpiresAtUtc >= _tokenState.ExpiresAtUtc)
 					{
+						// The cache id names the credential chain, which the rotation continued; the adopted token is not one this
+						// client was just issued, so its age is unknown.
+						latest.CredentialId ??= _tokenState.CredentialId;
 						_tokenState = latest;
+						_accessTokenIssuedAtUtc = DateTimeOffset.MinValue;
 						if (HasValidAccessToken())
 							return;
 					}

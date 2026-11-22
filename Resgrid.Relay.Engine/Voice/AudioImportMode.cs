@@ -42,7 +42,7 @@ namespace Resgrid.Relay.Engine.Voice
 
 			var audioStorage = new WatcherAudioStorage(logger);
 			var evaluator = new AudioEvaluator(logger);
-			var recorder = new AudioRecorder(evaluator, audioStorage);
+			var recorder = new AudioRecorder(evaluator, audioStorage, logger);
 			var processor = new AudioProcessor(recorder, evaluator, audioStorage, logger);
 			var comService = new ComService(logger, processor, apiClient, healthApi, callsApi, new LookupsApi(apiClient), apiOptions.DepartmentId);
 
@@ -98,8 +98,20 @@ namespace Resgrid.Relay.Engine.Voice
 			}
 			finally
 			{
-				recorder.Stop();
-				processor.Stop();
+				try
+				{
+					recorder.Stop();
+				}
+				finally
+				{
+					// Nested: a capture device that fails to stop must not skip this and leave the processing timer running
+					// against the disposed API client.
+					processor.Stop();
+
+					// Stop waits only so long for a dispatch already being sent; keep the API client (disposed when this method
+					// returns) alive until it finishes, or a call Resgrid had already saved lost its audio.
+					await processor.WaitForInFlightDispatchAsync().ConfigureAwait(false);
+				}
 			}
 
 			// The loop also ends when capture stops on its own (the input device was unplugged or failed). That is not a clean
@@ -128,9 +140,14 @@ namespace Resgrid.Relay.Engine.Voice
 
 		private static ResgridApiClientOptions ResolveResgridOptions(RelayHostOptions hostOptions, Config config)
 		{
+			// The host BaseUrl is never blank (appsettings.json and the options default both carry the public API), so a host value
+			// equal to that default is treated as unset: otherwise it always beat a custom server set in settings.json by `setup`.
+			var defaultBaseUrl = new ResgridApiClientOptions().BaseUrl;
+			var hostBaseUrl = IsSameUrl(hostOptions.Resgrid.BaseUrl, defaultBaseUrl) ? null : hostOptions.Resgrid.BaseUrl;
+
 			return new ResgridApiClientOptions
 			{
-				BaseUrl = FirstNonEmpty(hostOptions.Resgrid.BaseUrl, config.Resgrid?.BaseUrl, config.ApiUrl, "https://api.resgrid.com"),
+				BaseUrl = FirstNonEmpty(hostBaseUrl, config.Resgrid?.BaseUrl, config.ApiUrl, defaultBaseUrl, "https://api.resgrid.com"),
 				ApiVersion = FirstNonEmpty(hostOptions.Resgrid.ApiVersion, config.Resgrid?.ApiVersion, "4"),
 				ClientId = FirstNonEmpty(hostOptions.Resgrid.ClientId, config.Resgrid?.ClientId),
 				ClientSecret = FirstNonEmpty(hostOptions.Resgrid.ClientSecret, config.Resgrid?.ClientSecret),
@@ -147,6 +164,10 @@ namespace Resgrid.Relay.Engine.Voice
 
 		private static string FirstNonEmpty(params string[] values) =>
 			values.FirstOrDefault(x => !String.IsNullOrWhiteSpace(x));
+
+		private static bool IsSameUrl(string a, string b) =>
+			!String.IsNullOrWhiteSpace(a) && !String.IsNullOrWhiteSpace(b) &&
+			String.Equals(a.Trim().TrimEnd('/'), b.Trim().TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
 	}
 }
 #endif

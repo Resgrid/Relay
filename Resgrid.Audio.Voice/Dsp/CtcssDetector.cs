@@ -19,7 +19,13 @@ namespace Resgrid.Audio.Voice.Dsp
 		private readonly List<short> _window = new List<short>();
 		private bool _present;
 		private bool _open;
-		private double _hangRemainingMs;
+
+		// Sample positions in the audio fed so far: how much there has been, where _window starts, and where the last analysis
+		// window holding the tone ended. The hang is timed from that end, so whether the gate is open depends on the audio
+		// since the tone was last seen, not on how it was cut into buffers.
+		private long _samplesFed;
+		private long _windowStart;
+		private long _lastToneEnd = -1;
 
 		/// <param name="hangMs">
 		/// Keep the squelch open this long after the tone was last seen. The tone's share of the window's energy falls on loud
@@ -52,27 +58,23 @@ namespace Resgrid.Audio.Voice.Dsp
 
 			for (int i = 0; i < pcm.Length; i++)
 				_window.Add(pcm[i]);
+			_samplesFed += pcm.Length;
 
 			while (_window.Count >= _windowSamples)
 			{
 				var block = _window.GetRange(0, _windowSamples).ToArray();
-				_window.RemoveRange(0, _windowSamples / 2); // 50% overlap for responsiveness
 				var strength = Goertzel.NormalizedStrength(block, _frequency, _sampleRate);
 				_present = strength >= _minStrength;
+				if (_present)
+					_lastToneEnd = _windowStart + _windowSamples;
+
+				var hop = _windowSamples / 2; // 50% overlap for responsiveness
+				_window.RemoveRange(0, hop);
+				_windowStart += hop;
 			}
 
-			if (_present)
-			{
-				_open = true;
-				_hangRemainingMs = _hangMs;
-			}
-			else if (_open)
-			{
-				_hangRemainingMs -= pcm.Length * 1000.0 / _sampleRate;
-				if (_hangRemainingMs <= 0)
-					_open = false;
-			}
-
+			// Open while the latest window holds the tone, or within the hang of the last one that did.
+			_open = _present || (_lastToneEnd >= 0 && (_samplesFed - _lastToneEnd) * 1000.0 / _sampleRate < _hangMs);
 			return _open;
 		}
 
@@ -82,7 +84,8 @@ namespace Resgrid.Audio.Voice.Dsp
 			_window.Clear();
 			_present = false;
 			_open = false;
-			_hangRemainingMs = 0;
+			_windowStart = _samplesFed;
+			_lastToneEnd = -1;
 		}
 	}
 }

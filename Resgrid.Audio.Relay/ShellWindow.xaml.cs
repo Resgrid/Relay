@@ -125,7 +125,8 @@ namespace Resgrid.Audio.Relay
 
 		private async void OnClosing(object sender, CancelEventArgs e)
 		{
-			if (_isExiting)
+			// Quitting, or Windows is ending the session (App stopped the modes and WPF is shutting down): just close.
+			if (_isExiting || _services.GetRequiredService<RelayController>().IsShuttingDown)
 				return;
 
 			e.Cancel = true;
@@ -196,15 +197,22 @@ namespace Resgrid.Audio.Relay
 			_isExiting = true;
 			controller.ServiceFaulted -= OnServiceFaulted;
 
-			// Stop all running relay modes before shutting down — done here (not in App.OnExit, which is synchronous) so the
-			// async teardown completes. Best-effort; the await resumes on the UI thread so Shutdown() runs there.
+			// Refuse new starts from here on (footer, tray, Dashboard, Operations, auto-start): a mode started while the stop
+			// below is awaited would miss it and outlive the quit with its rooms open, radio keyed or recording unflushed.
+			controller.BeginShutdown();
+			TrayStartItem.IsEnabled = false;
+
+			// Stop all running relay modes (and wait for stops already in progress) before shutting down — done here (not in
+			// App.OnExit, which is synchronous) so the async teardown completes. The await resumes on the UI thread so
+			// Shutdown() runs there.
 			try
 			{
 				await controller.StopAllAsync();
 			}
-			catch
+			catch (Exception ex)
 			{
 				// Proceed to shutdown regardless.
+				Serilog.Log.Warning(ex, "Stopping relay modes before quitting failed");
 			}
 
 			TrayIcon?.Dispose();

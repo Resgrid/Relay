@@ -334,7 +334,14 @@ jobs:
         run: |
           set -euo pipefail
           ls -la
-          sha256sum ResgridRelay-* > SHA256SUMS
+          # A Docker-only release has no ResgridRelay-* archives: hash whatever was produced, and fail only on nothing.
+          shopt -s nullglob
+          files=(ResgridRelay-* docker-image.txt)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No release files to checksum"
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
           cat SHA256SUMS
 
       - name: Release notes

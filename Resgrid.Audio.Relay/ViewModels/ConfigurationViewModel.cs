@@ -13,6 +13,7 @@ using Resgrid.Audio.Relay.Services;
 using Resgrid.Audio.Voice.Dsp;
 using Resgrid.Providers.ApiClient.V4;
 using Resgrid.Relay.Engine.Configuration;
+using Cm108Compatibility = Resgrid.Audio.Core.Radio.Cm108Compatibility;
 #if NET10_0_WINDOWS
 using Resgrid.Relay.Engine;
 using Resgrid.Relay.Engine.Voice;
@@ -44,6 +45,11 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private bool _disposed;
 		private bool _loading;
 
+		// Why the on-disk layers (appsettings.json + relay.user.json) could not be read, or null. Tracked apart from the
+		// effective load error: an environment value can mask a bad value in the file, and the form then shows defaults that a
+		// Save would write over the file's other settings.
+		private string _diskLoadError;
+
 		public ConfigurationViewModel(ConfigurationService configuration, DeviceEnumerationService devices, RelayModeLauncher launcher)
 		{
 			_configuration = configuration;
@@ -52,13 +58,13 @@ namespace Resgrid.Audio.Relay.ViewModels
 			RefreshDeviceLists();
 			// The form edits the on-disk layers only, so a Save never writes RESGRID__RELAY__ environment values into the
 			// user file (the banner says when the environment overrides what is shown).
-			LoadFromOptions(_configuration.LoadFromDisk());
+			LoadFromOptions(LoadDiskModel());
 		}
 
 		/// <summary>Why the settings files could not be read (defaults are shown), or null.</summary>
-		public string LoadError => _configuration.LoadError;
+		public string LoadError => _diskLoadError ?? _configuration.LoadError;
 
-		public bool HasLoadError => !string.IsNullOrEmpty(_configuration.LoadError);
+		public bool HasLoadError => !string.IsNullOrEmpty(LoadError);
 
 		/// <summary>The settings file path with the user's profile folder abbreviated.</summary>
 		public string UserConfigPathDisplay => App.DisplayPath(_configuration.UserConfigPath);
@@ -106,15 +112,30 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private string _mode = "smtp";
 
 		// ─────────── Resgrid API ───────────
+		// Required unless the RESGRID__RELAY__ environment supplies it: the form shows the file's (blank) value then, and a
+		// plain [Required] blocked every Save. Save still validates the effective options, so a value missing from both fails.
 		[ObservableProperty]
-		[Required(AllowEmptyStrings = false, ErrorMessage = "Base URL is required.")]
+		[CustomValidation(typeof(ConfigurationViewModel), nameof(ValidateResgridBaseUrl))]
 		[NotifyDataErrorInfo]
 		private string _resgridBaseUrl = "";
 
 		[ObservableProperty]
-		[Required(AllowEmptyStrings = false, ErrorMessage = "Client id is required.")]
+		[CustomValidation(typeof(ConfigurationViewModel), nameof(ValidateResgridClientId))]
 		[NotifyDataErrorInfo]
 		private string _resgridClientId = "";
+
+		public static ValidationResult ValidateResgridBaseUrl(string value, ValidationContext context)
+			=> RequiredUnlessFromEnvironment(value, "Resgrid:BaseUrl", "Base URL is required.", context);
+
+		public static ValidationResult ValidateResgridClientId(string value, ValidationContext context)
+			=> RequiredUnlessFromEnvironment(value, "Resgrid:ClientId", "Client id is required.", context);
+
+		private static ValidationResult RequiredUnlessFromEnvironment(string value, string key, string error, ValidationContext context)
+		{
+			if (!string.IsNullOrWhiteSpace(value) || !string.IsNullOrWhiteSpace(RelayConfiguration.EnvironmentValue(key)))
+				return ValidationResult.Success;
+			return new ValidationResult(error, context?.MemberName == null ? null : new[] { context.MemberName });
+		}
 
 		[ObservableProperty]
 		private string _resgridClientSecret = "";
@@ -175,10 +196,36 @@ namespace Resgrid.Audio.Relay.ViewModels
 		[ObservableProperty] private int _radioOutputDevice = -1;
 		[ObservableProperty] private string _radioPttMethod = "Vox";
 		[ObservableProperty] private string _radioSerialPort = "";
-		[ObservableProperty] private int _radioCm108VendorId = 0x0D8C;
+		[ObservableProperty] private int _radioCm108VendorId = Cm108Compatibility.CMediaVendorId;
 		[ObservableProperty] private int _radioCm108ProductId;
 		[ObservableProperty] private int _radioCm108GpioPin = 3;
 		[ObservableProperty] private HidDeviceInfo _selectedCm108Device;
+
+		// The CM108 ids as typed (hex), so an interface that is not plugged in, or not in the known list, can still be set.
+		[ObservableProperty]
+		[CustomValidation(typeof(ConfigurationViewModel), nameof(ValidateCm108VendorIdText))]
+		[NotifyDataErrorInfo]
+		private string _radioCm108VendorIdText = Cm108Compatibility.FormatUsbId(Cm108Compatibility.CMediaVendorId);
+
+		[ObservableProperty]
+		[CustomValidation(typeof(ConfigurationViewModel), nameof(ValidateCm108ProductIdText))]
+		[NotifyDataErrorInfo]
+		private string _radioCm108ProductIdText = Cm108Compatibility.FormatUsbId(0);
+
+		public static ValidationResult ValidateCm108VendorIdText(string value, ValidationContext context) =>
+			Cm108Compatibility.TryParseUsbId(value, out var id) && id != 0
+				? ValidationResult.Success
+				: new ValidationResult("Enter the vendor id in hex, 0x0001–0xFFFF (C-Media 0x0D8C, AIOC 0x1209).",
+					context?.MemberName == null ? null : new[] { context.MemberName });
+
+		public static ValidationResult ValidateCm108ProductIdText(string value, ValidationContext context) =>
+			Cm108Compatibility.TryParseUsbId(value, out _)
+				? ValidationResult.Success
+				: new ValidationResult("Enter the product id in hex, 0x0000–0xFFFF (0x0000 = any product, AIOC 0x7388).",
+					context?.MemberName == null ? null : new[] { context.MemberName });
+
+		// Set while a picked device writes its ids, so the id handlers don't re-select (and briefly clear) the picker.
+		private bool _applyingCm108Device;
 		[ObservableProperty] private string _radioCarrierDetect = "None";
 		[ObservableProperty] private bool _radioCarrierDetectInverted;
 		[ObservableProperty] private bool _radioCourtesyTone = true;
@@ -272,7 +319,18 @@ namespace Resgrid.Audio.Relay.ViewModels
 		/// <summary>True when the saved settings name a cellular PTT profile (drives the key-up lead hint).</summary>
 		public bool IsPocProfile => RadioProfiles.Find(RadioProfileKey).IsPushToTalkOverCellular;
 
-		public string Cm108Summary => $"VID 0x{RadioCm108VendorId:X4}, PID {(RadioCm108ProductId == 0 ? "any C-Media" : "0x" + RadioCm108ProductId.ToString("X4"))}";
+		/// <summary>The CM108 ids in effect and the interface family they name, e.g. "VID 0x1209, PID 0x7388 (AIOC)".</summary>
+		public string Cm108Summary
+		{
+			get
+			{
+				var ids = Cm108Compatibility.FormatIds(RadioCm108VendorId, RadioCm108ProductId);
+				var family = RadioCm108ProductId == 0
+					? Cm108Compatibility.KnownInterfaces.FirstOrDefault(i => i.VendorId == RadioCm108VendorId)
+					: Cm108Compatibility.FindInterface(RadioCm108VendorId, RadioCm108ProductId);
+				return family != null ? $"{ids} ({family.Name})" : $"{ids} (not a known CM108-compatible interface)";
+			}
+		}
 
 		protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
 		{
@@ -280,9 +338,18 @@ namespace Resgrid.Audio.Relay.ViewModels
 			if (_loading || e.PropertyName == null)
 				return;
 
+			// Only edits of a setting dirty the form: status, progress and derived/read-only properties (a Save or Reload
+			// re-announces LoadError and friends right after clearing IsDirty) must not bring the banner back.
 			switch (e.PropertyName)
 			{
 				case nameof(IsDirty):
+				case nameof(LoadError):
+				case nameof(HasLoadError):
+				case nameof(HasEnvOverrides):
+				case nameof(UserConfigPathDisplay):
+				case nameof(RadioProfileNotes):
+				case nameof(IsPocProfile):
+				case nameof(Cm108Summary):
 				case nameof(StatusMessage):
 				case nameof(ConnectionTestStatus):
 				case nameof(IsTestingConnection):
@@ -307,16 +374,55 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 		partial void OnRadioProfileKeyChanged(string value) => OnPropertyChanged(nameof(IsPocProfile));
 
-		partial void OnRadioCm108VendorIdChanged(int value) => OnPropertyChanged(nameof(Cm108Summary));
+		partial void OnRadioCm108VendorIdChanged(int value) => OnCm108IdsChanged();
 
-		partial void OnRadioCm108ProductIdChanged(int value) => OnPropertyChanged(nameof(Cm108Summary));
+		partial void OnRadioCm108ProductIdChanged(int value) => OnCm108IdsChanged();
+
+		partial void OnRadioCm108VendorIdTextChanged(string value)
+		{
+			if (Cm108Compatibility.TryParseUsbId(value, out var id) && id != 0)
+				RadioCm108VendorId = id;
+		}
+
+		partial void OnRadioCm108ProductIdTextChanged(string value)
+		{
+			if (Cm108Compatibility.TryParseUsbId(value, out var id))
+				RadioCm108ProductId = id;
+		}
+
+		/// <summary>Keeps the typed ids, the summary and the device picker in step with the ids in effect.</summary>
+		private void OnCm108IdsChanged()
+		{
+			OnPropertyChanged(nameof(Cm108Summary));
+
+			// Rewrite a field only when it doesn't already say this id, so typing "1209" isn't reformatted under the caret.
+			if (!Cm108Compatibility.TryParseUsbId(RadioCm108VendorIdText, out var vendorId) || vendorId != RadioCm108VendorId)
+				RadioCm108VendorIdText = Cm108Compatibility.FormatUsbId(RadioCm108VendorId);
+			if (!Cm108Compatibility.TryParseUsbId(RadioCm108ProductIdText, out var productId) || productId != RadioCm108ProductId)
+				RadioCm108ProductIdText = Cm108Compatibility.FormatUsbId(RadioCm108ProductId);
+
+			if (!_applyingCm108Device)
+				SelectedCm108Device = FindCm108Device();
+		}
+
+		/// <summary>The listed device with exactly the ids in effect (none for product id 0: no device reports it).</summary>
+		private HidDeviceInfo FindCm108Device() =>
+			Cm108Devices.FirstOrDefault(d => d.VendorId == RadioCm108VendorId && d.ProductId == RadioCm108ProductId);
 
 		partial void OnSelectedCm108DeviceChanged(HidDeviceInfo value)
 		{
 			if (value == null || _loading)
 				return;
-			RadioCm108VendorId = value.VendorId;
-			RadioCm108ProductId = value.ProductId;
+			_applyingCm108Device = true;
+			try
+			{
+				RadioCm108VendorId = value.VendorId;
+				RadioCm108ProductId = value.ProductId;
+			}
+			finally
+			{
+				_applyingCm108Device = false;
+			}
 		}
 
 		// ─────────── Load / Save ───────────
@@ -374,8 +480,11 @@ namespace Resgrid.Audio.Relay.ViewModels
 				RadioSerialPort = radio.SerialPort ?? "";
 				RadioCm108VendorId = radio.Cm108VendorId;
 				RadioCm108ProductId = radio.Cm108ProductId;
+				// Set the fields too: an unchanged id raises no change, and a field may hold an invalid edit being reloaded over.
+				RadioCm108VendorIdText = Cm108Compatibility.FormatUsbId(radio.Cm108VendorId);
+				RadioCm108ProductIdText = Cm108Compatibility.FormatUsbId(radio.Cm108ProductId);
 				RadioCm108GpioPin = radio.Cm108GpioPin;
-				SelectedCm108Device = Cm108Devices.FirstOrDefault(d => d.VendorId == radio.Cm108VendorId && d.ProductId == radio.Cm108ProductId);
+				SelectedCm108Device = FindCm108Device();
 				RadioCarrierDetect = string.IsNullOrWhiteSpace(radio.CarrierDetect) ? "None" : radio.CarrierDetect;
 				RadioCarrierDetectInverted = radio.CarrierDetectInverted;
 				RadioCourtesyTone = radio.CourtesyTone;
@@ -569,10 +678,36 @@ namespace Resgrid.Audio.Relay.ViewModels
 			o.Telemetry.Countly.AppKey = MergeSecret(CountlyAppKey, o.Telemetry.Countly.AppKey);
 		}
 
+		/// <summary>
+		/// The on-disk layers (appsettings.json + relay.user.json, no environment), or defaults when they can't be read — with
+		/// the reason kept in <see cref="_diskLoadError"/> (shown in the banner, and Save refuses to write over the file).
+		/// </summary>
+		private RelayHostOptions LoadDiskModel()
+		{
+			try
+			{
+				var options = RelayConfiguration.LoadFromDisk();
+				_diskLoadError = null;
+				return options;
+			}
+			catch (RelayConfigurationException ex)
+			{
+				_diskLoadError = ex.Message;
+				return new RelayHostOptions();
+			}
+		}
+
+		private void NotifyLoadState()
+		{
+			OnPropertyChanged(nameof(HasEnvOverrides));
+			OnPropertyChanged(nameof(LoadError));
+			OnPropertyChanged(nameof(HasLoadError));
+		}
+
 		/// <summary>The edited form overlaid on the on-disk settings, without saving; for tests that must use unsaved edits.</summary>
 		private RelayHostOptions BuildWorkingOptions()
 		{
-			var disk = _configuration.LoadFromDisk();
+			var disk = LoadDiskModel();
 			ApplyToOptions(disk);
 
 			// What will actually run: the edited form plus the environment layer (which wins at run time).
@@ -597,7 +732,15 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 			// Start from a disk-only snapshot (no RESGRID__RELAY__ env overrides) so unedited/unknown fields survive without
 			// baking environment values into the user config file.
-			var options = _configuration.LoadFromDisk();
+			var options = LoadDiskModel();
+			if (_diskLoadError != null)
+			{
+				// The form holds defaults, not the file: saving would replace every setting the file has with them.
+				NotifyLoadState();
+				StatusMessage = $"Cannot save — the settings files could not be read ({_diskLoadError}). Fix {UserConfigPathDisplay} " +
+					"(Open settings folder), or delete it to start over, then Reload.";
+				return;
+			}
 			ApplyToOptions(options);
 
 			// Pin the token cache the desktop app uses, so a console host on the same account (which reads this file too) shares
@@ -626,24 +769,23 @@ namespace Resgrid.Audio.Relay.ViewModels
 				return;
 			}
 
+			var signInNote = CarryForwardTestedSignIn();
+
 			// Re-load so masked secrets reflect the now-stored values.
-			LoadFromOptions(_configuration.LoadFromDisk());
-			OnPropertyChanged(nameof(LoadError));
-			OnPropertyChanged(nameof(HasLoadError));
+			LoadFromOptions(LoadDiskModel());
+			NotifyLoadState();
 			var running = RelayModeLauncher.AllModes.Where(_launcher.IsActive).Select(RelayModeLauncher.FriendlyName).ToList();
-			StatusMessage = running.Count == 0
+			StatusMessage = (running.Count == 0
 				? $"Saved to {_configuration.UserConfigPath}"
-				: $"Saved. Restart {string.Join(", ", running)} (Operations) to apply the changes.";
+				: $"Saved. Restart {string.Join(", ", running)} (Operations) to apply the changes.") + signInNote;
 		}
 
 		[RelayCommand]
 		private void Reload()
 		{
 			_configuration.Reload();
-			LoadFromOptions(_configuration.LoadFromDisk());
-			OnPropertyChanged(nameof(HasEnvOverrides));
-			OnPropertyChanged(nameof(LoadError));
-			OnPropertyChanged(nameof(HasLoadError));
+			LoadFromOptions(LoadDiskModel());
+			NotifyLoadState();
 			StatusMessage = "Reloaded from disk.";
 		}
 
@@ -672,18 +814,21 @@ namespace Resgrid.Audio.Relay.ViewModels
 				SquelchHangMs = radio.Squelch.HangMs;
 				EmergencyDetectMdc1200 = radio.Emergency.DetectMdc1200;
 				EmergencyDetectTones = radio.Emergency.DetectTones;
-				if (profile.IsPushToTalkOverCellular && string.Equals(RadioPttMethod, "Vox", StringComparison.OrdinalIgnoreCase))
-					RadioPttMethod = "Cm108";
 			}
 
-			StatusMessage = profile.AppliesSettings
-				? $"Applied the {profile.DisplayName} profile. Review the radio settings, then Save."
-				: "Custom profile: settings left as entered.";
+			// PTT keying is wiring, not a radio setting: it is never changed here (switching Vox to Cm108 silently broke a radio
+			// keyed by a serial line). A cellular radio still needs a hard line, so say so; the Radio Bridge start refuses Vox.
+			if (!profile.AppliesSettings)
+				StatusMessage = "Custom profile: settings left as entered.";
+			else if (profile.IsPushToTalkOverCellular && string.Equals(RadioPttMethod, "Vox", StringComparison.OrdinalIgnoreCase))
+				StatusMessage = $"Applied the {profile.DisplayName} profile. It needs a hard PTT line: set PTT keying to the interface " +
+					"the radio is wired to (Cm108, SerialRts or SerialDtr), review the radio settings, then Save.";
+			else
+				StatusMessage = $"Applied the {profile.DisplayName} profile. Review the radio settings, then Save.";
 		}
 
-		private void ApplyToOptionsRadioOnly(RadioModeOptions radio)
+		private static void ApplyToOptionsRadioOnly(RadioModeOptions radio)
 		{
-			radio.PttMethod = RadioPttMethod;
 			radio.Squelch = new SquelchSettings();
 			radio.Emergency = new EmergencyOptions();
 		}
@@ -724,7 +869,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 				RadioOutputDevice = -2;
 				RadioOutputDevice = output;
 				RadioSerialPort = serial;
-				SelectedCm108Device = Cm108Devices.FirstOrDefault(d => d.VendorId == RadioCm108VendorId && d.ProductId == RadioCm108ProductId);
+				SelectedCm108Device = FindCm108Device();
 			}
 			finally
 			{
@@ -746,6 +891,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 			{
 				var api = BuildWorkingOptions().Resgrid;
 				api.Validate();
+				var usesPendingCache = UseTestTokenCache(api);
 
 				var healthy = await Task.Run(async () =>
 				{
@@ -755,7 +901,9 @@ namespace Resgrid.Audio.Relay.ViewModels
 				}).ConfigureAwait(true);
 
 				ConnectionTestStatus = healthy
-					? $"Connected: signed in to {api.BaseUrl} with the {api.GrantType} grant."
+					? $"Connected: signed in to {api.BaseUrl} with the {api.GrantType} grant." + (usesPendingCache
+						? " Resgrid has rotated this refresh token: Save before leaving this page so the relay gets the new one."
+						: "")
 					: "Signed in, but the Resgrid API health check did not succeed.";
 			}
 			catch (OperationCanceledException)
@@ -769,7 +917,95 @@ namespace Resgrid.Audio.Relay.ViewModels
 			finally
 			{
 				IsTestingConnection = false;
+				if (_disposed)
+					DiscardPendingSignIn(); // the page closed mid-test; nobody can save this sign-in now
 			}
+		}
+
+		// The sign-in identity whose rotated refresh token the connection test keeps in _pendingTokenCachePath (an edited
+		// credential set the relay does not run with yet), or null.
+		private string _pendingTokenIdentity;
+		private string _pendingTokenCachePath;
+
+		/// <summary>
+		/// Points the connection test's token cache at the right place. The relay's cache holds no record of whose token it
+		/// is, so borrowing it for other credentials either passed on the relay's live user token (a wrong client secret
+		/// "connected") or wrote the test's tokens over the relay's rotated refresh token.
+		/// <list type="bullet">
+		/// <item>ClientCredentials / SystemApiKey: no cache — the edited id and secret are exchanged for real, and nothing is written.</item>
+		/// <item>RefreshToken with the relay's own identity (base URL, client id, refresh token): the relay's cache, which holds
+		/// the live rotated token.</item>
+		/// <item>RefreshToken with an edited identity: a separate pending cache, carried into the relay's cache when that identity
+		/// is saved (<see cref="CarryForwardTestedSignIn"/>). Returns true.</item>
+		/// </list>
+		/// </summary>
+		private bool UseTestTokenCache(ResgridApiClientOptions api)
+		{
+			if (api.GrantType != ResgridAuthGrantType.RefreshToken)
+			{
+				api.TokenCachePath = null;
+				return false;
+			}
+
+			var relay = _configuration.Current?.Resgrid;
+			if (relay != null && relay.GrantType == ResgridAuthGrantType.RefreshToken && SignInIdentity(api) == SignInIdentity(relay))
+			{
+				api.TokenCachePath = relay.TokenCachePath;
+				return false;
+			}
+
+			var relayCache = string.IsNullOrWhiteSpace(relay?.TokenCachePath) ? RelayConfiguration.DefaultTokenCachePath() : relay.TokenCachePath;
+			_pendingTokenCachePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(relayCache)) ?? ".", "resgrid-token.pending.json");
+			_pendingTokenIdentity = SignInIdentity(api);
+			api.TokenCachePath = _pendingTokenCachePath;
+			return true;
+		}
+
+		/// <summary>The refresh-token chain a sign-in uses: base URL, client id and the configured refresh token.</summary>
+		private static string SignInIdentity(ResgridApiClientOptions api) =>
+			string.Join("|",
+				(api.BaseUrl ?? "").Trim().TrimEnd('/').ToLowerInvariant(),
+				(api.ClientId ?? "").Trim(),
+				(api.RefreshToken ?? "").Trim());
+
+		/// <summary>
+		/// After a Save: when the saved settings now run with the identity the connection test signed in with, moves the
+		/// test's rotated refresh token into the relay's token cache (Resgrid has already spent the one that was typed in).
+		/// Returns a note for the status line, or "".
+		/// </summary>
+		private string CarryForwardTestedSignIn()
+		{
+			if (_pendingTokenIdentity == null || string.IsNullOrWhiteSpace(_pendingTokenCachePath) || !File.Exists(_pendingTokenCachePath))
+				return "";
+
+			var saved = _configuration.Current?.Resgrid;
+			if (saved == null || saved.GrantType != ResgridAuthGrantType.RefreshToken || string.IsNullOrWhiteSpace(saved.TokenCachePath)
+				|| SignInIdentity(saved) != _pendingTokenIdentity)
+				return "";
+
+			try
+			{
+				var target = Path.GetFullPath(saved.TokenCachePath);
+				var directory = Path.GetDirectoryName(target);
+				if (!string.IsNullOrWhiteSpace(directory))
+					Directory.CreateDirectory(directory);
+				File.Move(_pendingTokenCachePath, target, overwrite: true);
+				_pendingTokenIdentity = null;
+				return "";
+			}
+			catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+			{
+				return $" The tested sign-in could not be moved into the relay's token cache ({ex.Message}); paste a fresh refresh token if the relay cannot sign in.";
+			}
+		}
+
+		private void DiscardPendingSignIn()
+		{
+			_pendingTokenIdentity = null;
+			if (string.IsNullOrWhiteSpace(_pendingTokenCachePath))
+				return;
+			try { File.Delete(_pendingTokenCachePath); }
+			catch { /* best effort: it only holds a token nobody saved */ }
 		}
 
 		// ─────────── Audio watcher file ───────────
@@ -836,13 +1072,27 @@ namespace Resgrid.Audio.Relay.ViewModels
 			if (IsTuning)
 				StopTune();
 
-			if (_launcher.IsActive("radio"))
+			RelayHostOptions options;
+			try
 			{
-				TransmitTestStatus = "Stop the Radio Bridge first — it already owns the radio's audio and PTT.";
+				options = BuildWorkingOptions();
+			}
+			catch (Exception ex)
+			{
+				// An unreadable setting (e.g. a bad RESGRID__RELAY__ value) is this test's failure to report, not an unhandled one.
+				TransmitTestStatus = $"Transmit test failed: {ex.Message}";
 				return;
 			}
 
-			var options = BuildWorkingOptions();
+			// Claim the radio for the whole test, cleanup included: the Radio Bridge cannot start until the claim is released
+			// (after PTT is released and the devices are closed), and the test cannot start while the bridge runs or starts.
+			var claim = _launcher.TryClaimRadio(out var busy);
+			if (claim == null)
+			{
+				TransmitTestStatus = busy;
+				return;
+			}
+
 			_transmitCts?.Dispose();
 			_transmitCts = new CancellationTokenSource();
 			IsTestingTransmit = true;
@@ -851,11 +1101,19 @@ namespace Resgrid.Audio.Relay.ViewModels
 			try
 			{
 				var token = _transmitCts.Token;
-				await Task.Run(() => RadioMode.RunTransmitTestAsync(options, Log.Logger, token)).ConfigureAwait(true);
+				// The token also goes to Task.Run, so a cancel while the work is still queued never reaches the hardware (the
+				// engine checks it again right before keying).
+				await Task.Run(() => RadioMode.RunTransmitTestAsync(options, Log.Logger, token), token).ConfigureAwait(true);
 				TransmitTestStatus = "Done. A listener on the far side should have heard the whole 2-second tone; if the start was cut off, raise the key-up lead.";
+			}
+			catch (PttReleaseException ex)
+			{
+				// Whether the test finished, failed or was cancelled, the radio may still be on the air.
+				TransmitTestStatus = $"Transmit test failed: {ex.Message}";
 			}
 			catch (OperationCanceledException)
 			{
+				// Only thrown once PTT is confirmed released, or before it was ever keyed.
 				TransmitTestStatus = "Transmit test cancelled; PTT released.";
 			}
 			catch (Exception ex)
@@ -864,6 +1122,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 			}
 			finally
 			{
+				claim.Dispose();
 				IsTestingTransmit = false;
 				_transmitCts?.Dispose();
 				_transmitCts = null;
@@ -907,7 +1166,16 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 			// Tune against an isolated snapshot with the edited form values overlaid, so uncommitted
 			// form changes never mutate the shared Current that active services read.
-			var options = BuildWorkingOptions();
+			RelayHostOptions options;
+			try
+			{
+				options = BuildWorkingOptions();
+			}
+			catch (Exception ex)
+			{
+				TuneStatus = $"Tune failed: {ex.Message}";
+				return;
+			}
 
 			_tuneCts?.Dispose();
 			_tuneCts = new CancellationTokenSource();
@@ -989,9 +1257,12 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 			StopTune();
 #if NET10_0_WINDOWS
+			// The running transmit test unwinds on its own (PTT released, devices closed) and only then gives the radio back to
+			// the launcher, so the Radio Bridge can't start on top of its cleanup.
 			try { _transmitCts?.Cancel(); } catch { /* disposed */ }
 			_tuneCts?.Dispose();
 #endif
+			DiscardPendingSignIn();
 		}
 	}
 }

@@ -53,8 +53,16 @@ namespace Resgrid.Audio.Voice.ToneOut
 			"AB", "BC", "MB", "NB", "NL", "NS", "ON", "PE", "QC", "SK", "NT", "NU", "YT"
 		};
 
+		// The patterns are linear (anchored, no nested quantifiers) and run on short call text; the timeout is only a backstop.
+		private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
+
 		private static readonly Regex PostalCodeRegex =
-			new Regex(@"^(\d{5}(-\d{4})?|[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+			new Regex(@"^(\d{5}(-\d{4})?|[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d)$", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
+
+		private static readonly Regex WhitespaceRegex = new Regex(@"\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
+
+		private static readonly Regex SentenceBreakRegex =
+			new Regex(@"(?<=[\.\!\?])\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
 
 		/// <summary>The default names Resgrid speaks for priorities 0-3 when a department has no custom priorities.</summary>
 		public static string DefaultPriorityText(int priority)
@@ -127,6 +135,9 @@ namespace Resgrid.Audio.Voice.ToneOut
 			if (CountryNames.Contains(segment) || PostalCodeRegex.IsMatch(segment))
 				return true;
 
+			// Mirrors Core's DispatchVoicePromptBuilder.IsDroppableTrailingSegment exactly, so the prompt matches the TTS audio
+			// Core already generated (a cache hit). Known gap shared with Core: a spaced Canadian code after a province
+			// ("BC V6B 1A1") is not recognised and stays in the prompt; fix it in Core and here together.
 			var lastSpaceIndex = segment.LastIndexOf(' ');
 			var head = lastSpaceIndex > 0 ? segment.Substring(0, lastSpaceIndex).Trim() : segment;
 			var tail = lastSpaceIndex > 0 ? segment.Substring(lastSpaceIndex + 1) : null;
@@ -174,14 +185,14 @@ namespace Resgrid.Audio.Voice.ToneOut
 			if (String.IsNullOrWhiteSpace(text))
 				yield break;
 
-			var normalized = Regex.Replace(text, @"\s+", " ").Trim();
+			var normalized = WhitespaceRegex.Replace(text, " ").Trim();
 			if (normalized.Length <= maxLength)
 			{
 				yield return normalized;
 				yield break;
 			}
 
-			var sentences = Regex.Split(normalized, @"(?<=[\.\!\?])\s+").Where(sentence => !String.IsNullOrWhiteSpace(sentence));
+			var sentences = SentenceBreakRegex.Split(normalized).Where(sentence => !String.IsNullOrWhiteSpace(sentence));
 			var builder = new StringBuilder();
 
 			foreach (var sentence in sentences)

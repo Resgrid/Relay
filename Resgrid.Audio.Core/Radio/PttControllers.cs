@@ -119,8 +119,9 @@ namespace Resgrid.Audio.Core.Radio
 
 	/// <summary>
 	/// Keys PTT via a CM108/CM119 USB sound-fob GPIO line (DMK URI, RA-40/RIM-Lite,
-	/// RB-USB). Writes the HID output report that drives the GPIO pin. The exact pin
-	/// varies by interface, so it is configurable (URI/RIM commonly use GPIO3).
+	/// RB-USB) or a CM108-compatible interface such as the AIOC. Writes the HID output report that drives the GPIO pin. The
+	/// exact pin varies by interface, so it is configurable (URI/RIM and the AIOC commonly use GPIO3). Which device the
+	/// vendor/product ids select follows <see cref="Cm108Compatibility.IsSelectedBy"/>, the rule the device pickers use.
 	/// </summary>
 	public sealed class Cm108PttController : IPttController
 	{
@@ -135,10 +136,10 @@ namespace Resgrid.Audio.Core.Radio
 			_logger = logger;
 			_gpioBit = 1 << (Math.Max(1, gpioPin) - 1);
 
-			var devices = DeviceList.Local.GetHidDevices(vendorId, productId == 0 ? (int?)null : productId).ToList();
-			_device = devices.FirstOrDefault()
-				?? throw new InvalidOperationException(
-					$"No CM108-class HID device found (VID=0x{vendorId:X4}, PID=0x{productId:X4}). Check the radio interface is connected.");
+			var devices = DeviceList.Local.GetHidDevices().ToList();
+			_device = devices.FirstOrDefault(d => Cm108Compatibility.IsSelectedBy(vendorId, productId, d.VendorID, d.ProductID))
+				?? throw new InvalidOperationException(Cm108Compatibility.NoDeviceFoundMessage(vendorId, productId,
+					devices.Select(d => new UsbHidDevice { VendorId = d.VendorID, ProductId = d.ProductID, Name = Cm108Compatibility.SafeName(d) })));
 
 			if (!_device.TryOpen(out _stream))
 				throw new InvalidOperationException("Failed to open the CM108 HID device for PTT control.");

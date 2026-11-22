@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using FluentAssertions;
 using NUnit.Framework;
 using Resgrid.Audio.Voice.Abstractions;
@@ -43,6 +45,29 @@ namespace Resgrid.Audio.Voice.Tests
 			// Well past the hang.
 			Feed(withHang, NoPl, 45).Should().BeFalse();
 		}
+
+		[Test]
+		public void Hang_IsTimedFromTheLastWindowWithTheTone_HoweverTheAudioIsBuffered()
+		{
+			// The same audio, 1.2 s with the tone then 500 ms without, fed as 20 ms frames and with its tail in one 700 ms buffer.
+			// The tone was last seen at most ~500 ms back, inside the 600 ms hang, so both must be open; the large buffer used to
+			// close because all of it was counted against the hang.
+			var frames = new CtcssDetector(100, 0.30, AudioFormat.SampleRate, hangMs: 600);
+			var buffered = new CtcssDetector(100, 0.30, AudioFormat.SampleRate, hangMs: 600);
+			Feed(frames, Pl, 50).Should().BeTrue();
+			Feed(buffered, Pl, 50).Should().BeTrue();
+
+			Feed(frames, Pl, 10);
+			Feed(frames, NoPl, 25).Should().BeTrue();
+			buffered.Process(Repeat(Pl, 10).Concat(Repeat(NoPl, 25)).ToArray()).Should().BeTrue("the tone ended under 600 ms ago, however the audio was buffered");
+			buffered.IsPresent.Should().BeFalse();
+
+			// 300 ms more puts both past the hang.
+			Feed(frames, NoPl, 15).Should().BeFalse();
+			buffered.Process(Repeat(NoPl, 15).ToArray()).Should().BeFalse();
+		}
+
+		private static IEnumerable<short> Repeat(short[] frame, int count) => Enumerable.Repeat(frame, count).SelectMany(samples => samples);
 
 		[Test]
 		public void Reset_ClosesImmediately()

@@ -31,7 +31,7 @@ namespace Resgrid.Audio.Tests
 			{
 				var telemetry = new FakeSmtpTelemetry();
 				var callsClient = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: callsClient);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: callsClient);
 
 				var response = await store.SaveAsync(
 					new FakeSessionContext(),
@@ -66,7 +66,7 @@ namespace Resgrid.Audio.Tests
 				{
 					SaveCallException = new InvalidOperationException("Resgrid is unavailable")
 				};
-				var failingStore = new RelayMessageStore(CreateOptions(dataDirectory), failingTelemetry, callsClient: failingClient);
+				await using var failingStore = new RelayMessageStore(CreateOptions(dataDirectory), failingTelemetry, callsClient: failingClient);
 
 				// Answered with 451, not thrown: SmtpServer turns an exception into a permanent 554 and the sender would never retry.
 				var failed = await failingStore.SaveAsync(new FakeSessionContext(), null, buffer, CancellationToken.None);
@@ -81,7 +81,7 @@ namespace Resgrid.Audio.Tests
 				{
 					NextCallId = "call-42"
 				};
-				var successStore = new RelayMessageStore(CreateOptions(dataDirectory), successTelemetry, callsClient: successClient);
+				await using var successStore = new RelayMessageStore(CreateOptions(dataDirectory), successTelemetry, callsClient: successClient);
 
 				var response = await successStore.SaveAsync(new FakeSessionContext(), null, buffer, CancellationToken.None);
 
@@ -109,7 +109,7 @@ namespace Resgrid.Audio.Tests
 				{
 					NextCallId = "call-7"
 				};
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client);
 				await store.SaveAsync(new FakeSessionContext(), null, buffer, CancellationToken.None);
 
 				client.SaveCallKeys.Should().Equal("msg-keyed@cad.example");
@@ -119,7 +119,7 @@ namespace Resgrid.Audio.Tests
 				try
 				{
 					var failing = new FakeResgridCallsClient { NextCallId = "call-7" };
-					var failingStore = new RelayMessageStore(CreateOptions(retryDirectory), new FakeSmtpTelemetry(), callsClient: failing);
+					await using var failingStore = new RelayMessageStore(CreateOptions(retryDirectory), new FakeSmtpTelemetry(), callsClient: failing);
 
 					// The first upload fails after the call was saved; the sender delivers the message again, and the retry
 					// sends the same call key (Resgrid returns the existing call) and the same attachment keys.
@@ -196,7 +196,7 @@ namespace Resgrid.Audio.Tests
 				{
 					NextSaveCallFileException = new HttpRequestException("rejected", null, HttpStatusCode.BadRequest)
 				};
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client);
 				var buffer = CreateMessageBuffer("msg-files@cad.example", "sender@example.com", new[] { "abc123@dispatch.resgrid.com" }, "Structure Fire", "First line",
 					("map.pdf", new byte[] { 1, 2, 3 }), ("audio.mp3", new byte[] { 4, 5, 6 }));
 
@@ -222,7 +222,7 @@ namespace Resgrid.Audio.Tests
 				{
 					NextSaveCallFileException = new HttpRequestException("unavailable", null, HttpStatusCode.ServiceUnavailable)
 				};
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client);
 				var buffer = CreateMessageBuffer("msg-files-2@cad.example", "sender@example.com", new[] { "abc123@dispatch.resgrid.com" }, "Structure Fire", "First line",
 					("map.pdf", new byte[] { 1, 2, 3 }));
 
@@ -245,7 +245,7 @@ namespace Resgrid.Audio.Tests
 			{
 				var client = new FakeResgridCallsClient();
 				var telemetry = new FakeSmtpTelemetry();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client);
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), null, new ReadOnlySequence<byte>(Array.Empty<byte>()), CancellationToken.None);
 
@@ -272,7 +272,7 @@ namespace Resgrid.Audio.Tests
 			try
 			{
 				var telemetry = new FakeSmtpTelemetry();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: new FakeResgridCallsClient { SaveCallException = exception });
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: new FakeResgridCallsClient { SaveCallException = exception });
 				var reply = await store.SaveAsync(new FakeSessionContext(), null,
 					CreateMessageBuffer($"msg-{Guid.NewGuid():N}@cad.example", "sender@example.com", new[] { "abc123@dispatch.resgrid.com" }, "Structure Fire", "First line"),
 					CancellationToken.None);
@@ -307,7 +307,7 @@ namespace Resgrid.Audio.Tests
 				// A CAD system Bccs the dispatch address, or a rule forwards the message: the headers name someone else entirely.
 				var client = new FakeResgridCallsClient();
 				var telemetry = new FakeSmtpTelemetry();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), telemetry, callsClient: client);
 				var transaction = new FakeMessageTransaction("abc123@dispatch.resgrid.com");
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), transaction,
@@ -342,7 +342,7 @@ namespace Resgrid.Audio.Tests
 				message.WriteTo(stream);
 
 				var client = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client);
+				await using var store = new RelayMessageStore(CreateOptions(dataDirectory), new FakeSmtpTelemetry(), callsClient: client);
 				await store.SaveAsync(new FakeSessionContext(), null, new ReadOnlySequence<byte>(stream.ToArray()), CancellationToken.None);
 
 				var call = client.SaveCallInputs.Should().ContainSingle().Subject;
@@ -364,7 +364,7 @@ namespace Resgrid.Audio.Tests
 				var options = CreateOptions(dataDirectory);
 				options.SaveRawMessages = true;
 				var client = new FakeResgridCallsClient();
-				var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client);
+				await using var store = new RelayMessageStore(options, new FakeSmtpTelemetry(), callsClient: client);
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), null,
 					CreateMessageBuffer(new string('x', 400) + "@cad.example", "cad@county.example", new[] { "abc123@dispatch.resgrid.com" }, "Dispatch", "Body"),
@@ -501,7 +501,7 @@ namespace Resgrid.Audio.Tests
 				var client = new FakeResgridCallsClient();
 				var messages = new FakeMessagesClient();
 				var telemetry = new FakeSmtpTelemetry();
-				var store = new RelayMessageStore(options, telemetry, callsClient: client, lookupsApi: lookups, messagesClient: messages, usesSystemApiKey: usesSystemApiKey);
+				await using var store = new RelayMessageStore(options, telemetry, callsClient: client, lookupsApi: lookups, messagesClient: messages, usesSystemApiKey: usesSystemApiKey);
 
 				var reply = await store.SaveAsync(new FakeSessionContext(), new FakeMessageTransaction(recipient),
 					CreateMessageBuffer($"msg-{Guid.NewGuid():N}@cad.example", "cad@county.example", new[] { recipient }, "Dispatch", "Structure fire"),
@@ -833,8 +833,14 @@ namespace Resgrid.Audio.Tests
 		{
 			public List<NewMessageInput> Sent { get; } = new List<NewMessageInput>();
 
+			/// <summary>Thrown by every send when set.</summary>
+			public Exception SendException { get; set; }
+
 			public Task<string> SendMessageAsync(NewMessageInput message, CancellationToken cancellationToken)
 			{
+				if (SendException != null)
+					throw SendException;
+
 				Sent.Add(message);
 				return Task.FromResult($"message-{Sent.Count}");
 			}

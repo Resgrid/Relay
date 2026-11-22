@@ -128,14 +128,15 @@ namespace Resgrid.Audio.Relay
 			// Engine (per-mode service factory delegate).
 			services.AddRelayEngine();
 
-			// UI log bus + a Serilog logger fanned out to it and to a rolling file (kept 14 days) for after-the-fact
-			// troubleshooting of an unattended relay.
+			// UI log bus + a Serilog logger fanned out to it and to a rolling file (a new file each day or at 50 MB, the
+			// newest 14 files kept) for after-the-fact troubleshooting of an unattended relay.
 			var logBus = new UiLogBus();
 			services.AddSingleton(logBus);
 
 			var loggerConfiguration = new LoggerConfiguration()
 				.MinimumLevel.Information()
 				.WriteTo.UiBus(logBus);
+			Exception fileLogError = null;
 			try
 			{
 				Directory.CreateDirectory(LogDirectory);
@@ -148,14 +149,17 @@ namespace Resgrid.Audio.Relay
 					shared: true,
 					outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}");
 			}
-			catch
+			catch (Exception ex)
 			{
-				// No writable log folder — the Logs screen still works.
+				// No writable log folder — the Logs screen still works; say so there once the logger exists.
+				fileLogError = ex;
 			}
 
 			ILogger logger = loggerConfiguration.CreateLogger();
 			services.AddSingleton(logger);
 			Log.Logger = logger;
+			if (fileLogError != null)
+				logger.Warning(fileLogError, "Log files are not being written: the log folder {LogDirectory} could not be created", DisplayPath(LogDirectory));
 
 			// App services.
 			services.AddSingleton<ConfigurationService>();
@@ -264,15 +268,39 @@ namespace Resgrid.Audio.Relay
 			Log.CloseAndFlush();
 		}
 
+		/// <summary>
+		/// How long a Windows sign-out / shutdown waits for the relay modes to stop. It must cover the recorder's teardown: a
+		/// transmission still uploading gets <c>TransmissionRecorder.ShutdownGrace</c> (10 s, the default record and radio
+		/// modes use) before the upload is abandoned and its audio written to the failed-uploads folder, and only then does
+		/// the mode close its metadata log, leave LiveKit and flush telemetry (a few seconds more). The modes stop in parallel,
+		/// so this is one recorder's teardown, not one per mode. A shorter wait let the app exit before that fallback write,
+		/// losing the audio of an S3-only recorder whose endpoint was down. Keep this above the recorder's grace if that changes.
+		/// </summary>
+		private static readonly TimeSpan SessionEndStopTimeout = TimeSpan.FromSeconds(20);
+
 		protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
 		{
 			// Windows sign-out / shutdown: stop the relay modes (closes LiveKit rooms, unkeys the radio, flushes recordings)
-			// within a bounded time. Run off the UI thread so the teardown can't wait on the dispatcher we are blocking.
+			// within a bounded time. Unless cancelled, WPF shuts the app down as soon as this handler returns, so the teardown
+			// has to finish here: this override is synchronous, hence the deliberate blocking wait. The stop runs on the thread
+			// pool (and never needs the dispatcher — its UI updates are posted, not invoked), so blocking the UI thread can't
+			// deadlock it.
 			try
 			{
 				var controller = _services?.GetService<RelayController>();
-				if (controller != null && controller.IsRunning)
-					Task.Run(() => controller.StopAllAsync()).Wait(TimeSpan.FromSeconds(8));
+				if (controller != null)
+				{
+					// No mode may start once the session is ending, and stops already in progress (a Stop clicked just before
+					// sign-out) are waited for too, not just the modes still running.
+					controller.BeginShutdown();
+					if (controller.IsRunning || controller.HasPendingStops)
+					{
+						Log.Information("Windows session ending ({Reason}): stopping relay modes", e.ReasonSessionEnding);
+						if (!Task.Run(() => controller.StopAllAsync()).Wait(SessionEndStopTimeout))
+							Log.Warning("Relay modes did not finish stopping within {Seconds:0} s of the Windows session ending; recordings still being saved may be lost",
+								SessionEndStopTimeout.TotalSeconds);
+					}
+				}
 			}
 			catch (Exception ex)
 			{
@@ -286,8 +314,8 @@ namespace Resgrid.Audio.Relay
 		{
 			try
 			{
-				// Relay modes are stopped in the explicit quit flow (ShellWindow) before Shutdown(); OnExit only disposes and
-				// flushes synchronously so it always runs to completion.
+				// Relay modes are stopped in the explicit quit flow (ShellWindow) before Shutdown(), or in OnSessionEnding when
+				// Windows ends the session; OnExit only disposes and flushes synchronously so it always runs to completion.
 				_services?.Dispose();
 			}
 			catch

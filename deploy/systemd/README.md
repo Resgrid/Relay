@@ -49,6 +49,18 @@ dotnet publish Resgrid.Audio.Relay.Console/Resgrid.Audio.Relay.Console.csproj \
 `net10.0` (not `net10.0-windows`) is the cross-platform target; it excludes the Windows
 audio stack (NAudio / DtmfDetection) and the WPF GUI.
 
+Then add the LiveKit native library (`liblivekit_ffi.so`) next to the published files —
+`dotnet publish` does not include it, and without it the `record` and `dispatch` modes cannot
+start. The helper script needs PowerShell 7 (`pwsh`) on the build machine; pick the RID of the
+host the relay will run on (`linux-x64` or `linux-arm64`), for either publish style:
+
+```bash
+pwsh -File build/fetch-livekit-ffi.ps1 -Rid linux-x64 -Destination ./publish   # or -Rid linux-arm64
+```
+
+The GitHub release archives already include the library, so skip this step if you install
+from one of those.
+
 ## 3. Install
 
 ```bash
@@ -87,8 +99,10 @@ journalctl -u resgrid-relay -f
   cancelling in-flight work so recordings flush and LiveKit disconnects cleanly;
   `TimeoutStopSec=30` bounds the drain before systemd escalates to `SIGKILL`.
 - **Configuration** — everything is `RESGRID__RELAY__*` environment variables. Run
-  `dotnet Resgrid.Audio.Relay.Console.dll help` for the common ones; the repository README's
-  Configuration section shows the full settings tree (`:` becomes `__`).
+  `/opt/resgrid-relay/Resgrid.Audio.Relay.Console help` (self-contained / release archive) or
+  `dotnet /opt/resgrid-relay/Resgrid.Audio.Relay.Console.dll help` (framework-dependent) for the
+  common ones; the repository README's Configuration section shows the full settings tree
+  (`:` becomes `__`).
 - **Writable state** — the unit grants `/var/lib/resgrid-relay` (via `StateDirectory`).
   Point `Recorder__LocalPath` and/or `Resgrid__TokenCachePath` there. The recorder's metadata
   log (`Recorder__LogPath`) defaults to a file inside `Recorder__LocalPath`, so it is writable

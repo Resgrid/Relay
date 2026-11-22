@@ -330,19 +330,23 @@ namespace Resgrid.Relay.Engine.Smtp
 					passRecipients = pass.OtherDepartmentRecipients;
 				}
 
-				// A pass is recorded as processed only when no later pass is to be retried: a recorded pass is skipped on the
-				// redelivery, and the later passes are only reached through it (it is the one that finds their recipients).
-				var laterPassRetries = false;
+				// A pass is recorded as processed only when every later pass was accepted too: a recorded pass is skipped on the
+				// redelivery (answered 250 as a duplicate), and the later passes are only reached through it (it is the one that
+				// finds their recipients). After a later pass that is to be retried, or that was rejected outright (a 5xx whose
+				// reply may never have reached the sender, who then sends the same envelope again), the earlier passes run again
+				// on the redelivery, which reaches the later one and gives the same answer; Resgrid's idempotency keys return
+				// the call and files those earlier passes already saved, and a group message already sent is not sent again.
+				var laterPassNotAccepted = false;
 				for (var index = passes.Count - 1; index >= 0; index--)
 				{
 					var pass = passes[index];
-					if (pass.Recordable && !laterPassRetries)
+					if (pass.Recordable && !laterPassNotAccepted)
 					{
 						pass.Recordable = false;
 						await CompleteAsync(context, pass.Summary, pass.ProcessingKey).ConfigureAwait(false);
 					}
 
-					laterPassRetries |= IsRetryReply(pass.Reply);
+					laterPassNotAccepted |= !IsAcceptedReply(pass.Reply);
 				}
 
 				return CombineReplies(passes.Select(x => x.Reply).ToList());
@@ -357,6 +361,12 @@ namespace Resgrid.Relay.Engine.Smtp
 		}
 
 		private static bool IsRetryReply(SmtpResponse reply) => (int)reply.ReplyCode >= 400 && (int)reply.ReplyCode < 500;
+
+		/// <summary>
+		/// A pass reply that leaves the message's combined reply a 250: success, or an address that names nothing (which only
+		/// bounces a message when nothing else in it was dispatched, see <see cref="CombineReplies"/>).
+		/// </summary>
+		private static bool IsAcceptedReply(SmtpResponse reply) => reply.ReplyCode == SmtpReplyCode.Ok || ReferenceEquals(reply, UnknownRecipients);
 
 		/// <summary>The outcome of dispatching the message for one department's recipients.</summary>
 		private sealed class DispatchPass
@@ -456,7 +466,9 @@ namespace Resgrid.Relay.Engine.Smtp
 				messageSummary.SetDispatchTargets(dispatchResult.DispatchCodes);
 				CollectOtherDepartmentRecipients(dispatchResult, envelope, otherDepartmentRecipients);
 
-				if (!dispatchResult.HasTargets)
+				// An envelope recipient of another department (a hosted-mode subdomain other than DefaultDepartmentId's) is not
+				// unroutable: it is bounced below as a recipient this relay does not dispatch for.
+				if (!dispatchResult.HasTargets && otherDepartmentRecipients.Count == 0)
 				{
 					_telemetry.UnroutableMessage(context, messageSummary);
 					return Result(SmtpResponse.Ok, handled: true);
@@ -601,9 +613,21 @@ namespace Resgrid.Relay.Engine.Smtp
 					}
 					catch (Exception ex) when (IsPermanent(ex, out _))
 					{
-						// The call went out; bouncing now would tell the sender the dispatch failed.
-						foreach (var code in dispatchResult.DispatchCodes.Where(x => x.Type == DispatchCodeType.GroupMessage))
+						var groupMessageCodes = dispatchResult.DispatchCodes.Where(x => x.Type == DispatchCodeType.GroupMessage).ToList();
+						foreach (var code in groupMessageCodes)
 							messageSummary.AddUnresolvedTarget(code, "message rejected by Resgrid");
+
+						// A group-message address this transaction accepted (on the envelope, not just in the headers, which only
+						// fold the call in) got nothing and no redelivery would give it anything: bounce, as for any other accepted
+						// recipient that is never served, so the sender hears of it. The call stays; it is not recorded, so a
+						// redelivery gets Resgrid's saved call back and the same bounce. A header-only address is reported only.
+						if (groupMessageCodes.Any(x => envelope.Contains(dispatchResult.AddressOf(x), StringComparer.OrdinalIgnoreCase)))
+						{
+							var reply = GroupMessageRejected(ex);
+							messageSummary.SetSmtpReply((int)reply.ReplyCode, reply.Message);
+							_telemetry.MessageFailed(context, messageSummary, ex, processingStopwatch.Elapsed);
+							return Result(reply, handled: false);
+						}
 					}
 				}
 
@@ -772,6 +796,13 @@ namespace Resgrid.Relay.Engine.Smtp
 		internal static readonly SmtpResponse NotServedRecipients =
 			new SmtpResponse(SmtpReplyCode.MailboxUnavailable, "5.1.1 A recipient belongs to a Resgrid department this relay does not dispatch for");
 
+		/// <summary>The bounce for an accepted group-message address whose message Resgrid rejected after the call was created.</summary>
+		private static SmtpResponse GroupMessageRejected(Exception exception)
+		{
+			var status = exception is HttpRequestException { StatusCode: HttpStatusCode code } ? (int)code : 0;
+			return new SmtpResponse(SmtpReplyCode.TransactionFailed, $"5.6.0 Resgrid rejected the group message (HTTP {status}); the call was created");
+		}
+
 		internal static SmtpResponse FailureReply(Exception exception)
 		{
 			return IsPermanent(exception, out var reason)
@@ -910,11 +941,12 @@ namespace Resgrid.Relay.Engine.Smtp
 		}
 
 		/// <summary>
-		/// Sends the group message once per message: Resgrid has no idempotency key for messages, and the same message now reaches
-		/// this method again whenever it arrives in another transaction (a sender that splits its recipients by domain sends the
-		/// dispatch address and the group-message address separately, and both carry the same To/Cc headers). The send is
-		/// recorded under the message id, department and groups only after it worked; while another delivery is sending it, this
-		/// one is asked to retry.
+		/// Sends the group message once per message and group: Resgrid has no idempotency key for messages, and the same message
+		/// reaches this method again whenever it arrives in another transaction (a sender that splits its recipients by domain
+		/// sends the dispatch address and the group-message address separately, and both carry the same To/Cc headers; one that
+		/// sends each Bcc recipient separately names a different set of groups each time). Each group's send is recorded under
+		/// the message id, department and group only after it worked, so a later transaction messages only the groups no earlier
+		/// one reached; while another delivery is sending to one of them, this one is asked to retry.
 		/// </summary>
 		private async Task SendGroupMessageOnceAsync(DispatchParseResult dispatchResult, InboundMessage inbound, SmtpMessageSummary summary, CancellationToken cancellationToken)
 		{
@@ -927,40 +959,50 @@ namespace Resgrid.Relay.Engine.Smtp
 				.Distinct(StringComparer.OrdinalIgnoreCase)
 				.ToList();
 
-			var sendKey = $"{inbound.StableMessageId}#group-message|{dispatchResult.DepartmentId?.Trim()}|" +
-				String.Join(",", groupIds.Select(x => x.Trim().ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
-
-			switch (await _processedMessageStore.TryBeginAsync(sendKey, cancellationToken).ConfigureAwait(false))
-			{
-				case ProcessingRegistration.Duplicate:
-					return;
-				case ProcessingRegistration.InProgress:
-					throw new DispatchInProgressException();
-			}
-
+			var started = new List<(string GroupId, string SendKey)>();
 			try
 			{
+				foreach (var groupId in groupIds)
+				{
+					var sendKey = $"{inbound.StableMessageId}#group-message|{dispatchResult.DepartmentId?.Trim()}|{groupId.Trim().ToLowerInvariant()}";
+					switch (await _processedMessageStore.TryBeginAsync(sendKey, cancellationToken).ConfigureAwait(false))
+					{
+						case ProcessingRegistration.Started:
+							started.Add((groupId, sendKey));
+							break;
+						case ProcessingRegistration.InProgress:
+							throw new DispatchInProgressException();
+					}
+				}
+
+				if (started.Count == 0)
+					return;
+
 				summary.GroupMessageId = await _messagesClient.SendMessageAsync(new NewMessageInput
 				{
 					Title = Trim(inbound.Subject, 200),
 					Body = Trim(inbound.Body, 4000),
 					Type = 0,
-					Recipients = groupIds.Select(id => new MessageRecipientInput { Id = $"G:{id}", Type = MessageRecipientTypes.Group }).ToList()
+					Recipients = started.Select(x => new MessageRecipientInput { Id = $"G:{x.GroupId}", Type = MessageRecipientTypes.Group }).ToList()
 				}, cancellationToken).ConfigureAwait(false);
 			}
 			catch
 			{
-				_processedMessageStore.Abandon(sendKey);
+				foreach (var (_, sendKey) in started)
+					_processedMessageStore.Abandon(sendKey);
 				throw;
 			}
 
-			try
+			foreach (var (_, sendKey) in started)
 			{
-				await _processedMessageStore.CompleteAsync(sendKey, CancellationToken.None).ConfigureAwait(false);
-			}
-			catch (Exception ex)
-			{
-				_telemetry.ProcessingWarning(null, summary, "the group message could not be recorded as sent; a redelivery would send it again", ex);
+				try
+				{
+					await _processedMessageStore.CompleteAsync(sendKey, CancellationToken.None).ConfigureAwait(false);
+				}
+				catch (Exception ex)
+				{
+					_telemetry.ProcessingWarning(null, summary, "the group message could not be recorded as sent; a redelivery would send it again", ex);
+				}
 			}
 		}
 
@@ -1089,13 +1131,27 @@ namespace Resgrid.Relay.Engine.Smtp
 		};
 
 		/// <summary>
+		/// What may stand in the head (plus unknown and XML-island tags, which Outlook and Word put there). Any other start tag
+		/// ends the head even without a &lt;/head&gt; or &lt;body&gt;, both of which HTML lets a page leave out.
+		/// </summary>
+		private static readonly HashSet<MimeKit.Text.HtmlTagId> HeadTags = new HashSet<MimeKit.Text.HtmlTagId>
+		{
+			MimeKit.Text.HtmlTagId.Base, MimeKit.Text.HtmlTagId.BaseFont, MimeKit.Text.HtmlTagId.BGSound, MimeKit.Text.HtmlTagId.Link,
+			MimeKit.Text.HtmlTagId.Meta, MimeKit.Text.HtmlTagId.NoScript, MimeKit.Text.HtmlTagId.Script, MimeKit.Text.HtmlTagId.Style,
+			MimeKit.Text.HtmlTagId.Title, MimeKit.Text.HtmlTagId.Html, MimeKit.Text.HtmlTagId.Xml, MimeKit.Text.HtmlTagId.Unknown
+		};
+
+		/// <summary>
 		/// Many CAD systems send HTML-only dispatch mail. Its markup must not become the call's nature and note (responders read
-		/// those on a phone), so the visible text is pulled out: script/style content dropped, block elements turned into lines.
+		/// those on a phone), so the visible text is pulled out: head, title, script and style content dropped, block elements
+		/// turned into lines. The head ends where a browser ends it: at &lt;/head&gt;, at &lt;body&gt;, or (both may be left out)
+		/// at the first element or text that cannot be in the head.
 		/// </summary>
 		internal static string HtmlToPlainText(string html)
 		{
 			var builder = new StringBuilder();
 			var skipDepth = 0;
+			var inHead = false;
 
 			using (var reader = new StringReader(html))
 			{
@@ -1105,23 +1161,41 @@ namespace Resgrid.Relay.Engine.Smtp
 					switch (token)
 					{
 						case MimeKit.Text.HtmlTagToken tag:
-							if (tag.Id == MimeKit.Text.HtmlTagId.Script || tag.Id == MimeKit.Text.HtmlTagId.Style || tag.Id == MimeKit.Text.HtmlTagId.Head)
+							if (tag.Id == MimeKit.Text.HtmlTagId.Head)
+							{
+								inHead = !tag.IsEndTag && !tag.IsEmptyElement;
+								break;
+							}
+
+							if (inHead && !tag.IsEndTag && !HeadTags.Contains(tag.Id))
+								inHead = false;
+
+							if (tag.Id == MimeKit.Text.HtmlTagId.Script || tag.Id == MimeKit.Text.HtmlTagId.Style || tag.Id == MimeKit.Text.HtmlTagId.Title)
 							{
 								if (!tag.IsEndTag && !tag.IsEmptyElement)
 									skipDepth++;
 								else if (tag.IsEndTag && skipDepth > 0)
 									skipDepth--;
 							}
-							else if (skipDepth == 0 && BlockTags.Contains(tag.Name))
+							else if (skipDepth == 0 && !inHead && BlockTags.Contains(tag.Name))
 							{
 								builder.AppendLine();
 							}
-							else if (skipDepth == 0 && (tag.Id == MimeKit.Text.HtmlTagId.TD || tag.Id == MimeKit.Text.HtmlTagId.TH) && !tag.IsEndTag)
+							else if (skipDepth == 0 && !inHead && (tag.Id == MimeKit.Text.HtmlTagId.TD || tag.Id == MimeKit.Text.HtmlTagId.TH) && !tag.IsEndTag)
 							{
 								builder.Append(' ');
 							}
 							break;
 						case MimeKit.Text.HtmlDataToken data when skipDepth == 0:
+							if (inHead)
+							{
+								// Whitespace stays in the head; any other text starts the body.
+								if (String.IsNullOrWhiteSpace(data.Data))
+									break;
+
+								inHead = false;
+							}
+
 							builder.Append(data.Data);
 							break;
 					}
@@ -1155,9 +1229,10 @@ namespace Resgrid.Relay.Engine.Smtp
 
 		/// <summary>
 		/// The Message-Id, or for a message without one a hash of what identifies this particular email: sender, recipients,
-		/// subject, body, the Date header and the attachments' names and sizes. The Date matters: a CAD system that sends the
-		/// same test page every morning sends the same subject and body each time, and without it the second day's page would
-		/// be a "duplicate" here and Resgrid's idempotency key would hand back the first day's call.
+		/// subject, body, the Date header and the attachments' names, sizes and contents. The Date matters: a CAD system that
+		/// sends the same test page every morning sends the same subject and body each time, and without it the second day's
+		/// page would be a "duplicate" here and Resgrid's idempotency key would hand back the first day's call. The contents
+		/// matter too: two pages sent within the same second can differ only in an attachment (a new map of the same size).
 		/// </summary>
 		public static string GetStableMessageId(MimeMessage message)
 		{
@@ -1181,21 +1256,31 @@ namespace Resgrid.Relay.Engine.Smtp
 			var parts = new List<string>();
 			foreach (var attachment in message.Attachments)
 			{
-				using var measure = new MimeKit.IO.MeasuringStream();
 				switch (attachment)
 				{
 					case MimePart mimePart:
-						mimePart.Content?.DecodeTo(measure);
-						parts.Add($"{mimePart.FileName}:{measure.Length}");
+						parts.Add($"{mimePart.FileName}:{HashContent(stream => mimePart.Content?.DecodeTo(stream))}");
 						break;
 					case MessagePart messagePart:
-						messagePart.Message?.WriteTo(measure);
-						parts.Add($"attached-message.eml:{measure.Length}");
+						parts.Add($"attached-message.eml:{HashContent(stream => messagePart.Message?.WriteTo(stream))}");
 						break;
 				}
 			}
 
 			return String.Join(",", parts);
+		}
+
+		/// <summary>The length and SHA-256 of what <paramref name="write"/> writes, streamed rather than held in memory.</summary>
+		private static string HashContent(Action<Stream> write)
+		{
+			using var sha256 = SHA256.Create();
+			using var measure = new MimeKit.IO.MeasuringStream();
+			using (var hashing = new CryptoStream(measure, sha256, CryptoStreamMode.Write, leaveOpen: true))
+			{
+				write(hashing);
+			}
+
+			return $"{measure.Length}:{Convert.ToHexString(sha256.Hash)}";
 		}
 
 		private static string ResolvePath(string path)
@@ -1209,16 +1294,19 @@ namespace Resgrid.Relay.Engine.Smtp
 		/// <summary>
 		/// The Message-Id is chosen by the sender and may run to hundreds of characters. A name past the filesystem's limit would
 		/// throw on every redelivery, so the message would be answered 451 forever and never dispatched; long ids are hashed.
+		/// Every name ends in a hash of the whole id: sanitizing maps different ids to the same characters ("a/b" and "a_b"), and
+		/// a second message would then overwrite the first one's copy. The same id always gets the same name.
 		/// </summary>
 		internal static string RawMessageFileName(string stableMessageId)
 		{
 			var invalidCharacters = Path.GetInvalidFileNameChars();
 			var sanitized = new string(stableMessageId.Select(x => invalidCharacters.Contains(x) || Char.IsControl(x) ? '_' : x).ToArray());
+			var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stableMessageId)));
 
 			if (sanitized.Length > 120 || sanitized.Trim('.').Length == 0)
-				sanitized = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stableMessageId)));
+				return hash + ".eml";
 
-			return sanitized + ".eml";
+			return $"{sanitized}-{hash.Substring(0, 16)}.eml";
 		}
 
 		private static string Trim(string value, int maxLength)

@@ -42,15 +42,30 @@ namespace Resgrid.Audio.Core.Radio
 		/// <summary>Queues PCM16 mono 48 kHz samples to play out to the radio's mic input.</summary>
 		void Transmit(short[] pcm48kMono);
 
+		/// <summary>
+		/// Discards the transmit audio queued but not yet handed to the output device (a transmission cut off by the transmit
+		/// time-out or a fault). The transmit path stays open.
+		/// </summary>
+		void ClearTransmit();
+
 		/// <summary>Stops the transmit audio path.</summary>
 		void StopTransmit();
 
 		/// <summary>
 		/// Transmit audio queued but not yet handed to the output device. <see cref="TimeSpan.Zero"/> when the queue is empty
 		/// or the device cannot tell. The output plays continuously (silence when the queue is empty), so a non-zero backlog
-		/// must shrink: <see cref="RadioBridge"/> treats one that has stopped shrinking as a stalled output and faults.
+		/// must be played from: <see cref="RadioBridge"/> treats one that is not (see <see cref="PlayedTransmit"/>) as a
+		/// stalled output and faults.
 		/// </summary>
 		TimeSpan BufferedTransmit { get; }
+
+		/// <summary>
+		/// How much audio the output device has taken for playback since the transmit path opened (silence included while the
+		/// queue is empty), or <see cref="TimeSpan.Zero"/> when the device cannot tell. It advances for as long as the output
+		/// is alive, however fast the queue is refilled; without it, <see cref="RadioBridge"/> falls back to watching
+		/// <see cref="BufferedTransmit"/> shrink.
+		/// </summary>
+		TimeSpan PlayedTransmit { get; }
 
 		/// <summary>How long audio takes to play out once it leaves the queue (the output device's own buffering).</summary>
 		TimeSpan OutputLatency { get; }

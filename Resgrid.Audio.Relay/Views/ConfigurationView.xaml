@@ -214,9 +214,22 @@
                         <ComboBox ItemsSource="{Binding SerialPorts}" IsEditable="True" Text="{Binding RadioSerialPort, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                   Width="220" HorizontalAlignment="Left" />
 
-                        <TextBlock Text="CM108 interface" Style="{StaticResource FieldLabel}" />
+                        <TextBlock Text="CM108 interface (C-Media fobs and the AIOC)" Style="{StaticResource FieldLabel}" />
                         <ComboBox ItemsSource="{Binding Cm108Devices}" DisplayMemberPath="Display" SelectedItem="{Binding SelectedCm108Device, Mode=TwoWay}" />
-                        <TextBlock Style="{StaticResource Hint}" Text="{Binding Cm108Summary, StringFormat=Using {0}. Pick a device above to change it.}" />
+                        <WrapPanel>
+                            <StackPanel Margin="0,0,24,0">
+                                <TextBlock Text="CM108 vendor id (hex)" Style="{StaticResource FieldLabel}" />
+                                <ui:TextBox Text="{Binding RadioCm108VendorIdText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, ValidatesOnNotifyDataErrors=True}" Width="140"
+                                            PlaceholderText="0x0D8C" />
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="CM108 product id (hex, 0x0000 = any)" Style="{StaticResource FieldLabel}" />
+                                <ui:TextBox Text="{Binding RadioCm108ProductIdText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, ValidatesOnNotifyDataErrors=True}" Width="140"
+                                            PlaceholderText="0x0000" />
+                            </StackPanel>
+                        </WrapPanel>
+                        <TextBlock Style="{StaticResource Hint}"
+                                   Text="{Binding Cm108Summary, StringFormat=Using {0}. Pick a connected interface above or type its ids: C-Media 0x0D8C (any product)\, AIOC 0x1209 / 0x7388.}" />
                         <TextBlock Text="CM108 GPIO pin for PTT (3 for the DMK URI, AIOC and most RIM interfaces)" Style="{StaticResource FieldLabel}" />
                         <ui:NumberBox Value="{Binding RadioCm108GpioPin, Mode=TwoWay}" Minimum="1" Maximum="8" MaxDecimalPlaces="0" SmallChange="1" />
 
@@ -374,7 +387,7 @@
                         <TextBlock Text="Distribution list domains" Style="{StaticResource FieldLabel}" />
                         <ui:TextBox Text="{Binding SmtpListAddressDomains, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Style="{StaticResource Hint}"
-                                   Text="A list you fill in replaces the default for that address type; an empty list keeps the default (dispatch./groups./gm./lists.resgrid.com)." />
+                                   Text="A list you fill in replaces the default for that address type, including a list in appsettings.json or the environment beneath it; an empty list keeps the default (appsettings.json's list, or dispatch./groups./gm./lists.resgrid.com)." />
 
                         <WrapPanel>
                             <StackPanel Margin="0,0,24,0">

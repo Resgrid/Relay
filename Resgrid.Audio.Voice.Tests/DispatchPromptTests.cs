@@ -36,6 +36,17 @@ namespace Resgrid.Audio.Voice.Tests
 				.Should().Be("Second alarm, Brush Fire. Nature, Wind driven. Location, Bottom of Bucks Canyon. Priority, Code 3.");
 		}
 
+		// "BC V6B 1A1" (province + spaced code) is a known gap shared with Core's builder; see IsDroppableTrailingSegment.
+		[TestCase("123 Main St, Vancouver, BC V6B1A1", "123 Main St, Vancouver")]
+		[TestCase("123 Main St, Vancouver, V6B 1A1", "123 Main St, Vancouver")]
+		[TestCase("123 Main St, Springfield, WA 98111, USA", "123 Main St, Springfield")]
+		[TestCase("123 Main St, Springfield, Illinois 62701-1234", "123 Main St, Springfield")]
+		[TestCase("Unit 4, 12345 Ranch Rd", "Unit 4, 12345 Ranch Rd")]
+		public void Address_Drops_The_Trailing_State_Postal_Code_And_Country(string address, string expected)
+		{
+			DispatchPromptBuilder.TrimAddressForSpeech(address).Should().Be(expected);
+		}
+
 		[Test]
 		public void ChunkText_Keeps_Every_Chunk_Within_The_Tts_Limit()
 		{

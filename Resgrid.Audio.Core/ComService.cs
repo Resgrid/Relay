@@ -206,7 +206,10 @@ namespace Resgrid.Audio.Core
 			{
 				try
 				{
-					var group = await _lookupsApi.LookupGroupByDispatchCodeAsync(code.Code, _departmentId).ConfigureAwait(false);
+					// Same bounded retry as the save: one 503 from the token endpoint threw an authentication error out of here
+					// before the save's retries ever ran, and the page was dropped. A code Resgrid does not know (null) is sent
+					// as-is; an authentication failure that outlasts the retries still aborts the dispatch.
+					var group = await WithRetriesAsync(() => _lookupsApi.LookupGroupByDispatchCodeAsync(code.Code, _departmentId)).ConfigureAwait(false);
 					if (group != null)
 						code.ResolvedId = group.GroupId;
 				}

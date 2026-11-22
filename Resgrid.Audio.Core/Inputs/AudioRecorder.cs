@@ -5,7 +5,9 @@ using NAudio.Wave;
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using Resgrid.Audio.Core.Model;
+using Serilog;
 
 namespace Resgrid.Audio.Core
 {
@@ -35,16 +37,18 @@ namespace Resgrid.Audio.Core
 
 		private readonly IAudioEvaluator _audioEvaluator;
 		private readonly IWatcherAudioStorage _audioStorage;
+		private readonly ILogger _logger;
 
 		public event EventHandler Stopped = delegate { };
 
 		private int RATE = 44100; // 44100 is a pretty standard rate, but for Speech-to-Text they almost always want 16000
 		private int BUFFERSIZE = (int)Math.Pow(2, 11); // must be a multiple of 2
 
-		public AudioRecorder(IAudioEvaluator audioEvaluator, IWatcherAudioStorage audioStorage)
+		public AudioRecorder(IAudioEvaluator audioEvaluator, IWatcherAudioStorage audioStorage, ILogger logger = null)
 		{
 			_audioEvaluator = audioEvaluator;
 			_audioStorage = audioStorage;
+			_logger = logger;
 		}
 
 		public WaveFormat RecordingFormat
@@ -87,20 +91,28 @@ namespace Resgrid.Audio.Core
 			bwp.BufferLength = BUFFERSIZE * 2;
 			bwp.DiscardOnBufferOverflow = true;
 
-			waveIn.StartRecording();
 			try
 			{
+				// Inside the rollback: StartRecording opens the device before its last step (waveInStart), and when that step
+				// fails no RecordingStopped is ever raised, so nothing else would close the opened handle.
+				waveIn.StartRecording();
+
 				// The tone detector captures from its own handle on the same device; kept so Stop can release it.
 				detectorWaveIn = new WaveInEvent() { DeviceNumber = recordingDevice };
 				_audioEvaluator.Start(detectorWaveIn);
 			}
 			catch
 			{
-				// Don't leave the first capture running when the detector can't open the device.
-				try { waveIn.StopRecording(); } catch { }
-				waveIn.Dispose();
+				// Don't leave the first capture running (or its handle open) when either start fails. Each step is guarded so the
+				// startup error is the one that surfaces.
+				var primary = waveIn;
 				waveIn = null;
-				detectorWaveIn?.Dispose();
+				try { primary.StopRecording(); }
+				catch (Exception ex) { _logger?.Warning(ex, "Rolling back audio capture on device {Device}: stopping the capture failed", recordingDevice); }
+				try { primary.Dispose(); }
+				catch (Exception ex) { _logger?.Warning(ex, "Rolling back audio capture on device {Device}: releasing the capture device failed", recordingDevice); }
+				try { detectorWaveIn?.Dispose(); }
+				catch (Exception ex) { _logger?.Warning(ex, "Rolling back audio capture on device {Device}: releasing the tone detector's device failed", recordingDevice); }
 				detectorWaveIn = null;
 				throw;
 			}
@@ -131,19 +143,35 @@ namespace Resgrid.Audio.Core
 			recordingState = RecordingState.Recording;
 		}
 
+		/// <summary>
+		/// Stops the capture and the tone detector. The steps are independent: a failing StopRecording (waveInStop or
+		/// waveInReset) no longer skips the detector's cleanup. Its error is rethrown once everything else is released.
+		/// </summary>
 		public void Stop()
 		{
+			ExceptionDispatchInfo stopError = null;
 			if (recordingState == RecordingState.Monitoring || recordingState == RecordingState.Recording)
 			{
 				recordingState = RecordingState.RequestedStop;
-				waveIn?.StopRecording();
+				try
+				{
+					waveIn?.StopRecording();
+				}
+				catch (Exception ex)
+				{
+					stopError = ExceptionDispatchInfo.Capture(ex);
+				}
 			}
 
 			// The tone detector captures from its own device handle; stop it too, or it keeps detecting (and triggering) after
 			// the mode has stopped, and release that handle.
-			_audioEvaluator?.Stop();
-			try { detectorWaveIn?.Dispose(); } catch { }
+			try { _audioEvaluator?.Stop(); }
+			catch (Exception ex) { _logger?.Warning(ex, "Stopping the tone detector failed"); }
+			try { detectorWaveIn?.Dispose(); }
+			catch (Exception ex) { _logger?.Warning(ex, "Releasing the tone detector's capture device failed"); }
 			detectorWaveIn = null;
+
+			stopError?.Throw();
 		}
 
 		public SampleAggregator SampleAggregator => _sampleAggregator;

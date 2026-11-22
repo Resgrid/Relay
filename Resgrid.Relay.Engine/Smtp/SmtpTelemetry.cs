@@ -69,6 +69,7 @@ namespace Resgrid.Relay.Engine.Smtp
 		private readonly string _environment;
 		private readonly string _release;
 		private readonly string _serverName;
+		private readonly bool _sendDefaultPii;
 
 		private SmtpTelemetry(ILogger logger, RelayTelemetryOptions options, string serverName)
 		{
@@ -76,6 +77,7 @@ namespace Resgrid.Relay.Engine.Smtp
 			_serverName = String.IsNullOrWhiteSpace(serverName) ? "resgrid-relay" : serverName.Trim();
 			_environment = ResolveEnvironment(options);
 			_release = ResolveRelease(options);
+			_sendDefaultPii = options?.Sentry?.SendDefaultPii == true;
 			_countlyClient = new CountlyTelemetryClient(_logger, options?.Countly, _serverName, _environment, _release);
 
 			if (!String.IsNullOrWhiteSpace(options?.Sentry?.Dsn))
@@ -624,10 +626,22 @@ namespace Resgrid.Relay.Engine.Smtp
 						scope.SetExtra("smtp.proxy_source_endpoint", state.ProxySourceEndPoint);
 						scope.SetExtra("smtp.proxy_destination_endpoint", state.ProxyDestinationEndPoint);
 						scope.SetExtra("smtp.client_identity", state.ClientIdentity);
-						scope.SetExtra("smtp.sender", state.Sender);
 						scope.SetExtra("smtp.message_count", state.MessageCount);
-						scope.SetExtra("smtp.accepted_recipients", state.AcceptedRecipients.ToArray());
-						scope.SetExtra("smtp.rejected_recipients", state.RejectedRecipients.ToArray());
+						// Sentry is a third party: addresses and dispatch content (subject, nature = the body's first line,
+						// attachment names) go to it only with SendDefaultPii. Without it, keep what diagnoses routing: domains
+						// and counts. The local log keeps the full values either way.
+						if (_sendDefaultPii)
+						{
+							scope.SetExtra("smtp.sender", state.Sender);
+							scope.SetExtra("smtp.accepted_recipients", state.AcceptedRecipients.ToArray());
+							scope.SetExtra("smtp.rejected_recipients", state.RejectedRecipients.ToArray());
+						}
+						else
+						{
+							scope.SetExtra("smtp.sender_domain", GetDomain(state.Sender));
+							scope.SetExtra("smtp.accepted_recipient_count", state.AcceptedRecipients.Count());
+							scope.SetExtra("smtp.rejected_recipient_count", state.RejectedRecipients.Count());
+						}
 					}
 
 					if (message != null)
@@ -635,16 +649,25 @@ namespace Resgrid.Relay.Engine.Smtp
 						scope.SetTag("smtp.route_kind", message.RouteKind);
 						scope.SetExtra("smtp.stable_message_id", message.StableMessageId);
 						scope.SetExtra("smtp.message_id", message.ReferenceMessageId);
-						scope.SetExtra("smtp.subject", message.Subject);
-						scope.SetExtra("smtp.nature", message.Nature);
-						scope.SetExtra("smtp.from_addresses", message.FromAddresses);
-						scope.SetExtra("smtp.to_addresses", message.ToAddresses);
-						scope.SetExtra("smtp.cc_addresses", message.CcAddresses);
 						scope.SetExtra("smtp.dispatch_targets", message.DispatchTargets);
-						scope.SetExtra("smtp.attachment_names", message.AttachmentNames);
-						scope.SetExtra("smtp.oversized_attachment_names", message.OversizedAttachmentNames);
 						scope.SetExtra("smtp.raw_message_path", message.RawMessagePath);
 						scope.SetExtra("smtp.call_id", message.CallId);
+						if (_sendDefaultPii)
+						{
+							scope.SetExtra("smtp.subject", message.Subject);
+							scope.SetExtra("smtp.nature", message.Nature);
+							scope.SetExtra("smtp.from_addresses", message.FromAddresses);
+							scope.SetExtra("smtp.to_addresses", message.ToAddresses);
+							scope.SetExtra("smtp.cc_addresses", message.CcAddresses);
+							scope.SetExtra("smtp.attachment_names", message.AttachmentNames);
+							scope.SetExtra("smtp.oversized_attachment_names", message.OversizedAttachmentNames);
+						}
+						else
+						{
+							scope.SetExtra("smtp.sender_domain", message.SenderDomain);
+							scope.SetExtra("smtp.attachment_count", message.AttachmentNames?.Length ?? 0);
+							scope.SetExtra("smtp.oversized_attachment_count", message.OversizedAttachmentNames?.Length ?? 0);
+						}
 					}
 				});
 			}

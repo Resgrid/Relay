@@ -30,6 +30,7 @@ namespace Resgrid.Audio.Core.Radio
 		private volatile WaveInEvent _waveIn;
 		private volatile WaveOutEvent _waveOut;
 		private volatile BufferedWaveProvider _txBuffer;
+		private volatile PlaybackCounter _txPlayed;
 		private Timer _receiveWatchdog;
 		private long _lastReceiveTicks;
 		private int _faultRaised;
@@ -45,6 +46,8 @@ namespace Resgrid.Audio.Core.Radio
 		}
 
 		public TimeSpan BufferedTransmit => _txBuffer?.BufferedDuration ?? TimeSpan.Zero;
+
+		public TimeSpan PlayedTransmit => _txPlayed?.Played ?? TimeSpan.Zero;
 
 		public TimeSpan OutputLatency => TimeSpan.FromMilliseconds(OutputLatencyMs);
 
@@ -63,7 +66,19 @@ namespace Resgrid.Audio.Core.Radio
 			waveIn.RecordingStopped += OnRecordingStopped;
 			Interlocked.Exchange(ref _lastReceiveTicks, DateTime.UtcNow.Ticks);
 			_waveIn = waveIn;
-			waveIn.StartRecording();
+			try
+			{
+				waveIn.StartRecording();
+			}
+			catch
+			{
+				// Leave nothing half-open (the device handle, a published _waveIn that blocks the next StartReceive).
+				_waveIn = null;
+				waveIn.DataAvailable -= OnDataAvailable;
+				waveIn.RecordingStopped -= OnRecordingStopped;
+				try { waveIn.Dispose(); } catch { /* ignore */ }
+				throw;
+			}
 
 			_receiveWatchdog = new Timer(_ => CheckReceiveStall(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
 			_logger?.Information("Radio receive started on input device {Device} @ {Rate} Hz", _inputDevice, AudioFormat.SampleRate);
@@ -126,17 +141,32 @@ namespace Resgrid.Audio.Core.Radio
 				DiscardOnBufferOverflow = true,
 				BufferDuration = TimeSpan.FromSeconds(5)
 			};
+			var played = new PlaybackCounter(buffer);
 			var waveOut = new WaveOutEvent
 			{
 				DeviceNumber = _outputDevice,
 				DesiredLatency = OutputLatencyMs,
 				NumberOfBuffers = OutputBufferCount
 			};
-			waveOut.Init(buffer);
-			waveOut.PlaybackStopped += OnPlaybackStopped;
-			_txBuffer = buffer;
-			_waveOut = waveOut;
-			waveOut.Play();
+			try
+			{
+				waveOut.Init(played);
+				waveOut.PlaybackStopped += OnPlaybackStopped;
+				_txBuffer = buffer;
+				_txPlayed = played;
+				_waveOut = waveOut;
+				waveOut.Play();
+			}
+			catch
+			{
+				// As in StartReceive: a failed open leaves nothing behind, so the next StartTransmit can try again.
+				_waveOut = null;
+				_txBuffer = null;
+				_txPlayed = null;
+				waveOut.PlaybackStopped -= OnPlaybackStopped;
+				try { waveOut.Dispose(); } catch { /* ignore */ }
+				throw;
+			}
 			_logger?.Information("Radio transmit path opened on output device {Device} ({Latency} ms output latency)", _outputDevice, OutputLatencyMs);
 		}
 
@@ -144,7 +174,7 @@ namespace Resgrid.Audio.Core.Radio
 		{
 			// The buffered provider never runs dry, so playback only stops when StopTransmit asks (it clears _waveOut first)
 			// or the device fails. A device that just stops completing buffers (some USB stalls) never gets here: its
-			// BufferedTransmit stops shrinking instead, which RadioBridge detects and faults on.
+			// PlayedTransmit stops advancing (and its backlog stops shrinking) instead, which RadioBridge detects and faults on.
 			if (sender == null || !ReferenceEquals(sender, _waveOut))
 				return;
 			RaiseFault($"Radio transmit audio (output device {_outputDevice}) stopped unexpectedly", e?.Exception);
@@ -161,6 +191,8 @@ namespace Resgrid.Audio.Core.Radio
 			buffer.AddSamples(bytes, 0, bytes.Length);
 		}
 
+		public void ClearTransmit() => _txBuffer?.ClearBuffer();
+
 		public void StopTransmit()
 		{
 			var waveOut = _waveOut;
@@ -168,6 +200,7 @@ namespace Resgrid.Audio.Core.Radio
 				return;
 			_waveOut = null;
 			_txBuffer = null;
+			_txPlayed = null;
 
 			try { waveOut.Stop(); } catch { /* ignore */ }
 			waveOut.PlaybackStopped -= OnPlaybackStopped;
@@ -195,6 +228,38 @@ namespace Resgrid.Audio.Core.Radio
 		{
 			StopReceive();
 			StopTransmit();
+		}
+
+		// Counts what the output device pulls for playback. WaveOutEvent reads only as its buffers complete, so the count
+		// stops when the device stops playing, whether or not the queue behind it is being refilled (the buffered provider
+		// pads an empty queue with silence, so a healthy idle output keeps counting).
+		private sealed class PlaybackCounter : IWaveProvider
+		{
+			private readonly IWaveProvider _source;
+			private long _bytesRead;
+
+			public PlaybackCounter(IWaveProvider source) => _source = source;
+
+			public WaveFormat WaveFormat => _source.WaveFormat;
+
+			public TimeSpan Played
+			{
+				get
+				{
+					// Split so a relay that runs for months does not overflow bytes * TicksPerSecond.
+					long bytes = Interlocked.Read(ref _bytesRead);
+					long perSecond = Math.Max(1, WaveFormat.AverageBytesPerSecond);
+					return TimeSpan.FromTicks(bytes / perSecond * TimeSpan.TicksPerSecond + bytes % perSecond * TimeSpan.TicksPerSecond / perSecond);
+				}
+			}
+
+			public int Read(byte[] buffer, int offset, int count)
+			{
+				var read = _source.Read(buffer, offset, count);
+				if (read > 0)
+					Interlocked.Add(ref _bytesRead, read);
+				return read;
+			}
 		}
 	}
 }

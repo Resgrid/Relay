@@ -63,7 +63,20 @@ namespace Resgrid.Audio.Tests
 		/// <summary>When set, computes <see cref="BufferedTransmit"/> on every read (a backlog that changes over time).</summary>
 		public Func<TimeSpan> BufferedTransmitSource { get; set; }
 
+		/// <summary>When set, the device's playback progress (<see cref="IRadioDevice.PlayedTransmit"/>); zero (cannot tell) otherwise.</summary>
+		public Func<TimeSpan> PlayedTransmitSource { get; set; }
+
+		public TimeSpan PlayedTransmit => PlayedTransmitSource?.Invoke() ?? TimeSpan.Zero;
+
 		public TimeSpan OutputLatency { get; set; } = TimeSpan.Zero;
+
+		private int _clearCalls;
+
+		/// <summary>How many times the bridge discarded the queued transmit audio.</summary>
+		public int ClearCalls => Volatile.Read(ref _clearCalls);
+
+		/// <summary>How many writes had been handed over when the queue was last discarded (-1 = never).</summary>
+		public int WritesAtLastClear { get; private set; } = -1;
 
 		public void StartReceive() { }
 		public void StopReceive() { }
@@ -74,6 +87,16 @@ namespace Resgrid.Audio.Tests
 		{
 			lock (_lock)
 				_writes.Add((short[])pcm48kMono.Clone());
+		}
+
+		public void ClearTransmit()
+		{
+			lock (_lock)
+			{
+				WritesAtLastClear = _writes.Count;
+				_bufferedTransmit = TimeSpan.Zero;
+			}
+			Interlocked.Increment(ref _clearCalls);
 		}
 
 		/// <summary>Delivers a captured radio receive frame, as the capture thread would.</summary>
@@ -127,16 +150,55 @@ namespace Resgrid.Audio.Tests
 
 	internal sealed class FakeSession : IVoiceRoomSession
 	{
+		private readonly object _lock = new object();
+		private EventHandler<VoiceAudioFrame> _audioFrameReceived;
+		private readonly List<EventHandler<VoiceAudioFrame>> _everSubscribed = new List<EventHandler<VoiceAudioFrame>>();
+
 		public FakePublisher Publisher { get; } = new FakePublisher();
 
 		public string ChannelId => "channel-1";
 		public string ChannelName => "Test";
 		public bool IsConnected => true;
 
-		public event EventHandler<VoiceAudioFrame> AudioFrameReceived;
+		public event EventHandler<VoiceAudioFrame> AudioFrameReceived
+		{
+			add
+			{
+				lock (_lock)
+				{
+					_audioFrameReceived += value;
+					_everSubscribed.Add(value);
+				}
+			}
+			remove
+			{
+				lock (_lock)
+					_audioFrameReceived -= value;
+			}
+		}
+
 		public event EventHandler<VoiceConnectionStateChange> ConnectionChanged { add { } remove { } }
 
-		public void Raise(VoiceAudioFrame frame) => AudioFrameReceived?.Invoke(this, frame);
+		public void Raise(VoiceAudioFrame frame)
+		{
+			EventHandler<VoiceAudioFrame> handler;
+			lock (_lock)
+				handler = _audioFrameReceived;
+			handler?.Invoke(this, frame);
+		}
+
+		/// <summary>
+		/// Delivers a frame to every handler ever subscribed, unsubscribed ones included: a callback the transport had already
+		/// started when the handler was removed (unsubscribing does not stop one in flight).
+		/// </summary>
+		public void RaiseInFlight(VoiceAudioFrame frame)
+		{
+			List<EventHandler<VoiceAudioFrame>> handlers;
+			lock (_lock)
+				handlers = _everSubscribed.ToList();
+			foreach (var handler in handlers)
+				handler(this, frame);
+		}
 
 		public Task ConnectAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 		public Task DisconnectAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
@@ -155,6 +217,9 @@ namespace Resgrid.Audio.Tests
 		/// <summary>The first this-many writes throw.</summary>
 		public int FailFirst { get; set; }
 
+		/// <summary>The first this-many writes never complete, and ignore cancellation (a stalled audio source).</summary>
+		public int HangFirst { get; set; }
+
 		public volatile bool AlwaysFail;
 
 		public int Attempts => Volatile.Read(ref _attempts);
@@ -163,6 +228,8 @@ namespace Resgrid.Audio.Tests
 		public ValueTask WriteAsync(ReadOnlyMemory<short> pcm48kMono, CancellationToken cancellationToken = default)
 		{
 			var attempt = Interlocked.Increment(ref _attempts);
+			if (attempt <= HangFirst)
+				return new ValueTask(new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task);
 			if (AlwaysFail || attempt <= FailFirst)
 				throw new InvalidOperationException("publish failed");
 			Interlocked.Increment(ref _written);

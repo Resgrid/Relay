@@ -113,25 +113,29 @@ namespace Resgrid.Relay.Engine.Voice
 						if (IsScheduledForLater(call, DateTime.UtcNow))
 							continue;
 
+						// Publishing into a channel that is reconnecting or gone loses the announcement while it would be marked
+						// done; hold it (unseen) until the channel is back. The rest of this poll would wait for the same thing.
+						// Checked before the give-up below, whose clock stands still meanwhile: waiting out a LiveKit outage is not
+						// the tone-out failing, and an outage longer than GiveUpAfterMinutes used to drop calls never attempted.
+						if (!monitor.IsUsable)
+						{
+							state.PauseRetryClock(DateTime.UtcNow);
+							logger.Warning("LiveKit channel '{Channel}' is not connected; holding the tone-out for call {CallId} until it is", channel.Name, call.CallId);
+							break;
+						}
+						state.ResumeRetryClock(DateTime.UtcNow);
+
 						// A call whose tone-out keeps failing is retried every poll, but only for so long: past that the announcement
 						// is stale, and a call the TTS service will never accept would otherwise be retried, and logged, for as long
-						// as it stays open. Time-based, so a short TTS or LiveKit outage does not cost a call its tone-out.
+						// as it stays open. Time-based, so a short TTS outage does not cost a call its tone-out.
 						if (!state.FirstAttemptUtc.TryGetValue(call.CallId, out var firstAttempt))
 							state.FirstAttemptUtc[call.CallId] = firstAttempt = DateTime.UtcNow;
 						else if (DateTime.UtcNow - firstAttempt > giveUpAfter)
 						{
-							logger.Error("Giving up on toning out call {CallId}: it has failed since {FirstAttempt:O}", call.CallId, firstAttempt);
+							logger.Error("Giving up on toning out call {CallId}: it has kept failing for {Minutes:n0} minute(s) while the channel was up", call.CallId, giveUpAfter.TotalMinutes);
 							seen.Add(call.CallId);
 							state.FirstAttemptUtc.Remove(call.CallId);
 							continue;
-						}
-
-						// Publishing into a channel that is reconnecting or gone loses the announcement while it would be marked
-						// done; hold it (unseen) until the channel is back. The rest of this poll would wait for the same thing.
-						if (!monitor.IsUsable)
-						{
-							logger.Warning("LiveKit channel '{Channel}' is not connected; holding the tone-out for call {CallId} until it is", channel.Name, call.CallId);
-							break;
 						}
 
 						var text = VoiceModeRuntime.FormatCallAnnouncement(call, priorityNames);
@@ -161,14 +165,18 @@ namespace Resgrid.Relay.Engine.Voice
 							continue;
 						}
 
+						// Snapshot first: a "reconnecting" landing between the usability check and the snapshot would otherwise be
+						// counted before it, and a reconnect completing during the publish would then pass the check after it.
+						var interruptionsBefore = monitor.Interruptions;
+
 						// Synthesis can take seconds: check the channel again right before publishing.
 						if (!monitor.IsUsable)
 						{
+							state.PauseRetryClock(DateTime.UtcNow);
 							logger.Warning("LiveKit channel '{Channel}' dropped while preparing the tone-out for call {CallId}; holding it until the channel is back", channel.Name, call.CallId);
 							break;
 						}
 
-						var interruptionsBefore = monitor.Interruptions;
 						try
 						{
 							// CaptureFrameAsync back-pressures on the AudioSource queue, so this paces
@@ -226,6 +234,9 @@ namespace Resgrid.Relay.Engine.Voice
 			}
 			finally
 			{
+				// Until the next run finds the channel usable (a rejoin after a disconnect, or a restart), the waiting calls are
+				// not being attempted.
+				state.PauseRetryClock(DateTime.UtcNow);
 				if (publisher != null)
 					await publisher.DisposeAsync().ConfigureAwait(false);
 			}
@@ -292,7 +303,34 @@ namespace Resgrid.Relay.Engine.Voice
 		/// <summary>True once the calls that were open when the relay started have been recorded as already handled.</summary>
 		public bool Primed { get; set; }
 
-		/// <summary>When the relay first tried to tone out each call that has not been announced yet.</summary>
+		/// <summary>
+		/// When the relay first tried to tone out each call that has not been announced yet, moved forward by any time the
+		/// give-up clock was paused since.
+		/// </summary>
 		public Dictionary<string, DateTime> FirstAttemptUtc { get; } = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+
+		/// <summary>Since when the give-up clock has been paused; null while it runs.</summary>
+		internal DateTime? RetryClockPausedSinceUtc { get; private set; }
+
+		/// <summary>
+		/// Stops the give-up clock while no tone-out can go out (the channel is reconnecting or down, or the relay is between
+		/// runs): the waiting calls are not failing then. Calling it again while paused keeps the earlier time.
+		/// </summary>
+		internal void PauseRetryClock(DateTime nowUtc) => RetryClockPausedSinceUtc ??= nowUtc;
+
+		/// <summary>Restarts a paused give-up clock, moving every waiting call's first attempt forward by the length of the pause.</summary>
+		internal void ResumeRetryClock(DateTime nowUtc)
+		{
+			if (RetryClockPausedSinceUtc is not DateTime pausedSince)
+				return;
+
+			RetryClockPausedSinceUtc = null;
+			var paused = nowUtc - pausedSince;
+			if (paused <= TimeSpan.Zero)
+				return;
+
+			foreach (var callId in FirstAttemptUtc.Keys.ToList())
+				FirstAttemptUtc[callId] += paused;
+		}
 	}
 }

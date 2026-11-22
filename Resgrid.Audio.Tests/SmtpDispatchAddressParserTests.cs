@@ -212,6 +212,48 @@ namespace Resgrid.Audio.Tests
 		}
 
 		[Test]
+		public void ParseRecipients_Should_Keep_Header_Recipients_Of_The_Default_Department_Next_To_A_Bare_Envelope_Code()
+		{
+			var options = new SmtpRelayOptions
+			{
+				HostedMode = true,
+				DefaultDepartmentId = "dept123",
+				DepartmentAddressDomains = new[] { "dispatch.resgrid.com" },
+				GroupAddressDomains = new[] { "groups.resgrid.com" },
+				DepartmentDomainSeparator = "."
+			};
+
+			// A bare group code names no department; DefaultDepartmentId is the dispatch's department before any header is read.
+			var result = new SmtpDispatchAddressParser(options).ParseRecipients(
+				new[] { "station5@groups.resgrid.com" },
+				new[] { "ladder1@dept123.groups.resgrid.com", "engine2@dept456.groups.resgrid.com" });
+
+			result.DepartmentId.Should().Be("dept123");
+			result.DispatchCodes.Select(x => x.Code).Should().Equal("station5", "ladder1");
+			result.OtherDepartmentAddresses.Should().Equal("engine2@dept456.groups.resgrid.com");
+		}
+
+		[Test]
+		public void ParseRecipients_Should_Not_Let_An_Envelope_Address_Of_Another_Department_Than_The_Default_One_Claim_The_Dispatch()
+		{
+			var options = new SmtpRelayOptions
+			{
+				HostedMode = true,
+				DefaultDepartmentId = "dept123",
+				GroupAddressDomains = new[] { "groups.resgrid.com" },
+				DepartmentDomainSeparator = "."
+			};
+
+			var result = new SmtpDispatchAddressParser(options).ParseRecipients(
+				new[] { "engine2@dept456.groups.resgrid.com", "station5@dept123.groups.resgrid.com" },
+				Array.Empty<string>());
+
+			result.DepartmentId.Should().Be("dept123");
+			result.DispatchCodes.Select(x => x.Code).Should().Equal("station5");
+			result.OtherDepartmentAddresses.Should().Equal("engine2@dept456.groups.resgrid.com");
+		}
+
+		[Test]
 		public void ParseRecipients_Should_Ignore_Unknown_Domains_And_Deduplicate_Valid_Ones()
 		{
 			var parser = new SmtpDispatchAddressParser(new SmtpRelayOptions());

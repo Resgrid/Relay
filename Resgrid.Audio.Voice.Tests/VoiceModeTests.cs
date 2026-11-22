@@ -38,6 +38,24 @@ namespace Resgrid.Audio.Voice.Tests
 		}
 
 		[Test]
+		public void RetryClock_StandsStillWhilePaused()
+		{
+			var state = new DispatchToneOutState();
+			state.FirstAttemptUtc["c1"] = Now;
+
+			// The channel drops 2 minutes in and stays down for half an hour (a later pause keeps the earlier start).
+			state.PauseRetryClock(Now.AddMinutes(2));
+			state.PauseRetryClock(Now.AddMinutes(5));
+			state.ResumeRetryClock(Now.AddMinutes(32));
+
+			state.FirstAttemptUtc["c1"].Should().Be(Now.AddMinutes(30), "only the 2 minutes the channel was up count toward giving up");
+			state.RetryClockPausedSinceUtc.Should().BeNull();
+
+			state.ResumeRetryClock(Now.AddMinutes(40));
+			state.FirstAttemptUtc["c1"].Should().Be(Now.AddMinutes(30), "resuming a running clock changes nothing");
+		}
+
+		[Test]
 		public void IsScheduledForLater_TreatsAnUnspecifiedKindAsUtc()
 		{
 			var later = DateTime.SpecifyKind(Now.AddMinutes(1), DateTimeKind.Unspecified);

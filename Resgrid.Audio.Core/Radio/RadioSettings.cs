@@ -45,10 +45,10 @@ namespace Resgrid.Audio.Core.Radio
 		/// <summary>Serial port name (COM3, /dev/ttyUSB0) for serial PTT and/or carrier detect.</summary>
 		public string SerialPort { get; set; } = "";
 
-		/// <summary>CM108 USB device VID (default C-Media 0x0D8C).</summary>
-		public int Cm108VendorId { get; set; } = 0x0D8C;
+		/// <summary>CM108 USB device VID (default C-Media 0x0D8C; the AIOC is 0x1209). See <see cref="Cm108Compatibility"/>.</summary>
+		public int Cm108VendorId { get; set; } = Cm108Compatibility.CMediaVendorId;
 
-		/// <summary>CM108 USB device PID (0 = match any C-Media device).</summary>
+		/// <summary>CM108 USB device PID (0 = any product of the vendor; for VID 0x1209 only the AIOC, 0x7388).</summary>
 		public int Cm108ProductId { get; set; } = 0;
 
 		/// <summary>CM108 GPIO pin used for PTT (1–4; URI/RIM commonly use GPIO3).</summary>

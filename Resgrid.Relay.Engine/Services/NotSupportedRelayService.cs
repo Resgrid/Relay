@@ -1,4 +1,3 @@
-using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Resgrid.Relay.Engine.Configuration;
@@ -9,7 +8,8 @@ namespace Resgrid.Relay.Engine.Services
 	/// <summary>
 	/// Placeholder relay service returned for Windows-only modes (radio/audio) when the
 	/// engine is running on a non-Windows build. Faults immediately with a clear message;
-	/// <see cref="RelayServiceBase"/> catches the exception and transitions to Faulted.
+	/// <see cref="RelayServiceBase"/> catches the exception and transitions to Faulted. It is a configuration error (this
+	/// build can never run the mode), so the console exits with the code a service manager does not restart on.
 	/// </summary>
 	public sealed class NotSupportedRelayService : RelayServiceBase
 	{
@@ -20,7 +20,7 @@ namespace Resgrid.Relay.Engine.Services
 
 		protected override Task ExecuteAsync(CancellationToken token)
 		{
-			throw new PlatformNotSupportedException($"The '{Mode}' relay mode requires Windows.");
+			throw new RelayConfigurationException($"The '{Mode}' relay mode requires Windows.");
 		}
 	}
 }

@@ -127,7 +127,10 @@ namespace Resgrid.Relay.Engine.Configuration
 				DisplayName = "Rapid Radios (LTE PoC)",
 				Description = "Rapid Radios base/car unit or handheld used as a donor radio on your Rapid Radios account.",
 				SetupNotes = "Use a G1 handheld with an AIOC (All-In-One-Cable) on its Kenwood 2-pin (K1) jack: the AIOC is a CM108 " +
-					"interface, so set PTT to Cm108 (or SerialDtr) and pick the AIOC as both audio devices. Keep the G1 on USB-C power. " +
+					"interface, so set PTT to Cm108 (or SerialDtr) and pick the AIOC as both audio devices and as the CM108 interface " +
+					"(listed as [AIOC]). It is not a C-Media chip: picking it sets Radio:Cm108VendorId and Radio:Cm108ProductId to its " +
+					"USB ids, 0x1209 and 0x7388; the default vendor id (0x0D8C) does not find it. Without the desktop app, the console " +
+					"'devices' command lists it with the values for relay.user.json (4617 and 29576). Keep the G1 on USB-C power. " +
 					"Avoid the Rapid Radios Base/Car Unit: its RJ45 jack carries mic and PTT only, with no speaker or line output. " +
 					"The donor radio occupies one radio on your account and bridges the talk group it is set to. " + PocWiring,
 				IsPushToTalkOverCellular = true,

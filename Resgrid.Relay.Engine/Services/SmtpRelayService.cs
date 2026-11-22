@@ -20,6 +20,8 @@ namespace Resgrid.Relay.Engine.Services
 		{
 		}
 
+		protected override void ValidateConfiguration() => ValidateApiOptions(Options.Resgrid);
+
 		protected override async Task ExecuteAsync(CancellationToken token)
 		{
 			using var apiClient = new ResgridV4ApiClient(Options.Resgrid);

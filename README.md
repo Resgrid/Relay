@@ -22,8 +22,8 @@ by side.
 
 **Dispatch email into Resgrid (`smtp`)**
 - A built-in SMTP server takes dispatch email from CAD, alarm panels, paging gateways or any system that can send mail, and
-  creates Resgrid calls (department-wide or per group), group messages, or distribution-list mail from the address it was
-  sent to (`station5@dispatch.your-county.org`).
+  creates Resgrid calls (department-wide or per group) or group messages from the address it was sent to
+  (`station5@dispatch.your-county.org`).
 - Dispatch codes resolve to Resgrid departments and groups (optionally cached in Redis); department codes are validated so
   nobody can page a whole department by guessing an address.
 - Attachments (run cards, maps, PDFs) go onto the call; duplicate deliveries are ignored; failures are retried by the
@@ -132,7 +132,9 @@ $env:RESGRID__RELAY__Resgrid__RefreshToken = "YOUR_REFRESH_TOKEN"
 $env:RESGRID__RELAY__Smtp__Port = "2525"
 ```
 
-`dotnet Resgrid.Audio.Relay.Console.dll help` prints the common settings. A value that can't be read (an empty port, a
+`Resgrid.Audio.Relay.Console help` (`.\Resgrid.Audio.Relay.Console.exe help` on Windows) prints the common settings; the
+release downloads are self-contained executables. For a framework-dependent build of your own, run
+`dotnet Resgrid.Audio.Relay.Console.dll help` instead. A value that can't be read (an empty port, a
 misspelled grant type) stops the relay with a configuration error. The main sections:
 
 ```json
@@ -168,8 +170,9 @@ misspelled grant type) stops the relay with a configuration error. The main sect
 ```
 
 A configured domain list replaces the default (`dispatch.resgrid.com`, `groups.resgrid.com`, `gm.resgrid.com`,
-`lists.resgrid.com`) for that address type; an absent or empty list (`[]`, as in the shipped `appsettings.json`) keeps the
-default.
+`lists.resgrid.com`) for that address type, and a list set in a higher layer (`relay.user.json`, then the environment)
+replaces a lower layer's list as a whole rather than merging with it entry by entry. An absent or empty list (`[]`, as in
+the shipped `appsettings.json`) keeps the lower layer's list, or the default.
 
 ## Desktop app (Windows)
 
@@ -183,7 +186,7 @@ default.
   squelch **Tune** meter and a **Test transmit** that keys the radio and plays a tone. Tests use the values on screen without
   saving them.
 - **Logs** (live) and **Devices** (audio, serial and CM108 interfaces). Logs are also written to
-  `%LOCALAPPDATA%\Resgrid\Relay\logs` (14 days).
+  `%LOCALAPPDATA%\Resgrid\Relay\logs` (the newest 14 files; a new file starts each day or at 50 MB).
 
 The tray icon shows each mode's state; closing the window keeps the relay running. For headless or Linux machines use the
 console host.
@@ -208,12 +211,17 @@ Resgrid's own inbound-email pipeline:
   a dispatcher sends it. Group addresses are dispatched immediately.
 - **Hosted mode** (`HostedMode=true`, system key): the department comes from the department dispatch code; a group address also
   needs a department, from `{code}@{departmentId}.{group domain}`, `DefaultDepartmentId`, or a department address on the same
-  message. Targets that disagree on the department are dropped.
+  message. One transaction dispatches one department: a recipient of a different department than the transaction's first
+  accepted recipient is deferred with `452 4.5.3`, so the sender delivers it again in a transaction of its own. With
+  `DefaultDepartmentId` set, that is the only department the relay dispatches: a recipient of any other department is refused
+  with `550 5.1.1` (a retry would not serve it either), and header targets naming another department are dropped.
 - Subject becomes the call name, the first line of the body the nature, and the body the note (HTML-only mail is converted to
   text). Attachments are uploaded as call files (`MaxAttachmentBytes`); one Resgrid rejects outright is skipped.
 - Duplicates are suppressed by Message-Id, and the call and each attachment carry an `Idempotency-Key`, so a redelivered message
   never creates a second call. A failure that may succeed later is answered `451 4.3.0` (the sender retries; this includes
-  authentication failures, which an operator can fix); a message Resgrid rejects outright is bounced with `554`.
+  authentication failures and a `403` from the code lookups, which an operator can fix); a message Resgrid rejects outright is
+  bounced with `554`. That includes a group message to an envelope recipient that Resgrid rejects after the message's call
+  was created: the bounce says so, and the call stays.
 - Raw messages are kept in `DataDirectory/messages` when `SaveRawMessages` is on, written only once a message has routed,
   and deleted automatically after the longer of `DuplicateWindowHours` and 7 days. They contain dispatch content: protect
   that directory.
@@ -255,7 +263,8 @@ Bridges a radio to a PTT channel: radio receive audio (after the squelch) goes t
   for a kind of radio; apply one in the desktop app or with `profiles apply <key>`, then fine-tune. Device and PTT wiring
   settings are never changed by a profile.
 - `test-tx` (or **Test transmit** in the desktop app) keys the radio and plays a 2-second 1 kHz tone after the lead, so PTT
-  wiring, transmit level and `TxLeadMs` can be checked with a listener on the far side.
+  wiring, transmit level and `TxLeadMs` can be checked with a listener on the far side. If the PTT line cannot be released
+  it fails (exit code 1) and says so: unplug the interface or turn the radio off.
 
 ### LTE / PoC donor radios (Rapid Radios, Diga-Talk+)
 
@@ -270,7 +279,11 @@ and Relay bridges it to the Resgrid PTT channel. Resgrid PTT users and the PoC u
   RoIP gateways) with a DMK URI or similar CM108 interface. Get the accessory-port pinout from Diga-Talk+ first, and check
   coverage: it uses LTE bands 2/4/5/12/17.
 - **Rapid Radios**: a G1 handheld with an AIOC (All-In-One-Cable) on its Kenwood 2-pin jack. The AIOC is a CM108 interface
-  (CM108 PTT on GPIO 3, the usual default, or serial DTR); confirm against its firmware notes. The Base/Car Unit is not suitable: its RJ45 jack carries mic and PTT but no speaker output.
+  (CM108 PTT on GPIO 3, the usual default, or serial DTR); confirm against its firmware notes. It has its own USB ids
+  (VID 0x1209, PID 0x7388), not C-Media's: Relay lists it as `[AIOC]` in the desktop CM108 interface picker and the Devices
+  screen, and picking it sets `Radio:Cm108VendorId` and `Radio:Cm108ProductId` (the vendor and product id fields can also be
+  typed in hex). On the console, `devices` lists it with the values for `relay.user.json` (`4617` and `29576`). The
+  Base/Car Unit is not suitable: its RJ45 jack carries mic and PTT but no speaker output.
 - The donor radio occupies one radio (and its plan) on the PoC account and bridges whichever talk group it is set to; add
   another radio and interface for each additional talk group.
 - `RecordWhileBridging` records both the remote talkers and the radio side.
@@ -290,7 +303,8 @@ announcement, spoken in Resgrid's own wording (`New call, {name}. Nature, {natur
 with the department's priority names and "Second alarm" after an escalation), so the TTS audio Resgrid already generated is
 reused from cache. Calls that were open when the relay started are not announced; calls created while it was reconnecting
 are. Scheduled calls are announced when they are dispatched. A call whose tone-out keeps failing is retried for
-`GiveUpAfterMinutes`. `Tts:ServiceBaseUrl` is the Resgrid TTS service.
+`GiveUpAfterMinutes` (time the LiveKit channel is down does not count, so a call created during an outage is still announced
+once the channel is back). `Tts:ServiceBaseUrl` is the Resgrid TTS service.
 
 ## Resilience and telemetry
 
@@ -298,14 +312,16 @@ The voice modes reconnect with exponential back-off (`Resilience:*`). After `Max
 `MaxBackoffSeconds` and show LiveKit as disconnected (`KeepRetrying`, default `true`); with `KeepRetrying=false` they fault
 instead. A configuration error (e.g. the wrong grant) faults immediately. The radio bridge also restarts itself when its audio
 device stops (USB unplug), and cuts off a channel talker after `Radio:MaxTransmitSeconds` (default 180, 0 = no limit). Sentry (`Telemetry:Sentry:Dsn`) and Countly (`Telemetry:Countly:*`) are
-optional; `SendDefaultPii` defaults to `false`. SMTP logs and telemetry include sender, recipients and subject, never bodies.
+optional; `SendDefaultPii` defaults to `false`. The local SMTP log includes sender, recipients and subject, never bodies.
+Sentry receives addresses, subject, nature and attachment names only with `SendDefaultPii=true`; otherwise it gets domains and
+counts. Countly receives domains only.
 
 ## Commands
 
 ```powershell
 dotnet run --project .\Resgrid.Audio.Relay.Console -f net10.0-windows -- run        # run the configured mode
 dotnet run --project .\Resgrid.Audio.Relay.Console -f net10.0-windows -- setup      # create the audio-mode watcher file (Windows)
-dotnet run --project .\Resgrid.Audio.Relay.Console -f net10.0-windows -- devices    # list audio, serial and CM108 devices (Windows)
+dotnet run --project .\Resgrid.Audio.Relay.Console -f net10.0-windows -- devices    # list audio, serial and CM108 interfaces (C-Media, AIOC) (Windows)
 dotnet run --project .\Resgrid.Audio.Relay.Console -f net10.0-windows -- monitor 0  # show input levels for device 0 (Windows)
 dotnet run --project .\Resgrid.Audio.Relay.Console -f net10.0-windows -- tune       # live squelch meter for radio mode (Windows)
 dotnet run --project .\Resgrid.Audio.Relay.Console -f net10.0-windows -- test-tx    # key the radio and play a test tone (Windows)

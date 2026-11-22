@@ -17,12 +17,20 @@ namespace Resgrid.Audio.Relay.ViewModels
 	{
 		private readonly IRelayService _service;
 		private readonly RelayModeLauncher _launcher;
+		private readonly Action<string> _report;
 		private bool _disposed;
+		private bool _restarting;
+		private bool _stopRequestedDuringRestart;
 
-		public ServiceTileViewModel(IRelayService service, RelayModeLauncher launcher)
+		/// <param name="report">
+		/// Shows a Restart outcome on the Dashboard. The tile itself is removed as soon as its service stops, so it can't carry
+		/// the message.
+		/// </param>
+		public ServiceTileViewModel(IRelayService service, RelayModeLauncher launcher, Action<string> report = null)
 		{
 			_service = service;
 			_launcher = launcher;
+			_report = report;
 			_state = service.State;
 
 			var started = launcher.Controller.StartedAtUtc(service.Mode);
@@ -73,10 +81,46 @@ namespace Resgrid.Audio.Relay.ViewModels
 		}
 
 		[RelayCommand]
-		private Task Stop() => _launcher.StopAsync(Mode);
+		private async Task Stop()
+		{
+			// During a restart the service has already left the controller (it is being torn down), so the launcher's stop finds
+			// nothing to stop and the restart would then start a replacement, reversing this Stop. Record it for the restart.
+			if (_restarting)
+				_stopRequestedDuringRestart = true;
+
+			await _launcher.StopAsync(Mode).ConfigureAwait(true);
+		}
 
 		[RelayCommand]
-		private Task Restart() => _launcher.RestartAsync(Mode);
+		private async Task Restart()
+		{
+			// Stop then start, as RelayModeLauncher.RestartAsync does, but skip the start when a Stop for this tile or a stop-all
+			// (footer, tray, Operations, quit) arrived while the old instance was being torn down.
+			_restarting = true;
+			_stopRequestedDuringRestart = false;
+			var stopAllRequests = _launcher.Controller.StopAllRequests;
+			try
+			{
+				await _launcher.StopAsync(Mode).ConfigureAwait(true);
+
+				if (_stopRequestedDuringRestart || _launcher.Controller.StopAllRequests != stopAllRequests)
+				{
+					_report?.Invoke($"{DisplayName} stopped; restart cancelled.");
+					return;
+				}
+
+				var error = await _launcher.StartAsync(Mode).ConfigureAwait(true);
+				_report?.Invoke(error ?? $"{DisplayName} restarted.");
+			}
+			catch (Exception ex)
+			{
+				_report?.Invoke($"{DisplayName} restart failed: {ex.Message}");
+			}
+			finally
+			{
+				_restarting = false;
+			}
+		}
 
 		private void OnStateChanged(object sender, RelayStateChangedEventArgs e)
 		{
