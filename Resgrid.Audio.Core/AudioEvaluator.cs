@@ -24,17 +24,21 @@ namespace Resgrid.Audio.Core
 		int CleanUpTones();
 		void AddActiveWatcher(Guid watcherId);
 		void RemoveActiveWatcher(Guid watcherId);
+		void Stop();
 	}
 
 	public class AudioEvaluator : IAudioEvaluator
 	{
-		private static Object _lock = new Object();
+		// Per instance (they were static): after a stop/start in the same process the old pipeline's detector shared the new
+		// one's tone bank and active-watcher list, consuming its tones and blocking its watchers.
+		private readonly object _lock = new object();
 		private readonly ILogger _logger;
 
 		private Config _config;
 		private List<DtmfTone> _dtmfTone;
-		private static List<DtmfToneEnd> _finishedTones;
-		private static List<Guid> _startedWatchers;
+		private readonly List<DtmfToneEnd> _finishedTones;
+		private readonly List<Guid> _startedWatchers;
+		private LiveAudioDtmfAnalyzer _analyzer;
 
 		public event EventHandler<EvaluatorEventArgs> EvaluatorStarted;
 		public event EventHandler<EvaluatorEventArgs> EvaluatorFinished;
@@ -70,13 +74,13 @@ namespace Resgrid.Audio.Core
 							{
 								if (trigger.Count >= 1)
 								{
-									var addedTone = AddTone((int)trigger.Frequency1);
+									var addedTone = AddTone(Trigger.ToneKey(trigger.Frequency1));
 									trigger.Tones.Add(addedTone);
 								}
 
 								if (trigger.Count >= 2)
 								{
-									var addedTone = AddTone((int)trigger.Frequency2);
+									var addedTone = AddTone(Trigger.ToneKey(trigger.Frequency2));
 									trigger.Tones.Add(addedTone);
 								}
 							}
@@ -103,19 +107,42 @@ namespace Resgrid.Audio.Core
 		{
 			_logger.Debug("AudioEvaluator->Clearing Tones");
 
-			_finishedTones.Clear();
+			lock (_lock)
+			{
+				_finishedTones.Clear();
+			}
 		}
 
 		public void AddActiveWatcher(Guid watcherId)
 		{
-			if (!_startedWatchers.Contains(watcherId))
-				_startedWatchers.Add(watcherId);
+			lock (_lock)
+			{
+				if (!_startedWatchers.Contains(watcherId))
+					_startedWatchers.Add(watcherId);
+			}
 		}
 
 		public void RemoveActiveWatcher(Guid watcherId)
 		{
-			if (_startedWatchers.Contains(watcherId))
+			lock (_lock)
+			{
 				_startedWatchers.Remove(watcherId);
+			}
+		}
+
+		/// <summary>Stops the tone detector's own capture device; without this it kept listening after the mode was stopped.</summary>
+		public void Stop()
+		{
+			var analyzer = _analyzer;
+			_analyzer = null;
+			try
+			{
+				analyzer?.StopCapturing();
+			}
+			catch (Exception ex)
+			{
+				_logger?.Warning(ex, "Stopping the tone detector failed");
+			}
 		}
 
 		public void Start(IWaveIn waveIn)
@@ -124,6 +151,7 @@ namespace Resgrid.Audio.Core
 			config.PowerThreshold = _config.Tolerance;
 
 			var analyzer = new LiveAudioDtmfAnalyzer(config, waveIn);
+			_analyzer = analyzer;
 
 			//analyzer.DtmfToneStarted += start => _log.Add($"{start.DtmfTone.Key} key started on {start.Position.TimeOfDay} (channel {start.Channel})");
 			//analyzer.DtmfToneStopped += end => _log.Add($"{end.DtmfTone.Key} key stopped after {end.Duration.TotalSeconds}s (channel {end.Channel})");
@@ -139,41 +167,46 @@ namespace Resgrid.Audio.Core
 
 				EvaluatorFinished?.Invoke(this, new EvaluatorEventArgs(null, end, DateTime.UtcNow));
 
-				if (end.Duration > new TimeSpan(0, 0, 0, 0, 0))
+				try
 				{
-					_logger.Debug($"AudioEvaluator->Finished Tones: {_finishedTones.Count}");
-
-					_logger.Debug($"AudioEvaluator->Current Finished Tones:");
-					_logger.Debug($"----------------------------------------------------------");
-
-					lock (_lock)
+					if (end.Duration > new TimeSpan(0, 0, 0, 0, 0))
 					{
-						foreach (var tone in _finishedTones)
+						// Every _finishedTones access is under the lock: the once-a-minute CleanUpTones on the timer thread removes
+						// from the same list, and a tone ending during that sweep threw "Collection was modified" into the analyzer.
+						lock (_lock)
 						{
-							_logger.Debug(
-								$"AudioEvaluator->Finished Tone: {tone.DtmfTone.HighTone} finished in {tone.Duration.TotalMilliseconds}ms");
+							_logger.Debug($"AudioEvaluator->Finished Tones: {_finishedTones.Count}");
+							foreach (var tone in _finishedTones)
+							{
+								_logger.Debug(
+									$"AudioEvaluator->Finished Tone: {tone.DtmfTone.HighTone} finished in {tone.Duration.TotalMilliseconds}ms");
+							}
+
+							var existingTone = _finishedTones.FirstOrDefault(x => x.DtmfTone.HighTone == end.DtmfTone.HighTone &&
+																			 (end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds <= 1000 &&
+																			  end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds >= -1000));
+
+							if (existingTone != null && existingTone.Duration < new TimeSpan(0, 0, 0, 0, 1500))
+							{
+								_logger.Debug($"AudioEvaluator->DtmfToneStopped: Existing tone for {existingTone.DtmfTone.HighTone} adding {end.Duration.TotalMilliseconds}ms");
+								existingTone.Duration += end.Duration;
+							}
+							else
+							{
+								_logger.Debug($"AudioEvaluator->DtmfToneStopped: No Existing tone for {end.DtmfTone.HighTone} for duration {end.Duration}");
+								_finishedTones.Add(end);
+							}
 						}
 					}
 
-					_logger.Debug($"==========================================================");
-
-					var existingTone = _finishedTones.FirstOrDefault(x => x.DtmfTone.HighTone == end.DtmfTone.HighTone &&
-																	 (end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds <= 1000 &&
-																	  end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds >= -1000));
-
-					if (existingTone != null && existingTone.Duration < new TimeSpan(0, 0, 0, 0, 1500))
-					{
-						_logger.Debug($"AudioEvaluator->DtmfToneStopped: Existing tone for {existingTone.DtmfTone.HighTone} adding {end.Duration.TotalMilliseconds}ms");
-						existingTone.Duration += end.Duration;
-					}
-					else
-					{
-						_logger.Debug($"AudioEvaluator->DtmfToneStopped: No Existing tone for {end.DtmfTone.HighTone} for duration {end.Duration}");
-						_finishedTones.Add(end);
-					}
+					CheckFinishedTonesForTriggers();
 				}
-
-				CheckFinishedTonesForTriggers();
+				catch (Exception ex)
+				{
+					// Never let a failure escape into the analyzer's capture callback: that could stop tone detection while the
+					// mode still reports Running.
+					_logger?.Error(ex, "Tone evaluation failed");
+				}
 			};
 
 			analyzer.StartCapturing();
@@ -199,29 +232,19 @@ namespace Resgrid.Audio.Core
 		{
 			List<DtmfToneEnd> tonesToCleanUp = new List<DtmfToneEnd>();
 
-			if (_finishedTones != null && _finishedTones.Any())
+			lock (_lock)
 			{
-				lock (_lock)
+				foreach (var tone in _finishedTones)
 				{
-					foreach (var tone in _finishedTones)
-					{
-						if (DateTime.Now.Subtract(tone.TimeStamp).TotalMinutes > 5)
-							tonesToCleanUp.Add(tone);
-					}
+					if (DateTime.Now.Subtract(tone.TimeStamp).TotalMinutes > 5)
+						tonesToCleanUp.Add(tone);
 				}
 
-				if (tonesToCleanUp.Any())
+				foreach (var tone in tonesToCleanUp)
 				{
-					foreach (var tone in tonesToCleanUp)
-					{
-						_logger.Debug(
-							$"AudioEvaluator->CleanUpTones: Cleaning up tone {tone.DtmfTone.HighTone} that has been around for {DateTime.Now.Subtract(tone.TimeStamp).TotalMinutes}m");
-
-						lock (_lock)
-						{
-							_finishedTones.Remove(tone);
-						}
-					}
+					_logger.Debug(
+						$"AudioEvaluator->CleanUpTones: Cleaning up tone {tone.DtmfTone.HighTone} that has been around for {DateTime.Now.Subtract(tone.TimeStamp).TotalMinutes}m");
+					_finishedTones.Remove(tone);
 				}
 			}
 
@@ -234,7 +257,11 @@ namespace Resgrid.Audio.Core
 
 			if (_config.Watchers != null && _config.Watchers.Any() && _config.Watchers.Any(x => x.Active))
 			{
-				if (_finishedTones != null && _finishedTones.Any())
+				bool anyTones;
+				lock (_lock)
+					anyTones = _finishedTones.Count > 0;
+
+				if (anyTones)
 				{
 					var activeWatchers = _config.Watchers.Where(x => x.Active).ToList();
 
@@ -244,7 +271,11 @@ namespace Resgrid.Audio.Core
 					{
 						_logger.Debug($"AudioEvaluator->CheckFinishedTonesForTriggers: Check Watcher {watcher.Name} triggers");
 
-						if (!_startedWatchers.Contains(watcher.Id))
+						bool alreadyActive;
+						lock (_lock)
+							alreadyActive = _startedWatchers.Contains(watcher.Id);
+
+						if (!alreadyActive)
 						{
 							_logger.Debug($"AudioEvaluator->CheckFinishedTonesForTriggers: Watcher {watcher.Name} is not currently active in this tone bank, checking tones.");
 

@@ -62,11 +62,27 @@ namespace Resgrid.Audio.Core.Radio
 		/// <summary>Play a short courtesy beep on the channel when the radio unkeys.</summary>
 		public bool CourtesyTone { get; set; } = true;
 
+		/// <summary>
+		/// Delay between keying PTT and playing the first channel audio to the radio (0 = none, max 3000). Radios that need
+		/// time after keying before they pass mic audio — push-to-talk-over-cellular (PoC/LTE) radios waiting for the server
+		/// to grant the floor, or slow-keying transmitters — otherwise cut off the first words. Channel audio is delayed by
+		/// this much for the whole transmission, and the unkey tail is extended to match. Ignored with Vox keying (silence
+		/// cannot key a VOX interface, so it would only add delay).
+		/// </summary>
+		public int TxLeadMs { get; set; } = 0;
+
 		/// <summary>Keep PTT keyed this long after channel audio stops (avoids choppy tails).</summary>
 		public int TxHangMs { get; set; } = 300;
 
 		/// <summary>Extra dead-carrier time after audio before dropping PTT.</summary>
 		public int TxTailMs { get; set; } = 150;
+
+		/// <summary>
+		/// Transmit time-out (seconds; 0 = no limit). A channel talker who holds the radio keyed longer than this — a stuck
+		/// mic, an open hot mic — is cut off: PTT drops and their audio is ignored until they go quiet, so the relay cannot sit
+		/// on the frequency indefinitely.
+		/// </summary>
+		public int MaxTransmitSeconds { get; set; } = 180;
 
 		/// <summary>Prevent relaying audio back to the side it came from (half-duplex arbitration).</summary>
 		public bool AntiLoop { get; set; } = true;

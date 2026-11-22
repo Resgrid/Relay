@@ -26,6 +26,7 @@ namespace Resgrid.Audio.Relay.Services
 		private readonly ILogger _logger;
 		private readonly object _gate = new object();
 		private readonly Dictionary<IRelayService, RunningEntry> _entries = new Dictionary<IRelayService, RunningEntry>();
+		private readonly Dictionary<string, string> _lastErrors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
 		public RelayController(ILogger logger)
 		{
@@ -107,6 +108,10 @@ namespace Resgrid.Audio.Relay.Services
 				throw new ArgumentNullException(nameof(options));
 
 			var service = RelayServiceFactory.Create(options, _logger);
+			lock (_gate)
+			{
+				_lastErrors.Remove(service.Mode);
+			}
 			var cts = new CancellationTokenSource();
 			var entry = new RunningEntry(service, cts);
 
@@ -193,8 +198,33 @@ namespace Resgrid.Audio.Relay.Services
 				await StopAsync(service).ConfigureAwait(false);
 		}
 
+		/// <summary>The fault message from the last time <paramref name="mode"/> faulted, or null.</summary>
+		public string GetLastError(string mode)
+		{
+			if (string.IsNullOrEmpty(mode))
+				return null;
+
+			lock (_gate)
+			{
+				return _lastErrors.TryGetValue(mode, out var error) ? error : null;
+			}
+		}
+
+		/// <summary>Raised (on the UI thread) when a running service faults, with its mode and fault message.</summary>
+		public event EventHandler<RelayFaultEventArgs> ServiceFaulted;
+
 		private void OnServiceStateChanged(object sender, RelayStateChangedEventArgs e)
 		{
+			if (e.NewState == RelayServiceState.Faulted && sender is IRelayService service)
+			{
+				var message = string.IsNullOrWhiteSpace(e.Error) ? "The service faulted." : e.Error;
+				lock (_gate)
+				{
+					_lastErrors[service.Mode] = message;
+				}
+				Post(() => ServiceFaulted?.Invoke(this, new RelayFaultEventArgs(service.Mode, message)));
+			}
+
 			RaiseOverallStateChanged();
 		}
 
@@ -214,6 +244,29 @@ namespace Resgrid.Audio.Relay.Services
 				dispatcher.BeginInvoke(action);
 		}
 
+		/// <summary>The current tracked service for <paramref name="mode"/>, or null.</summary>
+		public IRelayService Find(string mode)
+		{
+			lock (_gate)
+			{
+				return _entries.Keys.FirstOrDefault(s => string.Equals(s.Mode, mode, StringComparison.OrdinalIgnoreCase));
+			}
+		}
+
+		/// <summary>When the tracked service for <paramref name="mode"/> was started (UTC), or null.</summary>
+		public DateTime? StartedAtUtc(string mode)
+		{
+			lock (_gate)
+			{
+				foreach (var pair in _entries)
+				{
+					if (string.Equals(pair.Key.Mode, mode, StringComparison.OrdinalIgnoreCase))
+						return pair.Value.StartedAtUtc;
+				}
+				return null;
+			}
+		}
+
 		private sealed class RunningEntry
 		{
 			public RunningEntry(IRelayService service, CancellationTokenSource cts)
@@ -225,6 +278,20 @@ namespace Resgrid.Audio.Relay.Services
 			public IRelayService Service { get; }
 			public CancellationTokenSource Cts { get; }
 			public Task RunTask { get; set; }
+			public DateTime StartedAtUtc { get; } = DateTime.UtcNow;
 		}
+	}
+
+	/// <summary>A relay mode fault, raised by <see cref="RelayController.ServiceFaulted"/>.</summary>
+	public sealed class RelayFaultEventArgs : EventArgs
+	{
+		public RelayFaultEventArgs(string mode, string error)
+		{
+			Mode = mode;
+			Error = error;
+		}
+
+		public string Mode { get; }
+		public string Error { get; }
 	}
 }

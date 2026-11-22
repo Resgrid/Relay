@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -8,20 +9,19 @@ using Resgrid.Relay.Engine;
 namespace Resgrid.Audio.Relay.ViewModels
 {
 	/// <summary>
-	/// View-model for the shell window: owns the overall health "traffic-light" and the
-	/// master Start/Stop area. The buttons are intentionally minimal for now — they start the
-	/// single configured mode and stop everything; the richer per-mode Operations screen lands
-	/// in the next UI pass.
+	/// View-model for the shell window: the overall health light, the status text, the footer Start/Stop buttons (which
+	/// run the default modes through <see cref="RelayModeLauncher"/>) and the tray tooltip.
 	/// </summary>
 	public partial class ShellViewModel : ObservableObject
 	{
 		private readonly RelayController _controller;
-		private readonly ConfigurationService _configuration;
+		private readonly RelayModeLauncher _launcher;
+		private string _lastProblem;
 
-		public ShellViewModel(RelayController controller, ConfigurationService configuration)
+		public ShellViewModel(RelayController controller, RelayModeLauncher launcher)
 		{
 			_controller = controller;
-			_configuration = configuration;
+			_launcher = launcher;
 			_controller.OverallStateChanged += OnOverallStateChanged;
 			UpdateState();
 		}
@@ -37,35 +37,47 @@ namespace Resgrid.Audio.Relay.ViewModels
 		[ObservableProperty]
 		private string _statusText = "Stopped";
 
-		/// <summary>Starts the single configured mode (placeholder master start).</summary>
-		[RelayCommand]
-		private void Start()
-		{
-			if (_controller.IsRunning)
-				return;
+		[ObservableProperty]
+		private string _trayToolTip = "Resgrid Relay — stopped";
 
-			// TODO (next UI pass): let the operator pick which mode(s) to run; for now we start
-			// the single mode from the loaded configuration.
-			_controller.Start(_configuration.Current);
+		/// <summary>Starts the default modes (auto-start set, or the configured mode).</summary>
+		[RelayCommand]
+		private async Task Start()
+		{
+			var problems = await _launcher.StartDefaultModesAsync().ConfigureAwait(true);
+			_lastProblem = problems.Count > 0 ? problems[0] : null;
+			UpdateState();
 		}
 
 		/// <summary>Stops every running mode.</summary>
 		[RelayCommand]
-		private async Task StopAsync()
+		private async Task Stop()
 		{
+			_lastProblem = null;
 			await _controller.StopAllAsync().ConfigureAwait(true);
-		}
-
-		private void OnOverallStateChanged(object sender, EventArgs e)
-		{
 			UpdateState();
 		}
+
+		private void OnOverallStateChanged(object sender, EventArgs e) => UpdateState();
 
 		private void UpdateState()
 		{
 			OverallState = _controller.OverallState;
 			IsRunning = _controller.IsRunning;
-			StatusText = IsRunning ? OverallState.ToString() : "Stopped";
+
+			var running = _controller.RunningServices.ToList();
+			if (running.Count == 0)
+			{
+				StatusText = _lastProblem ?? "Stopped";
+				TrayToolTip = "Resgrid Relay — stopped";
+				return;
+			}
+
+			var parts = running.Select(s => $"{RelayModeLauncher.FriendlyName(s.Mode)}: {s.State}");
+			StatusText = string.Join("   ·   ", parts);
+			// Windows truncates tray tooltips at 127 characters.
+			var tip = "Resgrid Relay — " + string.Join(", ", running.Select(s => $"{RelayModeLauncher.FriendlyName(s.Mode)} {s.State}"));
+			TrayToolTip = tip.Length > 120 ? tip.Substring(0, 120) + "…" : tip;
 		}
 	}
 }

@@ -42,11 +42,23 @@ namespace Resgrid.Relay.Engine.Configuration
 
 		/// <summary>Optional DispatchList for the emergency call (e.g. "G:42").</summary>
 		public string DispatchList { get; set; } = "";
+
+		/// <summary>
+		/// Repeats of the same emergency (same source and unit/tone) inside this window create no further calls; radios resend
+		/// MDC-1200 emergency packets until acknowledged.
+		/// </summary>
+		public int CooldownSeconds { get; set; } = 120;
 	}
 
 	/// <summary>Physical radio interface options (radio mode, Windows).</summary>
 	public sealed class RadioModeOptions
 	{
+		/// <summary>
+		/// The <see cref="RadioProfiles"/> preset these settings came from (custom | analog | rapidradios | digatalkplus | poc).
+		/// Informational: the values below are what runs; the profile only drives setup advice and start-up warnings.
+		/// </summary>
+		public string Profile { get; set; } = RadioProfiles.CustomKey;
+
 		public int InputDevice { get; set; }
 		public int OutputDevice { get; set; } = -1;
 
@@ -63,8 +75,22 @@ namespace Resgrid.Relay.Engine.Configuration
 		public bool CarrierDetectInverted { get; set; }
 
 		public bool CourtesyTone { get; set; } = true;
+
+		/// <summary>
+		/// Milliseconds between keying PTT and the first channel audio (0–3000). Set 500–800 for PoC/LTE radios that wait
+		/// for a floor grant before passing mic audio. Ignored with Vox keying.
+		/// </summary>
+		public int TxLeadMs { get; set; } = 0;
+
 		public int TxHangMs { get; set; } = 300;
 		public int TxTailMs { get; set; } = 150;
+
+		/// <summary>
+		/// Transmit time-out in seconds (0 = no limit): a channel talker holding the radio keyed longer than this is cut off and
+		/// ignored until they stop talking.
+		/// </summary>
+		public int MaxTransmitSeconds { get; set; } = 180;
+
 		public bool AntiLoop { get; set; } = true;
 		public double TxGain { get; set; } = 1.0;
 		public double RxGain { get; set; } = 1.0;
@@ -121,6 +147,9 @@ namespace Resgrid.Relay.Engine.Configuration
 
 		/// <summary>How often to poll for new calls to announce.</summary>
 		public int PollSeconds { get; set; } = 15;
+
+		/// <summary>How long a call's tone-out is retried (every poll) before the relay gives up on it and logs an error.</summary>
+		public int GiveUpAfterMinutes { get; set; } = 10;
 
 		/// <summary>Alert tone profile played before the spoken announcement.</summary>
 		public ToneProfile Tone { get; set; } = new ToneProfile();

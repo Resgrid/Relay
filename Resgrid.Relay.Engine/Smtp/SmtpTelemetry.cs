@@ -36,10 +36,29 @@ namespace Resgrid.Relay.Engine.Smtp
 		void MessageReceived(ISessionContext context, SmtpMessageSummary message);
 		void DuplicateMessage(ISessionContext context, SmtpMessageSummary message);
 		void UnroutableMessage(ISessionContext context, SmtpMessageSummary message);
+
+		/// <summary>The message bytes could not be read as MIME, so there is no summary; it was bounced with <paramref name="smtpReply"/>.</summary>
+		void UnparseableMessage(ISessionContext context, long sizeBytes, string smtpReply, Exception exception);
 		void UnsupportedTarget(ISessionContext context, SmtpMessageSummary message);
 		void MessageProcessingStarted(ISessionContext context, SmtpMessageSummary message);
 		void MessageProcessed(ISessionContext context, SmtpMessageSummary message, TimeSpan duration);
 		void MessageFailed(ISessionContext context, SmtpMessageSummary message, Exception exception, TimeSpan duration);
+
+		/// <summary>
+		/// Another delivery of the same dispatch (same message id and recipients) is still being processed, so this one was asked
+		/// to retry (451) instead of being answered before the first attempt is known to have worked.
+		/// </summary>
+		void MessageInProgress(ISessionContext context, SmtpMessageSummary message)
+		{
+		}
+
+		/// <summary>
+		/// Something went wrong that did not stop the dispatch: the raw copy could not be written, the duplicate store could not
+		/// be updated, old raw copies could not be pruned. <paramref name="context"/> and <paramref name="message"/> may be null.
+		/// </summary>
+		void ProcessingWarning(ISessionContext context, SmtpMessageSummary message, string warning, Exception exception)
+		{
+		}
 	}
 
 	public sealed class SmtpTelemetry : ISmtpTelemetry
@@ -312,13 +331,15 @@ namespace Resgrid.Relay.Engine.Smtp
 		{
 			var state = SmtpSessionStateAccessor.GetOrCreate(context);
 			_logger.Warning(
-				"SMTP message did not contain a usable Resgrid dispatch recipient. SessionId={SessionId} StableMessageId={StableMessageId} MessageId={MessageId} From={@FromAddresses} To={@ToAddresses} Cc={@CcAddresses} Subject={Subject}",
+				"SMTP message did not contain a usable Resgrid dispatch recipient. SessionId={SessionId} StableMessageId={StableMessageId} MessageId={MessageId} From={@FromAddresses} To={@ToAddresses} Cc={@CcAddresses} UnresolvedTargets={@UnresolvedTargets} SmtpReply={SmtpReply} Subject={Subject}",
 				state.SessionId,
 				message.StableMessageId,
 				message.ReferenceMessageId,
 				message.FromAddresses,
 				message.ToAddresses,
 				message.CcAddresses,
+				message.UnresolvedTargets,
+				message.SmtpReply,
 				message.Subject);
 
 			_countlyClient.TrackEvent("smtp_message_unroutable", MergeSegmentations(
@@ -326,6 +347,27 @@ namespace Resgrid.Relay.Engine.Smtp
 				new Dictionary<string, string>
 				{
 					["route_kind"] = "none"
+				}));
+		}
+
+		public void UnparseableMessage(ISessionContext context, long sizeBytes, string smtpReply, Exception exception)
+		{
+			var state = SmtpSessionStateAccessor.GetOrCreate(context);
+			_logger.Warning(
+				exception,
+				"SMTP message could not be parsed and was bounced. SessionId={SessionId} RemoteEndPoint={RemoteEndPoint} Sender={Sender} SizeBytes={SizeBytes} SmtpReply={SmtpReply}",
+				state.SessionId,
+				state.RemoteEndPoint,
+				state.Sender,
+				sizeBytes,
+				smtpReply);
+
+			_countlyClient.TrackEvent("smtp_message_unparseable", MergeSegmentations(
+				BuildConnectionSegmentation(state),
+				new Dictionary<string, string>
+				{
+					["failure_type"] = exception?.GetType().Name ?? "UnknownException",
+					["smtp_disposition"] = "bounced"
 				}));
 		}
 
@@ -369,14 +411,18 @@ namespace Resgrid.Relay.Engine.Smtp
 		{
 			var state = SmtpSessionStateAccessor.GetOrCreate(context);
 			_logger.Information(
-				"Processed SMTP message into Resgrid call. SessionId={SessionId} StableMessageId={StableMessageId} MessageId={MessageId} CallId={CallId} RouteKind={RouteKind} AttachmentCount={AttachmentCount} OversizedAttachmentCount={OversizedAttachmentCount} DurationMs={DurationMs}",
+				"Processed SMTP message into Resgrid call. SessionId={SessionId} StableMessageId={StableMessageId} MessageId={MessageId} CallId={CallId} CreatedAsPending={CreatedAsPending} GroupMessageId={GroupMessageId} UnresolvedTargets={@UnresolvedTargets} RouteKind={RouteKind} AttachmentCount={AttachmentCount} OversizedAttachmentCount={OversizedAttachmentCount} RejectedAttachmentNames={@RejectedAttachmentNames} DurationMs={DurationMs}",
 				state.SessionId,
 				message.StableMessageId,
 				message.ReferenceMessageId,
 				message.CallId,
+				message.CreatedAsPending,
+				message.GroupMessageId,
+				message.UnresolvedTargets,
 				message.RouteKind,
 				message.AttachmentCount,
 				message.OversizedAttachmentCount,
+				message.RejectedAttachmentNames,
 				(long)duration.TotalMilliseconds);
 
 			_countlyClient.TrackEvent("smtp_message_processed", MergeSegmentations(
@@ -394,7 +440,7 @@ namespace Resgrid.Relay.Engine.Smtp
 
 			_logger.Error(
 				exception,
-				"Failed processing SMTP message. SessionId={SessionId} StableMessageId={StableMessageId} MessageId={MessageId} CallId={CallId} Subject={Subject} RouteKind={RouteKind} DispatchTargets={@DispatchTargets} AttachmentNames={@AttachmentNames} OversizedAttachmentNames={@OversizedAttachmentNames} DurationMs={DurationMs}",
+				"Failed processing SMTP message. SessionId={SessionId} StableMessageId={StableMessageId} MessageId={MessageId} CallId={CallId} Subject={Subject} RouteKind={RouteKind} DispatchTargets={@DispatchTargets} AttachmentNames={@AttachmentNames} OversizedAttachmentNames={@OversizedAttachmentNames} SmtpReply={SmtpReply} DurationMs={DurationMs}",
 				state.SessionId,
 				message.StableMessageId,
 				message.ReferenceMessageId,
@@ -404,6 +450,7 @@ namespace Resgrid.Relay.Engine.Smtp
 				message.DispatchTargets,
 				message.AttachmentNames,
 				message.OversizedAttachmentNames,
+				message.SmtpReply,
 				(long)duration.TotalMilliseconds);
 
 			_countlyClient.TrackEvent("smtp_message_failed", MergeSegmentations(
@@ -411,10 +458,37 @@ namespace Resgrid.Relay.Engine.Smtp
 				new Dictionary<string, string>
 				{
 					["outcome"] = "failed",
-					["failure_type"] = exception?.GetType().Name ?? "UnknownException"
+					["failure_type"] = exception?.GetType().Name ?? "UnknownException",
+					["smtp_reply_code"] = message.SmtpReplyCode?.ToString() ?? "none",
+					["smtp_disposition"] = message.SmtpReplyCode >= 500 ? "bounced" : "retry_requested"
 				}), duration);
 
 			CaptureException(exception, state, message, "message_failed");
+		}
+
+		public void MessageInProgress(ISessionContext context, SmtpMessageSummary message)
+		{
+			var state = SmtpSessionStateAccessor.GetOrCreate(context);
+			_logger.Information(
+				"SMTP message is already being processed by another delivery; asked the sender to retry. SessionId={SessionId} StableMessageId={StableMessageId} MessageId={MessageId} Subject={Subject}",
+				state.SessionId,
+				message?.StableMessageId,
+				message?.ReferenceMessageId,
+				message?.Subject);
+
+			_countlyClient.TrackEvent("smtp_message_in_progress", message == null ? BuildConnectionSegmentation(state) : BuildMessageSegmentation(state, message));
+		}
+
+		public void ProcessingWarning(ISessionContext context, SmtpMessageSummary message, string warning, Exception exception)
+		{
+			var state = context == null ? null : SmtpSessionStateAccessor.GetOrCreate(context);
+			_logger.Warning(
+				exception,
+				"SMTP relay warning: {Warning}. SessionId={SessionId} StableMessageId={StableMessageId} MessageId={MessageId}",
+				warning,
+				state?.SessionId,
+				message?.StableMessageId,
+				message?.ReferenceMessageId);
 		}
 
 		public async ValueTask DisposeAsync()
@@ -701,6 +775,13 @@ namespace Resgrid.Relay.Engine.Smtp
 		public string[] DispatchTargets { get; private set; } = Array.Empty<string>();
 		public string[] AttachmentNames { get; private set; } = Array.Empty<string>();
 		public string[] OversizedAttachmentNames { get; private set; } = Array.Empty<string>();
+
+		/// <summary>Attachments Resgrid refused for good after the call was saved; the call went out without them.</summary>
+		public string[] RejectedAttachmentNames { get; private set; } = Array.Empty<string>();
+
+		/// <summary>The SMTP reply a failed message got: 451 asks the sender to retry, 554 bounces it.</summary>
+		public int? SmtpReplyCode { get; private set; }
+		public string SmtpReply { get; private set; }
 		public string RawMessagePath { get; set; }
 		public string CallId { get; set; }
 		public int BodyLength { get; private set; }
@@ -765,6 +846,35 @@ namespace Resgrid.Relay.Engine.Smtp
 			var items = attachments?.ToList() ?? new List<AttachmentPayload>();
 			AttachmentNames = items.Select(x => x.Name).ToArray();
 			OversizedAttachmentNames = items.Where(x => x.Data.Length > maxAttachmentBytes).Select(x => x.Name).ToArray();
+		}
+
+		public void AddRejectedAttachment(string name)
+		{
+			RejectedAttachmentNames = RejectedAttachmentNames.Append(name).ToArray();
+		}
+
+		/// <summary>Recipients that named no department/group Resgrid knows (or one outside the message's department); dropped.</summary>
+		public string[] UnresolvedTargets { get; private set; } = Array.Empty<string>();
+
+		/// <summary>
+		/// The call was saved as a pending call (system API key + department-wide dispatch): Resgrid never lets the system key page
+		/// a whole department by itself, so a dispatcher has to send it.
+		/// </summary>
+		public bool CreatedAsPending { get; set; }
+
+		/// <summary>The Resgrid message id when the email went to a group-message address.</summary>
+		public string GroupMessageId { get; set; }
+
+		public void AddUnresolvedTarget(DispatchCode target, string reason)
+		{
+			if (target != null)
+				UnresolvedTargets = UnresolvedTargets.Append($"{(int)target.Type}:{target.Code} ({reason})").ToArray();
+		}
+
+		public void SetSmtpReply(int replyCode, string reply)
+		{
+			SmtpReplyCode = replyCode;
+			SmtpReply = $"{replyCode} {reply}";
 		}
 
 		private static string NormalizeMessageId(string messageId)
@@ -872,11 +982,20 @@ namespace Resgrid.Relay.Engine.Smtp
 		}
 	}
 
+	/// <summary>
+	/// Sends telemetry events to Countly from a background queue. The queue is bounded (the oldest events are dropped once
+	/// <see cref="MaxQueuedEvents"/> are waiting) and shutdown waits at most <see cref="DisposeDeadline"/> for it to drain, so
+	/// an unreachable or black-holed Countly neither grows memory without bound nor holds up stopping the relay.
+	/// </summary>
 	internal sealed class CountlyTelemetryClient : IAsyncDisposable
 	{
+		internal const int MaxQueuedEvents = 1000;
+		internal static readonly TimeSpan DisposeDeadline = TimeSpan.FromSeconds(5);
+
 		private readonly ILogger _logger;
 		private readonly HttpClient _httpClient;
 		private readonly Channel<CountlyEventRequest> _eventChannel;
+		private readonly CancellationTokenSource _shutdown = new CancellationTokenSource();
 		private readonly Task _worker;
 		private readonly string _appKey;
 		private readonly string _deviceId;
@@ -907,8 +1026,9 @@ namespace Resgrid.Relay.Engine.Smtp
 				Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds <= 0 ? 5 : options.RequestTimeoutSeconds)
 			};
 
-			_eventChannel = Channel.CreateUnbounded<CountlyEventRequest>(new UnboundedChannelOptions
+			_eventChannel = Channel.CreateBounded<CountlyEventRequest>(new BoundedChannelOptions(MaxQueuedEvents)
 			{
+				FullMode = BoundedChannelFullMode.DropOldest,
 				SingleReader = true,
 				SingleWriter = false
 			});
@@ -942,29 +1062,51 @@ namespace Resgrid.Relay.Engine.Smtp
 				return;
 
 			_eventChannel.Writer.TryComplete();
-			await _worker.ConfigureAwait(false);
+
+			// Let what is queued go out, but only for so long: with Countly unreachable every event would wait out its own request
+			// timeout and shutdown would take minutes. Whatever is still queued at the deadline is dropped.
+			if (await Task.WhenAny(_worker, Task.Delay(DisposeDeadline)).ConfigureAwait(false) != _worker)
+			{
+				_shutdown.Cancel();
+				_logger.Warning("Countly did not take the queued SMTP telemetry events within {Deadline}; dropping the rest", DisposeDeadline);
+				await Task.WhenAny(_worker, Task.Delay(TimeSpan.FromSeconds(1))).ConfigureAwait(false);
+			}
+
 			_httpClient.Dispose();
+			_shutdown.Dispose();
 		}
 
 		private async Task ProcessQueueAsync()
 		{
-			while (await _eventChannel.Reader.WaitToReadAsync().ConfigureAwait(false))
+			var cancellationToken = _shutdown.Token;
+			try
 			{
-				while (_eventChannel.Reader.TryRead(out var eventRequest))
+				while (await _eventChannel.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
 				{
-					try
+					while (!cancellationToken.IsCancellationRequested && _eventChannel.Reader.TryRead(out var eventRequest))
 					{
-						await SendEventAsync(eventRequest).ConfigureAwait(false);
-					}
-					catch (Exception ex)
-					{
-						_logger.Warning(ex, "Failed sending SMTP telemetry event {EventKey} to Countly", eventRequest.Key);
+						try
+						{
+							await SendEventAsync(eventRequest, cancellationToken).ConfigureAwait(false);
+						}
+						catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+						{
+							return;
+						}
+						catch (Exception ex)
+						{
+							_logger.Warning(ex, "Failed sending SMTP telemetry event {EventKey} to Countly", eventRequest.Key);
+						}
 					}
 				}
 			}
+			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+			{
+				// Shut down past the deadline; the remaining events are dropped.
+			}
 		}
 
-		private async Task SendEventAsync(CountlyEventRequest eventRequest)
+		private async Task SendEventAsync(CountlyEventRequest eventRequest, CancellationToken cancellationToken)
 		{
 			var payload = JsonSerializer.Serialize(new[]
 			{
@@ -985,10 +1127,10 @@ namespace Resgrid.Relay.Engine.Smtp
 				["events"] = payload
 			});
 
-			using var response = await _httpClient.PostAsync("i", content).ConfigureAwait(false);
+			using var response = await _httpClient.PostAsync("i", content, cancellationToken).ConfigureAwait(false);
 			if (!response.IsSuccessStatusCode)
 			{
-				var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+				var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 				_logger.Warning(
 					"Countly rejected SMTP telemetry event {EventKey} with status {StatusCode}. Response={ResponseBody}",
 					eventRequest.Key,

@@ -13,85 +13,70 @@ namespace Resgrid.Audio.Core
 		void Clear();
 	}
 
+	/// <summary>
+	/// Per-watcher audio buffers for the tone-detect pipeline. Written from the capture thread and read/cleared from the
+	/// processing timer, so every access (including the existence checks) is under one lock. Per instance: the storage was
+	/// static, so a pipeline restarted in the same process (the desktop app) shared and wiped the previous one's buffers.
+	/// </summary>
 	public class WatcherAudioStorage : IWatcherAudioStorage
 	{
-		private static Object _lock = new Object();
+		private readonly object _lock = new object();
 		private readonly ILogger _logger;
-		private static Dictionary<Guid, List<byte>> _watcherAudio;
+		private Dictionary<Guid, List<byte>> _watcherAudio = new Dictionary<Guid, List<byte>>();
 
 		public WatcherAudioStorage(ILogger logger)
 		{
 			_logger = logger;
-			_watcherAudio = new Dictionary<Guid, List<byte>>();
 		}
 
 		public void StartNewAudio(Guid watcherId, byte[] initalAudio)
 		{
-			if (!_watcherAudio.ContainsKey(watcherId))
+			lock (_lock)
 			{
-				lock (_lock)
+				if (_watcherAudio.ContainsKey(watcherId))
 				{
-					if (initalAudio != null && initalAudio.Length > 0)
-						_watcherAudio.Add(watcherId, new List<byte>(initalAudio));
-					else
-						_watcherAudio.Add(watcherId, new List<byte>());
-
-					_logger.Debug($"Adding watcher data collection with Id of {watcherId}, total of {_watcherAudio.Count} watchers awaiting data.");
+					_logger?.Debug("Watcher audio for {WatcherId} already exists; {Count} watchers awaiting data", watcherId, _watcherAudio.Count);
+					return;
 				}
-			}
-			else
-			{
-				_logger.Debug($"Trying to add watcher audio with Id of {watcherId} but it already exists, total of {_watcherAudio.Count} watchers awaiting data.");
+
+				_watcherAudio.Add(watcherId, initalAudio != null && initalAudio.Length > 0 ? new List<byte>(initalAudio) : new List<byte>());
+				_logger?.Debug("Collecting audio for watcher {WatcherId}; {Count} watchers awaiting data", watcherId, _watcherAudio.Count);
 			}
 		}
 
 		public void FinishWatcher(Guid watcherId)
 		{
-			if (_watcherAudio.ContainsKey(watcherId))
+			lock (_lock)
 			{
-				lock (_lock)
-				{
-					_watcherAudio.Remove(watcherId);
-					_logger.Debug($"Removed watcher with Id of {watcherId} leaving {_watcherAudio.Count} watchers awaiting data.");
-				}
-			}
-			else
-			{
-				_logger.Debug($"Unable to finish watcher with Id of {watcherId}.");
+				if (_watcherAudio.Remove(watcherId))
+					_logger?.Debug("Finished watcher {WatcherId}; {Count} watchers awaiting data", watcherId, _watcherAudio.Count);
+				else
+					_logger?.Debug("Unable to finish watcher {WatcherId}: no audio collected", watcherId);
 			}
 		}
 
 		public void AddAudio(Guid watcherId, byte[] audio)
 		{
-			if (_watcherAudio.ContainsKey(watcherId))
-			{
-				lock (_lock)
-				{
-					_watcherAudio[watcherId].AddRange(audio);
-				}
+			if (audio == null || audio.Length == 0)
+				return;
 
-				_logger.Debug($"Added watch audio for watcher with Id of {watcherId} with size of {GetNonZeroArrayLength(audio)}.");
-			}
-			else
+			// Called for every captured sample while a watcher records, so no per-call logging.
+			lock (_lock)
 			{
-				_logger.Debug($"Unable to add watch audio for watcher with Id of {watcherId} with size of {GetNonZeroArrayLength(audio)}.");
+				if (_watcherAudio.TryGetValue(watcherId, out var buffer))
+					buffer.AddRange(audio);
 			}
 		}
 
 		public byte[] GetAudio(Guid watcherId)
 		{
-			if (_watcherAudio.ContainsKey(watcherId))
+			lock (_lock)
 			{
-				lock (_lock)
-				{
-					return _watcherAudio[watcherId].ToArray();
-				}
-			}
-			else
-			{
-				_logger.Debug($"Unable to get watcher audio with a watcher Id of {watcherId}.");
+				if (_watcherAudio.TryGetValue(watcherId, out var buffer))
+					return buffer.ToArray();
 			}
 
+			_logger?.Debug("No watcher audio for {WatcherId}", watcherId);
 			return null;
 		}
 
@@ -102,19 +87,7 @@ namespace Resgrid.Audio.Core
 				_watcherAudio = new Dictionary<Guid, List<byte>>();
 			}
 
-			_logger.Debug($"Clearing all watcher audio.");
-		}
-
-		private int GetNonZeroArrayLength(byte[] array)
-		{
-			int count = 0;
-			for (int i = 0; i < array.Length; i++)
-			{
-				if (array[i] > 0)
-					count++;
-			}
-			return count;
-
+			_logger?.Debug("Cleared all watcher audio");
 		}
 	}
 }

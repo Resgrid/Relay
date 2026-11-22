@@ -16,6 +16,10 @@ namespace Resgrid.Relay.Engine.Smtp
 	public interface IDispatchLookupCache : IAsyncDisposable
 	{
 		/// <summary>Retrieve a cached group lookup by dispatch email code.</summary>
+		Task<DepartmentLookupResult> GetDepartmentByDispatchCodeAsync(string code);
+
+		Task SetDepartmentByDispatchCodeAsync(string code, DepartmentLookupResult result);
+
 		Task<GroupLookupResult> GetGroupByDispatchCodeAsync(string code, string departmentId);
 
 		/// <summary>Retrieve a cached group lookup by message email code.</summary>

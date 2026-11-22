@@ -38,37 +38,74 @@ namespace Resgrid.Relay.Engine.Smtp
 				return result;
 
 			foreach (var address in addresses)
+				AddRecipient(result, address, mayChooseDepartment: true);
+
+			ApplyDefaultDepartment(result);
+			return result;
+		}
+
+		/// <summary>
+		/// Parses the envelope (RCPT TO) recipients and then the To/Cc header addresses. The envelope is what the relay accepted
+		/// the message for, so it alone decides the department: a header address never sets it, and one with a hosted-mode
+		/// subdomain is kept only when that subdomain is the envelope's department (otherwise it is another department's
+		/// dispatch, recorded in <see cref="DispatchParseResult.OtherDepartmentAddresses"/>). Without envelope dispatch codes
+		/// this is <see cref="ParseRecipients(IEnumerable{string})"/> over the headers.
+		/// </summary>
+		public DispatchParseResult ParseRecipients(IEnumerable<string> envelopeAddresses, IEnumerable<string> headerAddresses)
+		{
+			var envelope = envelopeAddresses?.Where(x => !String.IsNullOrWhiteSpace(x)).ToList() ?? new List<string>();
+			var headers = headerAddresses?.Where(x => !String.IsNullOrWhiteSpace(x)).ToList() ?? new List<string>();
+
+			var result = new DispatchParseResult();
+			foreach (var address in envelope)
+				AddRecipient(result, address, mayChooseDepartment: true);
+
+			if (result.DispatchCodes.Count == 0)
+				return ParseRecipients(envelope.Concat(headers).Distinct(StringComparer.OrdinalIgnoreCase));
+
+			foreach (var address in headers.Where(x => !envelope.Contains(x, StringComparer.OrdinalIgnoreCase)))
+				AddRecipient(result, address, mayChooseDepartment: false);
+
+			ApplyDefaultDepartment(result);
+			return result;
+		}
+
+		private void AddRecipient(DispatchParseResult result, string address, bool mayChooseDepartment)
+		{
+			if (!TryParse(address, out var dispatchCode, out var departmentId))
+				return;
+
+			// Reject entries that are duplicates on (departmentId, Type, Code)
+			// rather than just Code alone — same code with a different type
+			// or from a different department is a distinct dispatch target.
+			if (result.DispatchCodes.Any(x =>
+				String.Equals(x.Code, dispatchCode.Code, StringComparison.OrdinalIgnoreCase) &&
+				x.Type == dispatchCode.Type &&
+				String.Equals(departmentId, result.DepartmentId, StringComparison.OrdinalIgnoreCase)))
+				return;
+
+			// In hosted mode, an entry for a different department than the one already resolved for this message is not
+			// part of this dispatch. It is recorded rather than dropped, so the caller can dispatch it on its own.
+			if (!String.IsNullOrWhiteSpace(departmentId) &&
+				((!String.IsNullOrWhiteSpace(result.DepartmentId) && !String.Equals(departmentId, result.DepartmentId, StringComparison.OrdinalIgnoreCase)) ||
+				 (String.IsNullOrWhiteSpace(result.DepartmentId) && !mayChooseDepartment)))
 			{
-				if (TryParse(address, out var dispatchCode, out var departmentId))
-				{
-					// Reject entries that are duplicates on (departmentId, Type, Code)
-					// rather than just Code alone — same code with a different type
-					// or from a different department is a distinct dispatch target.
-					if (result.DispatchCodes.Any(x =>
-						String.Equals(x.Code, dispatchCode.Code, StringComparison.OrdinalIgnoreCase) &&
-						x.Type == dispatchCode.Type &&
-						String.Equals(departmentId, result.DepartmentId, StringComparison.OrdinalIgnoreCase)))
-						continue;
-
-					// In hosted mode, reject entries that target a different department
-					// than what has already been resolved for this message.
-					if (!String.IsNullOrWhiteSpace(departmentId) &&
-						!String.IsNullOrWhiteSpace(result.DepartmentId) &&
-						!String.Equals(departmentId, result.DepartmentId, StringComparison.OrdinalIgnoreCase))
-						continue;
-
-					result.DispatchCodes.Add(dispatchCode);
-
-					if (!String.IsNullOrWhiteSpace(departmentId) && String.IsNullOrWhiteSpace(result.DepartmentId))
-						result.DepartmentId = departmentId;
-				}
+				result.AddOtherDepartmentAddress(address);
+				return;
 			}
 
+			result.DispatchCodes.Add(dispatchCode);
+			result.SetAddress(dispatchCode, address);
+
+			if (!String.IsNullOrWhiteSpace(departmentId) && String.IsNullOrWhiteSpace(result.DepartmentId))
+				result.DepartmentId = departmentId;
+		}
+
+		private void ApplyDefaultDepartment(DispatchParseResult result)
+		{
 			// A static DefaultDepartmentId overrides domain-based detection.
 			if (!String.IsNullOrWhiteSpace(_options.DefaultDepartmentId))
 				result.DepartmentId = _options.DefaultDepartmentId;
-
-			return result;
 		}
 
 		public bool TryParse(string address, out DispatchCode dispatchCode)
@@ -105,16 +142,19 @@ namespace Resgrid.Relay.Engine.Smtp
 				return true;
 
 			// Hosted mode: the domain may have a department prefix.
-			// Example: station5.dept123.dispatch.resgrid.com
+			// Example: station5@dept123.dispatch.resgrid.com
 			//   → code = "station5", departmentId = "dept123"
+			// Only the first separator splits the department off; the rest is the base domain as configured. (Splitting on every
+			// separator and rejoining with it only worked for "."; with "-" a base domain such as dispatch.resgrid.com never
+			// contains the separator, so nothing ever matched.)
 			if (_options.HostedMode)
 			{
-				var domainParts = domain.Split(new[] { _options.DepartmentDomainSeparator }, StringSplitOptions.RemoveEmptyEntries);
-				if (domainParts.Length >= 3)
+				var separator = String.IsNullOrEmpty(_options.DepartmentDomainSeparator) ? "." : _options.DepartmentDomainSeparator;
+				var separatorIndex = domain.IndexOf(separator, StringComparison.Ordinal);
+				if (separatorIndex > 0 && separatorIndex + separator.Length < domain.Length)
 				{
-					// The first segment is the department ID, the rest is the base domain.
-					var extractedDepartmentId = domainParts[0];
-					var baseDomain = String.Join(_options.DepartmentDomainSeparator, domainParts.Skip(1));
+					var extractedDepartmentId = domain.Substring(0, separatorIndex);
+					var baseDomain = domain.Substring(separatorIndex + separator.Length);
 
 					if (TryMatchDomain(baseDomain, _options.DepartmentAddressDomains, DispatchCodeType.Department, code, ref dispatchCode))
 					{
@@ -173,6 +213,31 @@ namespace Resgrid.Relay.Engine.Smtp
 		/// The dispatch codes extracted from recipient addresses.
 		/// </summary>
 		public List<DispatchCode> DispatchCodes { get; } = new List<DispatchCode>();
+
+		private readonly Dictionary<DispatchCode, string> _addresses = new Dictionary<DispatchCode, string>();
+		private readonly List<string> _otherDepartmentAddresses = new List<string>();
+
+		/// <summary>
+		/// Dispatch addresses left out because they belong to a different department than this dispatch: a hosted-mode subdomain
+		/// naming another department, or a department code Resgrid resolved to another department. Not dispatched here.
+		/// </summary>
+		public IReadOnlyList<string> OtherDepartmentAddresses => _otherDepartmentAddresses;
+
+		/// <summary>The recipient address a dispatch code was parsed from, or null.</summary>
+		public string AddressOf(DispatchCode code) =>
+			code != null && _addresses.TryGetValue(code, out var address) ? address : null;
+
+		internal void SetAddress(DispatchCode code, string address)
+		{
+			if (code != null && !String.IsNullOrWhiteSpace(address))
+				_addresses[code] = address.Trim();
+		}
+
+		internal void AddOtherDepartmentAddress(string address)
+		{
+			if (!String.IsNullOrWhiteSpace(address) && !_otherDepartmentAddresses.Contains(address.Trim(), StringComparer.OrdinalIgnoreCase))
+				_otherDepartmentAddresses.Add(address.Trim());
+		}
 
 		/// <summary>
 		/// The department identifier extracted from the recipient domain

@@ -16,9 +16,11 @@ LiveKit / backend modes. The **desktop GUI** (`Resgrid.Audio.Relay`, WPF) is
 
 The Windows-only modes resolve to a "not supported on this platform" service on Linux
 (they fault with a clear message rather than crashing). The LiveKit native library
-(`liblivekit_ffi.so`, linux-x64 / linux-arm64) ships inside the `Livekit.Rtc.Dotnet`
-NuGet package and is included automatically in the published output; its only OS
-prerequisite is `libstdc++6`, present on any standard distribution.
+(`liblivekit_ffi.so`) is not in the `Livekit.Rtc.Dotnet` NuGet package: the GitHub release
+archives (`ResgridRelay-Console-<version>-linux-x64.tar.gz` / `-linux-arm64.tar.gz`)
+include it next to the binary, and for your own publish `build/fetch-livekit-ffi.ps1`
+downloads the matching build. Its only OS prerequisite is `libstdc++6`, present on any
+standard distribution.
 
 > One service instance runs **one** mode (set by `RESGRID__RELAY__Mode`). To run several
 > modes (e.g. `record` **and** `dispatch`), install one unit per mode — see *Multiple modes*.
@@ -85,11 +87,16 @@ journalctl -u resgrid-relay -f
   cancelling in-flight work so recordings flush and LiveKit disconnects cleanly;
   `TimeoutStopSec=30` bounds the drain before systemd escalates to `SIGKILL`.
 - **Configuration** — everything is `RESGRID__RELAY__*` environment variables. Run
-  `dotnet Resgrid.Audio.Relay.Console.dll help` for the complete, authoritative list.
+  `dotnet Resgrid.Audio.Relay.Console.dll help` for the common ones; the repository README's
+  Configuration section shows the full settings tree (`:` becomes `__`).
 - **Writable state** — the unit grants `/var/lib/resgrid-relay` (via `StateDirectory`).
-  Point `Recorder__LocalPath` and/or `Resgrid__TokenCachePath` there. If you write
-  recordings elsewhere, add that path to `ReadWritePaths=` in the unit (it runs under
-  `ProtectSystem=strict`).
+  Point `Recorder__LocalPath` and/or `Resgrid__TokenCachePath` there. The recorder's metadata
+  log (`Recorder__LogPath`) defaults to a file inside `Recorder__LocalPath`, so it is writable
+  too. If you write recordings or the log elsewhere, add that path to `ReadWritePaths=` in the
+  unit (it runs under `ProtectSystem=strict`).
+- **Settings file** — besides the environment, the console reads `appsettings.json` and a
+  per-user `relay.user.json`; under systemd only the environment and `appsettings.json` normally
+  apply.
 - **Multiple modes** — copy the unit per mode with its own env file, e.g.
   `resgrid-relay-record.service` (`EnvironmentFile=/etc/resgrid-relay/record.env`) and
   `resgrid-relay-dispatch.service` (`EnvironmentFile=/etc/resgrid-relay/dispatch.env`),

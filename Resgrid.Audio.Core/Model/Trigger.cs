@@ -24,6 +24,13 @@ namespace Resgrid.Audio.Core.Model
 			Tones = new List<DtmfTone>();
 		}
 
+		/// <summary>
+		/// The detector registers whole-hertz tones (DtmfTone.HighTone is an int), so a configured frequency is rounded the same way
+		/// both when it is registered and when detected tones are compared against it. Comparing the raw double meant any
+		/// fractional frequency (Motorola Quick Call II tones such as 368.5 Hz) could never match.
+		/// </summary>
+		public static int ToneKey(double frequency) => (int)Math.Round(frequency, MidpointRounding.AwayFromZero);
+
 		public List<DtmfToneEnd> GetMatchingTones(List<DtmfToneEnd> tones)
 		{
 			List<DtmfToneEnd> matchingTones = new List<DtmfToneEnd>();
@@ -55,42 +62,33 @@ namespace Resgrid.Audio.Core.Model
 				*/
 
 
-				var firstTone = tones.FirstOrDefault(x => x.DtmfTone.HighTone == Frequency1 && x.Duration >= new TimeSpan(0, 0, 0, 0, Time1));
-
-				if (firstTone == null)
-					return null;
+				var tone1 = ToneKey(Frequency1);
+				var tone2 = ToneKey(Frequency2);
 
 				if (Count == 1)
 				{
-					return new List<DtmfToneEnd>() { firstTone };
+					var singleTone = tones.FirstOrDefault(x => x.DtmfTone.HighTone == tone1 && x.Duration >= TimeSpan.FromMilliseconds(Time1));
+					return singleTone == null ? null : new List<DtmfToneEnd>() { singleTone };
 				}
-				else if (Count == 2)
+
+				if (Count == 2)
 				{
-					var secondTonesList = tones.Where(x => x.DtmfTone.HighTone == Frequency2 && x.Duration >= new TimeSpan(0, 0, 0, 0, Time2) &&
-					                                       x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds >= 0).ToList();
+					// Newest first: a stray first tone from minutes ago (one whose second tone never came) stays in the bank until it
+					// is cleaned up, and pairing only the oldest candidate would make the real page that follows it miss.
+					var firstTones = tones
+						.Where(x => x.DtmfTone.HighTone == tone1 && x.Duration >= TimeSpan.FromMilliseconds(Time1))
+						.OrderByDescending(x => x.TimeStamp)
+						.ToList();
 
-					if (secondTonesList != null && secondTonesList.Count > 0)
+					foreach (var firstTone in firstTones)
 					{
-						Debugger.Log(0, "Tones", "" + Environment.NewLine);
-						Debugger.Log(0, "Tones", "" + Environment.NewLine);
-						Debugger.Log(0, "Tones",
-							$"{firstTone.DtmfTone.HighTone} {firstTone.ToString()} at time {firstTone.TimeStamp}" + Environment.NewLine);
-						Debugger.Log(0, "Tones",
-							$"------------------------------------------------------------------------------------------------------------------" +
-							Environment.NewLine);
-						foreach (var tone in secondTonesList)
-						{
-							Debugger.Log(0, "Tones",
-								$"{firstTone.DtmfTone.HighTone}/{tone.DtmfTone.HighTone}: {tone.ToString()} at time {tone.TimeStamp} difference to first tone {tone.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds}" +
-								Environment.NewLine);
-						}
+						var secondTone = tones.FirstOrDefault(x => x.DtmfTone.HighTone == tone2 && x.Duration >= TimeSpan.FromMilliseconds(Time2) &&
+							x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds >= 0 &&
+							x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds <= ((Time1 + Time2) * 6));
+
+						if (secondTone != null)
+							return new List<DtmfToneEnd>() { firstTone, secondTone };
 					}
-
-					var secondTone = secondTonesList.FirstOrDefault(x => x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds <= ((Time1 + Time2) * 6));
-					//var secondTone = secondTonesList.FirstOrDefault(x => x.TimeStamp.Subtract(firstTone.TimeStamp).TotalMilliseconds <= (1000 * 60));
-
-					if (secondTone != null)
-						return new List<DtmfToneEnd>() { firstTone, secondTone };
 				}
 			}
 

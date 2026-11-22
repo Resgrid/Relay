@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using FluentAssertions;
 using NUnit.Framework;
@@ -73,6 +74,27 @@ namespace Resgrid.Audio.Voice.Tests
 	[TestFixture]
 	public class WavIoTests
 	{
+		[Test]
+		public void ReadToPcm16Mono_Does_Not_Spin_On_A_Corrupt_Chunk_Size()
+		{
+			var wav = new List<byte>();
+			wav.AddRange(System.Text.Encoding.ASCII.GetBytes("RIFF"));
+			wav.AddRange(BitConverter.GetBytes(100));
+			wav.AddRange(System.Text.Encoding.ASCII.GetBytes("WAVE"));
+			wav.AddRange(System.Text.Encoding.ASCII.GetBytes("junk"));
+			wav.AddRange(BitConverter.GetBytes(unchecked((int)0xFFFFFFF8))); // -8 as a signed size: pos never advanced
+			wav.AddRange(new byte[16]);
+
+			var bytes = wav.ToArray();
+			var finished = System.Threading.Tasks.Task.Run(() =>
+			{
+				try { WavIo.ReadToPcm16Mono(bytes); }
+				catch (ArgumentException) { /* "no data chunk" is the right answer */ }
+			}).Wait(TimeSpan.FromSeconds(5));
+
+			finished.Should().BeTrue("a corrupt chunk size must not leave the reader spinning");
+		}
+
 		[Test]
 		public void WritePcm16_ThenRead_RoundTrips()
 		{

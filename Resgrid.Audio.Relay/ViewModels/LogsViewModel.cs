@@ -173,6 +173,20 @@ namespace Resgrid.Audio.Relay.ViewModels
 		}
 
 		[RelayCommand]
+		private void OpenLogFolder()
+		{
+			try
+			{
+				System.IO.Directory.CreateDirectory(App.LogDirectory);
+				System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(App.LogDirectory) { UseShellExecute = true });
+			}
+			catch
+			{
+				// Explorer unavailable — nothing useful to show.
+			}
+		}
+
+		[RelayCommand]
 		private void Copy()
 		{
 			var sb = new StringBuilder();

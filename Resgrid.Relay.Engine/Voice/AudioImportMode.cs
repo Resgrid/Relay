@@ -43,8 +43,8 @@ namespace Resgrid.Relay.Engine.Voice
 			var audioStorage = new WatcherAudioStorage(logger);
 			var evaluator = new AudioEvaluator(logger);
 			var recorder = new AudioRecorder(evaluator, audioStorage);
-			var processor = new AudioProcessor(recorder, evaluator, audioStorage);
-			var comService = new ComService(logger, processor, apiClient, healthApi, callsApi);
+			var processor = new AudioProcessor(recorder, evaluator, audioStorage, logger);
+			var comService = new ComService(logger, processor, apiClient, healthApi, callsApi, new LookupsApi(apiClient), apiOptions.DepartmentId);
 
 			evaluator.WatcherTriggered += (_, eventArgs) =>
 				logger.Information("WATCHER TRIGGERED: {Watcher}", eventArgs.Watcher.Name);
@@ -70,8 +70,6 @@ namespace Resgrid.Relay.Engine.Voice
 				status.ResgridApi = ConnectionState.Connected;
 
 			logger.Information("Listening for dispatches on device {InputDevice}", config.InputDevice);
-			processor.Init(config);
-			processor.Start();
 
 			// The recorder's sample aggregator publishes the peak dBFS of each capture
 			// block — surface it as the live input level so the UI meter can move.
@@ -82,6 +80,11 @@ namespace Resgrid.Relay.Engine.Voice
 
 			try
 			{
+				// Inside the try: a bad InputDevice throws from Start after Init enabled the processing timer, which then leaked
+				// (with any opened capture handle) because the finally never ran.
+				processor.Init(config);
+				processor.Start();
+
 				while (!linkedCts.IsCancellationRequested &&
 					   (recorder.RecordingState == RecordingState.Monitoring ||
 						recorder.RecordingState == RecordingState.Recording ||
@@ -96,13 +99,23 @@ namespace Resgrid.Relay.Engine.Voice
 			finally
 			{
 				recorder.Stop();
+				processor.Stop();
 			}
+
+			// The loop also ends when capture stops on its own (the input device was unplugged or failed). That is not a clean
+			// stop: fault so the service shows it instead of reporting Stopped while no dispatch is being listened for.
+			if (!cancellationToken.IsCancellationRequested)
+				throw new InvalidOperationException($"Audio capture on device {config.InputDevice} stopped unexpectedly; no dispatches are being monitored.");
 
 			return 0;
 		}
 
 		private static Config LoadAudioConfig(string path)
 		{
+			if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+				throw new RelayConfigurationException(
+					$"The audio watcher file '{path}' does not exist. Create it with 'Resgrid.Audio.Relay.Console setup' or set AudioConfigPath.");
+
 			var payload = File.ReadAllText(path);
 			var config = JsonSerializer.Deserialize<Config>(payload, JsonOptions) ?? new Config();
 			if (config.Resgrid == null)
@@ -123,7 +136,12 @@ namespace Resgrid.Relay.Engine.Voice
 				ClientSecret = FirstNonEmpty(hostOptions.Resgrid.ClientSecret, config.Resgrid?.ClientSecret),
 				RefreshToken = FirstNonEmpty(hostOptions.Resgrid.RefreshToken, config.Resgrid?.RefreshToken),
 				Scope = FirstNonEmpty(hostOptions.Resgrid.Scope, config.Resgrid?.Scope, "openid profile email offline_access mobile"),
-				TokenCachePath = FirstNonEmpty(hostOptions.Resgrid.TokenCachePath, config.Resgrid?.TokenCachePath, Path.Combine(AppContext.BaseDirectory, "data", "resgrid-token.json"))
+				TokenCachePath = FirstNonEmpty(hostOptions.Resgrid.TokenCachePath, config.Resgrid?.TokenCachePath, Path.Combine(AppContext.BaseDirectory, "data", "resgrid-token.json")),
+				// settings.json predates these, so they only come from the host options; dropping them silently forced every audio
+				// relay onto the refresh_token grant even when it was configured for client credentials or a system API key.
+				GrantType = hostOptions.Resgrid.GrantType,
+				SystemApiKey = hostOptions.Resgrid.SystemApiKey,
+				DepartmentId = hostOptions.Resgrid.DepartmentId
 			};
 		}
 

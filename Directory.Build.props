@@ -1,14 +1,21 @@
 <Project>
   <!--
-    The .NET SDK does NOT emit a combined "NET10_0_WINDOWS" preprocessor symbol for the
-    net10.0-windows target framework — it defines NET10_0, WINDOWS, WINDOWS7_0, etc.
-    This codebase gates all Windows-only code (radio/audio modes, device enumeration,
-    the tune meter, WPF) with #if NET10_0_WINDOWS, so without this define that code
-    silently compiles out of every build. Define it for the windows TFM across all
-    projects so the Windows-only code actually compiles into the windows build (and
-    stays excluded from the cross-platform net10.0 / Linux / Docker build).
+    Product metadata for every assembly. The release workflow overrides Version (and with it AssemblyVersion,
+    FileVersion and InformationalVersion) with -p:Version=<major>.<minor>.<run>; local builds report 2.1.0.
   -->
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
-    <DefineConstants>$(DefineConstants);NET10_0_WINDOWS</DefineConstants>
+  <PropertyGroup>
+    <Version Condition="'$(Version)' == ''">2.1.0</Version>
+    <Company>Resgrid, LLC</Company>
+    <Product>Resgrid Relay</Product>
+    <Copyright>Copyright © Resgrid, LLC</Copyright>
+    <Authors>Resgrid, LLC</Authors>
   </PropertyGroup>
+
+  <!--
+    Shared properties for every project. The NET10_0_WINDOWS compile symbol is defined in
+    Directory.Build.targets, not here: this file is imported before a project's own
+    <TargetFramework> is set, so a condition on $(TargetFramework) here only works for
+    multi-targeted inner builds and silently missed single-target Windows projects (the
+    desktop app compiled its Windows-only tune meter out).
+  -->
 </Project>

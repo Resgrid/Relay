@@ -7,6 +7,7 @@
              xmlns:vm="clr-namespace:Resgrid.Audio.Relay.ViewModels"
              xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
              mc:Ignorable="d"
+             Foreground="{DynamicResource TextFillColorPrimaryBrush}"
              d:DataContext="{d:DesignInstance Type=vm:LogsViewModel}"
              d:DesignHeight="450" d:DesignWidth="800">
     <Grid Margin="24">
@@ -30,6 +31,9 @@
                           IsChecked="{Binding AutoScroll, Mode=TwoWay}" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <ui:Button Content="Open log folder" Icon="{ui:SymbolIcon FolderOpen24}" Appearance="Secondary" Margin="0,0,8,0"
+                           ToolTip="Daily log files, kept for 14 days"
+                           Command="{Binding OpenLogFolderCommand}" />
                 <ui:Button Content="Copy" Appearance="Secondary" Margin="0,0,8,0"
                            Command="{Binding CopyCommand}" />
                 <ui:Button Content="Clear" Appearance="Secondary"
@@ -49,9 +53,9 @@
                     <DataTemplate>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="{Binding Timestamp, StringFormat=HH:mm:ss.fff}"
-                                       FontFamily="Consolas" Opacity="0.6" Width="92" />
+                                       FontFamily="Consolas" Opacity="0.6" Width="110" Margin="0,0,8,0" />
                             <TextBlock Text="{Binding Level}"
-                                       FontFamily="Consolas" Width="80"
+                                       FontFamily="Consolas" Width="110" Margin="0,0,8,0"
                                        Foreground="{Binding Level, Converter={x:Static conv:LogLevelToBrushConverter.Instance}}" />
                             <TextBlock Text="{Binding Message}"
                                        FontFamily="Consolas" TextWrapping="Wrap"

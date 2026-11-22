@@ -28,6 +28,12 @@ namespace Resgrid.Providers.ApiClient.V4.Models
 		public string IncidentId { get; set; }
 		public string ReferenceId { get; set; }
 		public DateTimeOffset? DispatchOn { get; set; }
+
+		/// <summary>
+		/// Saves the call as pending: it waits in the dispatchers' queue and pages nobody until one of them sends it. With the
+		/// system API key this is the only way a DispatchList of "0" (everyone) is honored.
+		/// </summary>
+		public bool? IsPending { get; set; }
 		public string CallFormData { get; set; }
 		public bool? CheckInTimersEnabled { get; set; }
 
@@ -88,5 +94,17 @@ namespace Resgrid.Providers.ApiClient.V4.Models
 		public string IncidentId { get; set; }
 		public string AudioFileId { get; set; }
 		public string Type { get; set; }
+
+		/// <summary>CallStates: Active = 0, Closed = 1 .. 7, Pending = 8.</summary>
+		public int State { get; set; }
+
+		/// <summary>
+		/// The scheduled dispatch time (UTC) of a call created with DispatchOn; null for a call dispatched when it was created.
+		/// A scheduled call is already "active" before it is sent.
+		/// </summary>
+		public DateTime? DispatchedOnUtc { get; set; }
+
+		/// <summary>1 for the first dispatch; higher after the call has been escalated ("Second alarm").</summary>
+		public int AlarmLevel { get; set; }
 	}
 }

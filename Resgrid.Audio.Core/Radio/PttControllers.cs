@@ -13,8 +13,19 @@ namespace Resgrid.Audio.Core.Radio
 	public sealed class VoxPttController : IPttController
 	{
 		public bool IsKeyed { get; private set; }
-		public void Key() => IsKeyed = true;
-		public void Unkey() => IsKeyed = false;
+
+		public bool Key()
+		{
+			IsKeyed = true;
+			return true;
+		}
+
+		public bool Unkey()
+		{
+			IsKeyed = false;
+			return true;
+		}
+
 		public void Dispose() { }
 	}
 
@@ -28,6 +39,7 @@ namespace Resgrid.Audio.Core.Radio
 		private readonly bool _useDtr;
 		private readonly bool _ownsPort;
 		private readonly ILogger _logger;
+		private bool _failing;
 
 		public SerialPttController(string portName, bool useDtr, ILogger logger, SerialPort sharedPort = null)
 		{
@@ -53,30 +65,45 @@ namespace Resgrid.Audio.Core.Radio
 
 		public bool IsKeyed { get; private set; }
 
-		public void Key()
-		{
-			Set(true);
-			IsKeyed = true;
-		}
+		public bool Key() => Set(true);
 
-		public void Unkey()
-		{
-			Set(false);
-			IsKeyed = false;
-		}
+		public bool Unkey() => Set(false);
 
-		private void Set(bool on)
+		// IsKeyed changes only when the line was actually driven: reporting a failed write as done let the bridge believe the
+		// radio had unkeyed (and stop retrying) while the transmitter was still on the air.
+		private bool Set(bool on)
 		{
 			try
 			{
+				// A closed port accepts RtsEnable/DtrEnable without touching the hardware.
+				if (!_port.IsOpen)
+					throw new InvalidOperationException($"Serial port {_port.PortName} is not open.");
+
 				if (_useDtr)
 					_port.DtrEnable = on;
 				else
 					_port.RtsEnable = on;
+
+				IsKeyed = on;
+				if (_failing)
+				{
+					_failing = false;
+					_logger?.Information("Serial PTT line on {Port} is responding again", _port.PortName);
+				}
+				return true;
 			}
 			catch (Exception ex)
 			{
-				_logger?.Error(ex, "Failed to set serial PTT line");
+				if (!_failing)
+				{
+					_failing = true;
+					_logger?.Error(ex, "Failed to {Action} the serial PTT line ({Line}) on {Port}", on ? "key" : "unkey", _useDtr ? "DTR" : "RTS", _port.PortName);
+				}
+				else
+				{
+					_logger?.Debug(ex, "Serial PTT line on {Port} still failing", _port.PortName);
+				}
+				return false;
 			}
 		}
 
@@ -101,6 +128,7 @@ namespace Resgrid.Audio.Core.Radio
 		private readonly HidStream _stream;
 		private readonly int _gpioBit;
 		private readonly ILogger _logger;
+		private bool _failing;
 
 		public Cm108PttController(int vendorId, int productId, int gpioPin, ILogger logger)
 		{
@@ -120,19 +148,11 @@ namespace Resgrid.Audio.Core.Radio
 
 		public bool IsKeyed { get; private set; }
 
-		public void Key()
-		{
-			WriteGpio(true);
-			IsKeyed = true;
-		}
+		public bool Key() => WriteGpio(true);
 
-		public void Unkey()
-		{
-			WriteGpio(false);
-			IsKeyed = false;
-		}
+		public bool Unkey() => WriteGpio(false);
 
-		private void WriteGpio(bool on)
+		private bool WriteGpio(bool on)
 		{
 			// CM108 HID output report: [reportId=0, 0, GPIO data, GPIO mask, 0].
 			// The data bit drives the pin; the mask marks it as an output.
@@ -148,10 +168,26 @@ namespace Resgrid.Audio.Core.Radio
 			try
 			{
 				_stream.Write(report);
+				IsKeyed = on;
+				if (_failing)
+				{
+					_failing = false;
+					_logger?.Information("CM108 GPIO PTT is responding again");
+				}
+				return true;
 			}
 			catch (Exception ex)
 			{
-				_logger?.Error(ex, "Failed to write CM108 GPIO PTT report");
+				if (!_failing)
+				{
+					_failing = true;
+					_logger?.Error(ex, "Failed to write the CM108 GPIO PTT report ({Action})", on ? "key" : "unkey");
+				}
+				else
+				{
+					_logger?.Debug(ex, "CM108 GPIO PTT still failing");
+				}
+				return false;
 			}
 		}
 

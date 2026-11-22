@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Resgrid.Audio.Voice.Abstractions;
@@ -31,11 +32,21 @@ namespace Resgrid.Audio.Voice.ToneOut
 		public async Task<short[]> BuildAnnouncementAsync(string text, CancellationToken cancellationToken = default)
 		{
 			var alert = _toneGenerator.BuildAlert(_profile);
-			var speech = await _tts.SynthesizeAsync(text, cancellationToken).ConfigureAwait(false);
 
-			var combined = new short[alert.Length + speech.Length];
-			Array.Copy(alert, 0, combined, 0, alert.Length);
-			Array.Copy(speech, 0, combined, alert.Length, speech.Length);
+			// The TTS service rejects text past its limit (1000 characters by default), and a long nature or address would
+			// otherwise fail the same call on every poll. Chunked like Core's own prompts so cached audio is reused.
+			var parts = new List<short[]> { alert };
+			foreach (var chunk in DispatchPromptBuilder.ChunkText(text))
+				parts.Add(await _tts.SynthesizeAsync(chunk, cancellationToken).ConfigureAwait(false));
+
+			var combined = new short[parts.Sum(x => x.Length)];
+			var offset = 0;
+			foreach (var part in parts)
+			{
+				Array.Copy(part, 0, combined, offset, part.Length);
+				offset += part.Length;
+			}
+
 			return combined;
 		}
 

@@ -8,12 +8,16 @@
              xmlns:ctrl="clr-namespace:Resgrid.Audio.Relay.Controls"
              xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
              mc:Ignorable="d"
+             Foreground="{DynamicResource TextFillColorPrimaryBrush}"
              d:DataContext="{d:DesignInstance Type=vm:DashboardViewModel}"
-             d:DesignHeight="450" d:DesignWidth="800">
+             d:DesignHeight="600" d:DesignWidth="900">
     <UserControl.Resources>
         <conv:RelayServiceStateToBrushConverter x:Key="StateBrush" />
         <conv:BoolToBrushConverter x:Key="OnOffBrush" />
         <conv:BoolToBrushConverter x:Key="SquelchBrush"
+                                   TrueBrush="{x:Static conv:StatusBrushes.Running}"
+                                   FalseBrush="{x:Static conv:StatusBrushes.Inactive}" />
+        <conv:BoolToBrushConverter x:Key="StepBrush"
                                    TrueBrush="{x:Static conv:StatusBrushes.Running}"
                                    FalseBrush="{x:Static conv:StatusBrushes.Inactive}" />
     </UserControl.Resources>
@@ -25,24 +29,56 @@
         </Grid.RowDefinitions>
 
         <!-- Header + overall summary -->
-        <StackPanel Grid.Row="0">
-            <TextBlock Text="{Binding Title}" FontSize="24" FontWeight="SemiBold" />
-            <StackPanel Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
-                <Ellipse Width="12" Height="12" Margin="0,0,8,0"
-                         Fill="{Binding OverallState, Converter={StaticResource StateBrush}}" />
-                <TextBlock Text="{Binding SummaryText}" VerticalAlignment="Center" />
+        <Grid Grid.Row="0">
+            <StackPanel>
+                <TextBlock Text="{Binding Title}" FontSize="24" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
+                    <Ellipse Width="12" Height="12" Margin="0,0,8,0"
+                             Fill="{Binding OverallState, Converter={StaticResource StateBrush}}" />
+                    <TextBlock Text="{Binding SummaryText}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                </StackPanel>
             </StackPanel>
-        </StackPanel>
+            <ui:Button HorizontalAlignment="Right" VerticalAlignment="Top"
+                       Content="Start default modes" Icon="{ui:SymbolIcon Play24}" Appearance="Primary"
+                       Visibility="{Binding IsIdle, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}"
+                       Command="{Binding StartDefaultsCommand}" />
+        </Grid>
 
-        <Grid Grid.Row="1" Margin="0,16,0,0">
-            <!-- Empty state -->
-            <TextBlock Text="No services are running. Start one from the Operations screen."
-                       Opacity="0.6" FontStyle="Italic"
-                       VerticalAlignment="Top"
-                       Visibility="{Binding IsIdle, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}" />
+        <ScrollViewer Grid.Row="1" Margin="0,16,0,0" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- Getting started -->
+                <ui:Card Padding="16" Margin="0,0,12,12" MaxWidth="852" HorizontalAlignment="Left"
+                         Visibility="{Binding ShowSetup, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}">
+                    <StackPanel>
+                        <TextBlock Text="Getting started" FontWeight="SemiBold" FontSize="15" />
+                        <ItemsControl ItemsSource="{Binding SetupSteps}" Margin="0,8,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,8,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0" Width="26" Height="26" CornerRadius="13" Margin="0,0,12,0" VerticalAlignment="Top"
+                                                Background="{Binding IsDone, Converter={StaticResource StepBrush}}">
+                                            <TextBlock Text="{Binding Marker}" Foreground="White" FontWeight="SemiBold"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding Detail}" Opacity="0.65" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                        </StackPanel>
+                                        <ui:Button Grid.Column="2" Content="{Binding ActionText}" Margin="12,0,0,0" VerticalAlignment="Top"
+                                                   Command="{Binding GoCommand}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ui:Card>
 
-            <!-- Service tiles -->
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <!-- Service tiles -->
                 <ItemsControl ItemsSource="{Binding Tiles}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -51,9 +87,8 @@
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <ui:Card Width="360" Margin="0,0,12,12" Padding="16" VerticalAlignment="Top">
+                            <ui:Card Width="420" Margin="0,0,12,12" Padding="16" VerticalAlignment="Top">
                                 <StackPanel>
-                                    <!-- Tile header: mode name + lifecycle dot -->
                                     <Grid>
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Ellipse Width="10" Height="10" Margin="0,0,8,0"
@@ -63,6 +98,12 @@
                                         <TextBlock Text="{Binding State}" HorizontalAlignment="Right"
                                                    Opacity="0.7" VerticalAlignment="Center" />
                                     </Grid>
+                                    <TextBlock Text="{Binding StartedText}" Opacity="0.55" FontSize="11" Margin="0,2,0,0" />
+
+                                    <Border Margin="0,10,0,0" Padding="10,8" CornerRadius="4" Background="#33C42B1C"
+                                            Visibility="{Binding HasLastError, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}">
+                                        <TextBlock Text="{Binding LastError}" FontSize="11" TextWrapping="Wrap" />
+                                    </Border>
 
                                     <!-- Connection pills -->
                                     <WrapPanel Margin="0,12,0,0">
@@ -74,10 +115,14 @@
                                     </WrapPanel>
 
                                     <!-- Audio level -->
-                                    <ctrl:LevelMeter Dbfs="{Binding Status.InputDbfs}" Margin="0,8,0,0" Height="16" />
+                                    <StackPanel Visibility="{Binding ShowAudio, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}">
+                                        <TextBlock Text="Receive level" Opacity="0.6" FontSize="11" Margin="0,8,0,2" />
+                                        <ctrl:LevelMeter Dbfs="{Binding Status.InputDbfs}" Height="16" />
+                                    </StackPanel>
 
                                     <!-- Squelch + TX/RX lamps -->
-                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0"
+                                                Visibility="{Binding ShowRadio, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}">
                                         <Border CornerRadius="9" Padding="8,2" Margin="0,0,8,0"
                                                 Background="{Binding Status.SquelchOpen, Converter={StaticResource SquelchBrush}}">
                                             <TextBlock Foreground="White" FontSize="11"
@@ -86,12 +131,12 @@
                                         <StackPanel Orientation="Horizontal" Margin="0,0,8,0" VerticalAlignment="Center">
                                             <Ellipse Width="10" Height="10" Margin="0,0,4,0"
                                                      Fill="{Binding Status.Transmitting, Converter={StaticResource OnOffBrush}}" />
-                                            <TextBlock Text="TX" FontSize="11" VerticalAlignment="Center" />
+                                            <TextBlock Text="TX (to radio)" FontSize="11" VerticalAlignment="Center" />
                                         </StackPanel>
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Ellipse Width="10" Height="10" Margin="0,0,4,0"
                                                      Fill="{Binding Status.Receiving, Converter={StaticResource OnOffBrush}}" />
-                                            <TextBlock Text="RX" FontSize="11" VerticalAlignment="Center" />
+                                            <TextBlock Text="RX (to channel)" FontSize="11" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </StackPanel>
 
@@ -116,14 +161,20 @@
                                         </StackPanel>
                                     </Grid>
 
-                                    <TextBlock Margin="0,8,0,0" Opacity="0.5" FontSize="10"
-                                               Text="{Binding LastUpdated, StringFormat=Updated {0}}" />
+                                    <Grid Margin="0,12,0,0">
+                                        <TextBlock Opacity="0.5" FontSize="10" VerticalAlignment="Center"
+                                                   Text="{Binding LastUpdated, StringFormat=Updated {0}}" />
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                            <ui:Button Content="Restart" Margin="0,0,8,0" Command="{Binding RestartCommand}" />
+                                            <ui:Button Content="Stop" Command="{Binding StopCommand}" />
+                                        </StackPanel>
+                                    </Grid>
                                 </StackPanel>
                             </ui:Card>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-            </ScrollViewer>
-        </Grid>
+            </StackPanel>
+        </ScrollViewer>
     </Grid>
 </UserControl>

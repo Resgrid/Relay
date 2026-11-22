@@ -10,10 +10,12 @@ using Resgrid.Relay.Engine;
 using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Audio.Voice;
 using Resgrid.Audio.Voice.Abstractions;
+using Resgrid.Audio.Voice.Audio;
 using Resgrid.Audio.Voice.Connection;
 using Resgrid.Audio.Voice.Dsp;
 using Resgrid.Audio.Voice.LiveKit;
 using Resgrid.Audio.Voice.Recording;
+using Resgrid.Audio.Voice.ToneOut;
 using Resgrid.Providers.ApiClient.V4;
 using Serilog;
 
@@ -28,6 +30,7 @@ namespace Resgrid.Relay.Engine.Voice
 	{
 		public static async Task<int> RunAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken, RelayStatus status = null)
 		{
+			VoiceModeRuntime.EnsureUserTokenAuth(options, "radio");
 			using var apiClient = new ResgridV4ApiClient(options.Resgrid);
 			var voiceApi = new VoiceApi(apiClient);
 			var callsApi = new CallsApi(apiClient);
@@ -36,25 +39,35 @@ namespace Resgrid.Relay.Engine.Voice
 			var transport = new LiveKitVoiceTransport(logger, options.Voice.PublishQueueMs);
 			var provider = new ResgridVoiceChannelProvider(logger, voiceApi);
 
-			if (options.Voice.EnforceSeatLimit)
+			if (!await VoiceModeRuntime.HasVoiceSeatAsync(options, provider, deptId, cancellationToken).ConfigureAwait(false))
 			{
-				var canConnect = await provider.CanConnectAsync(deptId, cancellationToken).ConfigureAwait(false);
-				if (canConnect == false)
-				{
-					logger.Error("Voice seat limit reached for this department; not connecting.");
-					return 1;
-				}
+				logger.Error("Voice seat limit reached for this department; not connecting.");
+				return 1;
 			}
 
 			await using var manager = new VoiceRoomManager(transport, logger);
 			var channel = await provider.GetChannelAsync(options.Voice.Channel, deptId, cancellationToken).ConfigureAwait(false);
 			var session = await manager.JoinAsync(channel, cancellationToken).ConfigureAwait(false);
 
-			// Session joined — LiveKit is up.
+			// Follow the connection from the moment the join returns: a drop during the device/serial/HID setup below used to
+			// go unnoticed (the handler was attached after it), leaving the bridge running on a dead session. A hard
+			// disconnect cancels the linked token so the bridge unwinds and we rethrow (below) for the resilience layer to
+			// rejoin; a transient SDK "reconnecting" only degrades the status pill and is left to auto-recover.
+			using var disconnectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			using var monitor = new VoiceSessionMonitor(session, status);
+			_ = monitor.Disconnected.ContinueWith(_ =>
+			{
+				try { disconnectCts.Cancel(); }
+				catch (ObjectDisposedException) { }
+			}, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+			await monitor.EnsureConnectedAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+
+			// Session joined and still connected — LiveKit is up.
 			if (status != null)
 				status.LiveKit = ConnectionState.Connected;
 
 			var radioSettings = MapSettings(options.Radio, logger);
+			WarnAboutProfile(options.Radio, radioSettings, logger);
 			// Serial PTT and serial carrier-detect on the same COM port must share one
 			// SerialPort instance — opening the same port twice fails on Windows. RunAsync
 			// owns it (disposed last, after the borrowing controllers).
@@ -63,49 +76,38 @@ namespace Resgrid.Relay.Engine.Voice
 			using var ptt = CreatePtt(radioSettings, logger, sharedSerialPort);
 			using var carrier = CreateCarrier(radioSettings, logger, sharedSerialPort);
 
-			var (mdc, emergency, alertSink) = BuildSignaling(options.Radio.Emergency, logger, callsApi);
+			var (mdc, emergency, alertSink) = BuildSignaling(options.Radio.Emergency, logger, callsApi, deptId);
 
 			await using var bridge = new RadioBridge(device, ptt, carrier, radioSettings, logger, mdc, emergency, alertSink);
 
-			// Mirror the bridge's live TX/RX state onto the status surface — wire this BEFORE
+			// Mirror the bridge's live TX/RX state and receive level onto the status surface — wire this BEFORE
 			// StartAsync so no initial transmit/receive flip is missed.
-			// note: squelch open-state and input dBFS live inside RadioBridge in radio mode
-			// and are not exposed, so InputDbfs/SquelchOpen are intentionally left unwired here.
 			if (status != null)
+			{
 				bridge.TxRxChanged += (_, __) =>
 				{
 					status.Transmitting = bridge.Transmitting;
 					status.Receiving = bridge.Receiving;
 				};
+				bridge.RxLevelSampled += (_, level) =>
+				{
+					status.InputDbfs = level.Dbfs;
+					status.SquelchOpen = level.SquelchOpen;
+				};
+			}
 
-			// A hard LiveKit disconnect cancels the linked token so the bridge unwinds; we then
-			// rethrow (below) so the resilience layer rejoins. A transient SDK "reconnecting"
-			// only degrades status and is left to auto-recover.
-			using var disconnectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-			var disconnected = false;
-			EventHandler<VoiceConnectionStateChange> onConnectionChanged = (_, change) =>
+			// The audio device stopping (USB glitch/replug), channel publishing that keeps failing, or a PTT line that stopped
+			// responding leave the bridge unable to pass audio while the session itself is fine. Unwind and rethrow so the
+			// resilience layer reopens the devices, the serial port and the HID interface instead of reporting Running while
+			// deaf and keying dead carrier.
+			bridge.Faulted += (_, __) =>
 			{
-				if (change.Connected)
-				{
-					// A successful (re)connect clears a prior "reconnecting" degrade so the pill
-					// recovers to Connected instead of staying stuck at Degraded after auto-recovery.
-					if (status != null)
-						status.LiveKit = ConnectionState.Connected;
-					return;
-				}
-				if (string.Equals(change.Reason, "reconnecting", StringComparison.OrdinalIgnoreCase))
-				{
-					if (status != null)
-						status.LiveKit = ConnectionState.Degraded;
-					return;
-				}
-				disconnected = true;
 				try { disconnectCts.Cancel(); }
 				catch (ObjectDisposedException) { }
 			};
-			session.ConnectionChanged += onConnectionChanged;
 
 			TransmissionRecorder recorder = null;
+			EventHandler<short[]> radioRecordHandler = null;
 			List<IDisposable> recorderDisposables = null;
 			ITransmissionLog recorderLog = null;
 			try
@@ -117,20 +119,34 @@ namespace Resgrid.Relay.Engine.Voice
 					var (stores, disposables) = RecordMode.BuildStores(options.Recorder, logger);
 					recorderDisposables = disposables;
 					recorderLog = RecordMode.BuildLog(options.Recorder, logger);
-					recorder = new TransmissionRecorder(session, options.Recorder.Segmentation, stores, recorderLog, logger);
+					recorder = new TransmissionRecorder(session, options.Recorder.Segmentation, stores, recorderLog, logger,
+						RecordMode.ResolveFallbackDirectory(options.Recorder));
 					recorder.Start();
+
+					var radioRecorder = recorder;
+					var radioParticipant = new VoiceParticipant("radio", "radio", $"Radio ({channel.Name})", "radio");
+					radioRecordHandler = (_, pcm) =>
+						radioRecorder.Record(new VoiceAudioFrame(radioParticipant, "radio-rx", pcm, DateTime.UtcNow));
+					bridge.RadioAudioForwarded += radioRecordHandler;
 				}
 
 				logger.Information($"Radio bridge running on '{channel.Name}'. Press Ctrl+C to stop.");
 				await VoiceModeRuntime.WaitForCancellationAsync(disconnectCts.Token).ConfigureAwait(false);
 
-				// Woken by a hard disconnect (not the user shutdown) ⇒ fault so resilience rejoins.
-				if (disconnected && !cancellationToken.IsCancellationRequested)
-					throw new InvalidOperationException("LiveKit radio session disconnected; reconnecting");
+				// Woken by a fault (not the user shutdown) ⇒ throw so resilience rebuilds the bridge.
+				if (!cancellationToken.IsCancellationRequested)
+				{
+					var fault = bridge.Fault;
+					if (fault != null)
+						throw new InvalidOperationException($"Radio bridge failed ({fault.Reason}); reopening the radio interface", fault.Exception);
+					if (monitor.IsDisconnected)
+						throw new InvalidOperationException($"LiveKit radio session disconnected ({monitor.Disconnected.Result}); reconnecting");
+				}
 			}
 			finally
 			{
-				session.ConnectionChanged -= onConnectionChanged;
+				if (radioRecordHandler != null)
+					bridge.RadioAudioForwarded -= radioRecordHandler;
 				if (recorder != null)
 					await recorder.DisposeAsync().ConfigureAwait(false);
 				if (recorderLog != null)
@@ -173,10 +189,102 @@ namespace Resgrid.Relay.Engine.Voice
 			return 0;
 		}
 
+		/// <summary>
+		/// Keys the radio and plays a 1 kHz test tone (after the configured key-up lead) without joining a channel, so the PTT
+		/// wiring, transmit audio level and <see cref="RadioModeOptions.TxLeadMs"/> can be checked against a listener on the far
+		/// side. Throws when the audio device, serial port or CM108 interface can't be opened.
+		/// </summary>
+		public static async Task RunTransmitTestAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken, int toneMs = 2000)
+		{
+			var settings = MapSettings(options.Radio, logger);
+			var leadMs = settings.Ptt == PttKeyingMethod.Vox ? 0 : Math.Clamp(settings.TxLeadMs, 0, 3000);
+			toneMs = Math.Clamp(toneMs, 200, 10000);
+
+			var tones = new ToneGenerator(AudioFormat.SampleRate);
+			var tone = tones.Sine(1000, toneMs, 0.3);
+			if (Math.Abs(settings.TxGain - 1.0) > 1e-6)
+				Resampler.ApplyGain(tone, settings.TxGain);
+
+			using var sharedSerialPort = TryCreateSharedSerialPort(settings);
+			using var device = new NAudioRadioDevice(settings.InputDevice, settings.OutputDevice, logger);
+			using var ptt = CreatePtt(settings, logger, sharedSerialPort);
+
+			device.StartTransmit();
+			try
+			{
+				if (!ptt.Key())
+					throw new InvalidOperationException($"Transmit test: could not key the radio's PTT line ({settings.Ptt}). Check the interface cable and port.");
+				logger?.Information("Transmit test: PTT keyed ({Ptt}), {Lead} ms lead, {Tone} ms 1 kHz tone", settings.Ptt, leadMs, toneMs);
+				if (leadMs > 0)
+					device.Transmit(tones.Silence(leadMs));
+				device.Transmit(tone);
+
+				// Hold PTT until the tone has actually played: the queue has drained (bounded, in case the device never reports
+				// empty) and the output device's own buffers have played out, then the tail. Unkeying on a fixed lead+tone delay
+				// cut the end of the tone off by the output latency.
+				var queued = TimeSpan.FromMilliseconds(leadMs + toneMs);
+				var started = DateTime.UtcNow;
+				await Task.Delay(queued, cancellationToken).ConfigureAwait(false);
+				var drainDeadline = started + queued + TimeSpan.FromSeconds(2);
+				while (device.BufferedTransmit > TimeSpan.Zero && DateTime.UtcNow < drainDeadline)
+					await Task.Delay(20, cancellationToken).ConfigureAwait(false);
+
+				await Task.Delay(device.OutputLatency + TimeSpan.FromMilliseconds(Math.Max(settings.TxTailMs, 100)), cancellationToken).ConfigureAwait(false);
+			}
+			finally
+			{
+				if (!ptt.Unkey())
+				{
+					// A failed unkey leaves the transmitter on the air: retry before giving up and saying so loudly.
+					var released = false;
+					for (int attempt = 0; attempt < 10 && !released; attempt++)
+					{
+						Thread.Sleep(100);
+						released = ptt.Unkey();
+					}
+					if (!released)
+						logger?.Error("Transmit test: the PTT line could not be released — the radio may still be transmitting. Disconnect the interface.");
+				}
+				device.StopTransmit();
+				logger?.Information("Transmit test: PTT released");
+			}
+		}
+
+		private static void WarnAboutProfile(RadioModeOptions o, RadioSettings settings, ILogger logger)
+		{
+			var profile = RadioProfiles.Find(o.Profile);
+			logger?.Information("Radio profile: {Profile}", profile.DisplayName);
+			if (!profile.IsPushToTalkOverCellular)
+				return;
+
+			if (settings.Ptt == PttKeyingMethod.Vox)
+				logger?.Warning("Radio profile {Profile} is a cellular push-to-talk radio but PttMethod is Vox: it must request the floor " +
+					"before it passes audio, so key it with a CM108 GPIO or serial RTS/DTR line or the start of each transmission is lost.", profile.DisplayName);
+			else if (settings.TxLeadMs <= 0)
+				logger?.Warning("Radio profile {Profile} is a cellular push-to-talk radio but TxLeadMs is 0: the first words of each " +
+					"transmission will be clipped while it waits for the floor. Start with {Lead} ms.", profile.DisplayName, profile.TxLeadMs);
+		}
+
 		private static RadioSettings MapSettings(RadioModeOptions o, ILogger logger)
 		{
 			var ptt = ParseEnumOrWarn(o.PttMethod, nameof(RadioModeOptions.PttMethod), PttKeyingMethod.Vox, logger);
 			var carrier = ParseEnumOrWarn(o.CarrierDetect, nameof(RadioModeOptions.CarrierDetect), CarrierDetectSource.None, logger);
+
+			// Carrier squelch needs a carrier source. Without one (None, or the unimplemented CM108 GPIO) the null detector
+			// reports a carrier permanently: static was relayed nonstop and, with AntiLoop, nothing was ever transmitted.
+			var squelch = o.Squelch ?? new SquelchSettings();
+			if (squelch.Mode == SquelchMode.Carrier && (carrier == CarrierDetectSource.None || carrier == CarrierDetectSource.Cm108Gpio))
+			{
+				logger?.Warning("Radio Squelch.Mode=Carrier needs CarrierDetect=SerialCts or SerialDsr (got {CarrierDetect}); using the audio-level (Vox) squelch instead.", carrier);
+				squelch = WithMode(squelch, SquelchMode.Vox);
+			}
+			else if (squelch.Mode == SquelchMode.Ctcss && !(squelch.CtcssFrequency > 0))
+			{
+				// With no tone to look for the CTCSS squelch never opens: nothing on the air would ever reach the channel.
+				logger?.Warning("Radio Squelch.Mode=Ctcss needs Squelch.CtcssFrequency (the PL tone in Hz, e.g. 100.0; got {Frequency}); using the audio-level (Vox) squelch instead.",
+					squelch.CtcssFrequency);
+				squelch = WithMode(squelch, SquelchMode.Vox);
+			}
 
 			return new RadioSettings
 			{
@@ -190,15 +298,27 @@ namespace Resgrid.Relay.Engine.Voice
 				CarrierDetect = carrier,
 				CarrierDetectInverted = o.CarrierDetectInverted,
 				CourtesyTone = o.CourtesyTone,
+				TxLeadMs = o.TxLeadMs,
 				TxHangMs = o.TxHangMs,
 				TxTailMs = o.TxTailMs,
+				MaxTransmitSeconds = Math.Max(0, o.MaxTransmitSeconds),
 				AntiLoop = o.AntiLoop,
 				TxGain = o.TxGain,
 				RxGain = o.RxGain,
 				HighPassCutoffHz = o.HighPassCutoffHz,
-				Squelch = o.Squelch
+				Squelch = squelch
 			};
 		}
+
+		private static SquelchSettings WithMode(SquelchSettings s, SquelchMode mode) => new SquelchSettings
+		{
+			Mode = mode,
+			OpenDbfs = s.OpenDbfs,
+			CloseDbfs = s.CloseDbfs,
+			HangMs = s.HangMs,
+			CtcssFrequency = s.CtcssFrequency,
+			CtcssMinStrength = s.CtcssMinStrength
+		};
 
 		private static TEnum ParseEnumOrWarn<TEnum>(string value, string settingName, TEnum fallback, ILogger logger)
 			where TEnum : struct, Enum
@@ -265,16 +385,22 @@ namespace Resgrid.Relay.Engine.Voice
 			return null;
 		}
 
-		private static (Mdc1200Decoder, EmergencyToneDetector, IEmergencyAlertSink) BuildSignaling(EmergencyOptions o, ILogger logger, IResgridCallsApi callsApi)
+		private static (Mdc1200Decoder, EmergencyToneDetector, IEmergencyAlertSink) BuildSignaling(EmergencyOptions o, ILogger logger, IResgridCallsApi callsApi, string departmentId)
 		{
 			if (o == null || (!o.DetectMdc1200 && !o.DetectTones))
 				return (null, null, null);
+
+			if (o.DetectMdc1200)
+				logger.Warning("MDC-1200 detection is experimental: the decoder does not implement the standard MDC-1200 framing " +
+					"(40-bit sync, convolutional FEC, interleaving), so emergency bursts from Motorola radios are not decoded. " +
+					"Do not rely on it for emergency alerting; use DetectTones or the radio system's own alerting.");
 
 			var mdc = o.DetectMdc1200 ? new Mdc1200Decoder(new Mdc1200Settings(), AudioFormat.SampleRate) : null;
 			var emergency = o.DetectTones
 				? new EmergencyToneDetector(new EmergencyToneSettings { Frequencies = o.ToneFrequencies ?? new List<double>() }, AudioFormat.SampleRate)
 				: null;
-			var sink = new ResgridEmergencyAlertSink(logger, o.CreateCall, o.CallPriority, string.IsNullOrWhiteSpace(o.DispatchList) ? null : o.DispatchList, callsApi);
+			var sink = new ResgridEmergencyAlertSink(logger, o.CreateCall, o.CallPriority, string.IsNullOrWhiteSpace(o.DispatchList) ? null : o.DispatchList, callsApi,
+				departmentId, TimeSpan.FromSeconds(Math.Max(0, o.CooldownSeconds)));
 			return (mdc, emergency, sink);
 		}
 	}

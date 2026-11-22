@@ -66,6 +66,24 @@ namespace Resgrid.Providers.ApiClient.V4
 		public string DepartmentId { get; set; }
 
 		/// <summary>
+		/// Set to true when the <see cref="ResgridAuthGrantType.ClientCredentials"/> client is a system-level service account
+		/// (credentials from Resgrid's SystemLoginCredentials, not a department code + secret). Resgrid marks such tokens with a
+		/// ServiceAccount claim and treats the caller like the system API key: it may act for any department, a department-wide
+		/// immediate call pages nobody (the relay saves it pending instead), and attachments name their author explicitly. Access
+		/// tokens are encrypted, so the relay cannot read the claim itself and has to be told. Ignored for the other grant types.
+		/// Default: false.
+		/// </summary>
+		public bool ServiceAccount { get; set; }
+
+		/// <summary>
+		/// True when Resgrid treats this caller as a system caller: the <see cref="ResgridAuthGrantType.SystemApiKey"/> grant, or a
+		/// client_credentials <see cref="ServiceAccount"/>. A method rather than a property so it never lands in saved settings.
+		/// </summary>
+		public bool IsSystemCaller() =>
+			GrantType == ResgridAuthGrantType.SystemApiKey ||
+			(GrantType == ResgridAuthGrantType.ClientCredentials && ServiceAccount);
+
+		/// <summary>
 		/// Returns a shallow copy of these options whose <see cref="TokenCachePath"/>
 		/// is rewritten to a per-<paramref name="discriminator"/> location so that
 		/// concurrently running relay modes do not share (and clobber) a single
@@ -103,7 +121,8 @@ namespace Resgrid.Providers.ApiClient.V4
 				TokenCachePath = isolatedPath,
 				GrantType = GrantType,
 				SystemApiKey = SystemApiKey,
-				DepartmentId = DepartmentId
+				DepartmentId = DepartmentId,
+				ServiceAccount = ServiceAccount
 			};
 		}
 

@@ -36,5 +36,11 @@ namespace Resgrid.Providers.ApiClient.V4.Models
 		public string RefreshToken { get; set; }
 		public DateTimeOffset ExpiresAtUtc { get; set; }
 		public string UserId { get; set; }
+
+		/// <summary>
+		/// SHA-256 of the refresh token configured when this cache was written, so a newly configured token can be told apart
+		/// from the one the cache already rotated past.
+		/// </summary>
+		public string ConfiguredRefreshTokenHash { get; set; }
 	}
 }

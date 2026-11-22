@@ -26,6 +26,7 @@ namespace Resgrid.Audio.Core
 	public class AudioRecorder : IAudioRecorder
 	{
 		WaveInEvent waveIn;
+		WaveInEvent detectorWaveIn;
 		private SampleAggregator _sampleAggregator;
 		RecordingState recordingState;
 		WaveFileWriter writer;
@@ -87,8 +88,22 @@ namespace Resgrid.Audio.Core
 			bwp.DiscardOnBufferOverflow = true;
 
 			waveIn.StartRecording();
-			_audioEvaluator.Start(new WaveInEvent() {DeviceNumber = recordingDevice});
-			//_audioEvaluator.Start(waveIn);
+			try
+			{
+				// The tone detector captures from its own handle on the same device; kept so Stop can release it.
+				detectorWaveIn = new WaveInEvent() { DeviceNumber = recordingDevice };
+				_audioEvaluator.Start(detectorWaveIn);
+			}
+			catch
+			{
+				// Don't leave the first capture running when the detector can't open the device.
+				try { waveIn.StopRecording(); } catch { }
+				waveIn.Dispose();
+				waveIn = null;
+				detectorWaveIn?.Dispose();
+				detectorWaveIn = null;
+				throw;
+			}
 
 			recordingState = RecordingState.Monitoring;
 		}
@@ -97,6 +112,12 @@ namespace Resgrid.Audio.Core
 		{
 			recordingState = RecordingState.Stopped;
 			writer?.Dispose();
+			if (sender is WaveInEvent stopped)
+			{
+				stopped.DataAvailable -= OnDataAvailable;
+				stopped.RecordingStopped -= OnRecordingStopped;
+				stopped.Dispose();
+			}
 			Stopped(this, EventArgs.Empty);
 		}
 
@@ -117,6 +138,12 @@ namespace Resgrid.Audio.Core
 				recordingState = RecordingState.RequestedStop;
 				waveIn?.StopRecording();
 			}
+
+			// The tone detector captures from its own device handle; stop it too, or it keeps detecting (and triggering) after
+			// the mode has stopped, and release that handle.
+			_audioEvaluator?.Stop();
+			try { detectorWaveIn?.Dispose(); } catch { }
+			detectorWaveIn = null;
 		}
 
 		public SampleAggregator SampleAggregator => _sampleAggregator;
@@ -184,10 +211,11 @@ namespace Resgrid.Audio.Core
 			if (buffer == null || buffer.Length == 0)
 				return Array.Empty<byte>();
 
-			var directory = Path.Combine(AppContext.BaseDirectory, "DispatchAudio");
+			// Scratch space only (the files are deleted below): the install directory is read-only under Program Files.
+			var directory = Path.Combine(Path.GetTempPath(), "Resgrid", "Relay", "DispatchAudio");
 			Directory.CreateDirectory(directory);
 
-			var fileRoot = Path.Combine(directory, $"RelayAudio_{DateTime.Now:s}".Replace(":", "_"));
+			var fileRoot = Path.Combine(directory, $"RelayAudio_{DateTime.Now:s}_{watcher.Id:N}".Replace(":", "_"));
 			var waveFilePath = $"{fileRoot}.wav";
 			var mp3FilePath = $"{fileRoot}.mp3";
 

@@ -7,6 +7,7 @@
              xmlns:vm="clr-namespace:Resgrid.Audio.Relay.ViewModels"
              xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
              mc:Ignorable="d"
+             Foreground="{DynamicResource TextFillColorPrimaryBrush}"
              d:DataContext="{d:DesignInstance Type=vm:DevicesViewModel}"
              d:DesignHeight="450" d:DesignWidth="800">
     <Grid Margin="24">

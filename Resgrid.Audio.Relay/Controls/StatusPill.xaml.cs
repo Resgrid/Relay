@@ -13,13 +13,22 @@ namespace Resgrid.Audio.Relay.Controls
 		public StatusPill()
 		{
 			InitializeComponent();
+			Visibility = Visibility.Collapsed;
 		}
 
 		public static readonly DependencyProperty StateProperty = DependencyProperty.Register(
 			nameof(State),
 			typeof(ConnectionState),
 			typeof(StatusPill),
-			new FrameworkPropertyMetadata(ConnectionState.NotApplicable));
+			new FrameworkPropertyMetadata(ConnectionState.NotApplicable, OnStateChanged));
+
+		// A connection the mode doesn't use (e.g. Redis for the radio bridge) isn't shown at all, instead of a grey
+		// "NotApplicable" pill.
+		private static void OnStateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+		{
+			if (d is StatusPill pill)
+				pill.Visibility = (ConnectionState)e.NewValue == ConnectionState.NotApplicable ? Visibility.Collapsed : Visibility.Visible;
+		}
 
 		public ConnectionState State
 		{

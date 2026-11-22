@@ -120,6 +120,19 @@ namespace Resgrid.Audio.Voice.Tests
 			gate.Process(LevelFrame(-60)).Should().BeTrue();  // hang 10 ms
 			gate.Process(LevelFrame(-60)).Should().BeFalse(); // hang expired -> closed
 		}
+
+		[Test]
+		public void Gate_Closes_When_The_Static_Floor_Sits_Between_The_Thresholds()
+		{
+			// The documented tuning puts OpenDbfs just above the static floor, so after a transmission the static sits between
+			// CloseDbfs and OpenDbfs; the gate must still close instead of relaying static forever.
+			var gate = new SquelchGate(new SquelchSettings { OpenDbfs = -38, CloseDbfs = -45, HangMs = 100 });
+			gate.Process(LevelFrame(-20)).Should().BeTrue();
+
+			var closedAfter = Enumerable.Range(1, 100).FirstOrDefault(_ => !gate.Process(LevelFrame(-41)));
+
+			closedAfter.Should().BeInRange(15, 25, "in-band audio drains the 100 ms hang at half speed");
+		}
 	}
 
 	[TestFixture]

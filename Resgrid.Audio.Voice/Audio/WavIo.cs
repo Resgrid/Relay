@@ -67,13 +67,17 @@ namespace Resgrid.Audio.Voice.Audio
 			while (pos + 8 <= wav.Length)
 			{
 				var id = span.Slice(pos, 4);
-				int size = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(pos + 4, 4));
+				// Unsigned and clamped to what is left: a corrupt or hostile size (0xFFFFFFF8 read as -8) used to leave pos where
+				// it was, spinning this loop forever, or move it backwards.
+				long declared = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(pos + 4, 4));
 				int body = pos + 8;
-				if (body + size > wav.Length)
-					size = wav.Length - body;
+				int size = (int)Math.Min(declared, wav.Length - body);
 
 				if (id[0] == 'f' && id[1] == 'm' && id[2] == 't' && id[3] == ' ')
 				{
+					if (size < 16)
+						throw new ArgumentException("WAV fmt chunk is too short.", nameof(wav));
+
 					format = BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(body, 2));
 					channels = BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(body + 2, 2));
 					sampleRate = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(body + 4, 4));

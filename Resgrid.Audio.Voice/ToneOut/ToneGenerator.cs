@@ -21,7 +21,7 @@ namespace Resgrid.Audio.Voice.ToneOut
 		/// <summary>A pure sine tone with short raised-cosine fades to avoid clicks.</summary>
 		public short[] Sine(double frequencyHz, int milliseconds, double amplitude = 0.5)
 		{
-			int count = Math.Max(0, _sampleRate * milliseconds / 1000);
+			int count = SampleCount(milliseconds);
 			var samples = new short[count];
 			double step = 2 * Math.PI * frequencyHz / _sampleRate;
 			int fade = Math.Min(count / 2, _sampleRate / 200); // ~5 ms fade
@@ -42,9 +42,12 @@ namespace Resgrid.Audio.Voice.ToneOut
 
 		public short[] Silence(int milliseconds)
 		{
-			int count = Math.Max(0, _sampleRate * milliseconds / 1000);
-			return new short[count];
+			return new short[SampleCount(milliseconds)];
 		}
+
+		// In long arithmetic: sampleRate * milliseconds overflows int past ~44.7 s at 48 kHz, went negative, and the tone vanished.
+		private int SampleCount(int milliseconds) =>
+			(int)Math.Clamp((long)_sampleRate * milliseconds / 1000, 0, int.MaxValue);
 
 		/// <summary>A short courtesy beep (e.g. a repeater "K" tone after unkey).</summary>
 		public short[] CourtesyBeep(double frequencyHz = 660, int milliseconds = 120, double amplitude = 0.4)

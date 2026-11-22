@@ -9,7 +9,8 @@
                  xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
                  mc:Ignorable="d"
                  Title="Resgrid Relay"
-                 Height="640" Width="1000"
+                 Icon="pack://application:,,,/Resources/ResgridRelay.ico"
+                 Height="720" Width="1080"
                  MinHeight="480" MinWidth="760"
                  WindowStartupLocation="CenterScreen"
                  ExtendsContentIntoTitleBar="True"
@@ -29,7 +30,11 @@
         <ui:TitleBar Grid.Row="0"
                      Title="Resgrid Relay"
                      ShowMaximize="True"
-                     ShowMinimize="True" />
+                     ShowMinimize="True">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/Resources/ResgridRelay.png" Width="18" Height="18" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
 
         <!-- Navigation + content -->
         <ui:NavigationView x:Name="RootNavigation"
@@ -99,9 +104,14 @@
                 <!-- Master Start/Stop -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <ui:Button Content="Start"
+                               Icon="{ui:SymbolIcon Play24}"
+                               Appearance="Primary"
                                Margin="0,0,8,0"
+                               ToolTip="Start the Auto-start modes (or the configured mode when none are chosen)"
                                Command="{Binding StartCommand}" />
                     <ui:Button Content="Stop"
+                               Icon="{ui:SymbolIcon Stop24}"
+                               ToolTip="Stop every running mode"
                                Command="{Binding StopCommand}" />
                 </StackPanel>
             </Grid>
@@ -109,12 +119,15 @@
 
         <!-- Tray icon -->
         <tb:TaskbarIcon x:Name="TrayIcon"
-                        ToolTipText="Resgrid Relay"
+                        ToolTipText="{Binding TrayToolTip}"
                         NoLeftClickDelay="True"
                         TrayLeftMouseUp="TrayIcon_OnTrayLeftMouseUp">
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu>
-                    <MenuItem Header="Open" Click="TrayOpen_OnClick" />
+                    <MenuItem Header="Open Resgrid Relay" FontWeight="SemiBold" Click="TrayOpen_OnClick" />
+                    <Separator />
+                    <MenuItem Header="Start default modes" Click="TrayStart_OnClick" />
+                    <MenuItem Header="Stop all modes" Click="TrayStop_OnClick" />
                     <Separator />
                     <MenuItem Header="Quit" Click="TrayQuit_OnClick" />
                 </ContextMenu>

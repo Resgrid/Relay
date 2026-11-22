@@ -8,8 +8,13 @@ namespace Resgrid.Audio.Core.Radio
 	/// </summary>
 	public interface IPttController : IDisposable
 	{
+		/// <summary>The state the PTT line was last driven to successfully.</summary>
 		bool IsKeyed { get; }
-		void Key();
-		void Unkey();
+
+		/// <summary>Keys the radio. Returns false when the line could not be driven; <see cref="IsKeyed"/> is then unchanged.</summary>
+		bool Key();
+
+		/// <summary>Unkeys the radio. Returns false when the line could not be driven; <see cref="IsKeyed"/> is then unchanged.</summary>
+		bool Unkey();
 	}
 }

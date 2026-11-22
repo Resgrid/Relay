@@ -64,6 +64,9 @@ namespace Resgrid.Relay.Engine.Smtp
 		public void UnroutableMessage(ISessionContext context, SmtpMessageSummary message) =>
 			_inner.UnroutableMessage(context, message);
 
+		public void UnparseableMessage(ISessionContext context, long sizeBytes, string smtpReply, Exception exception) =>
+			_inner.UnparseableMessage(context, sizeBytes, smtpReply, exception);
+
 		public void UnsupportedTarget(ISessionContext context, SmtpMessageSummary message) =>
 			_inner.UnsupportedTarget(context, message);
 
@@ -78,6 +81,12 @@ namespace Resgrid.Relay.Engine.Smtp
 
 		public void MessageFailed(ISessionContext context, SmtpMessageSummary message, Exception exception, TimeSpan duration) =>
 			_inner.MessageFailed(context, message, exception, duration);
+
+		public void MessageInProgress(ISessionContext context, SmtpMessageSummary message) =>
+			_inner.MessageInProgress(context, message);
+
+		public void ProcessingWarning(ISessionContext context, SmtpMessageSummary message, string warning, Exception exception) =>
+			_inner.ProcessingWarning(context, message, warning, exception);
 
 		public ValueTask DisposeAsync() => _inner.DisposeAsync();
 	}

@@ -49,10 +49,11 @@ namespace Resgrid.Audio.Core.Model
 			return _trigger;
 		}
 
+		/// <summary>Forgets the riders and the fired trigger once a dispatch is finished, so the next one starts clean.</summary>
 		public void Clear()
 		{
-			_additionalWatchers = null;
 			_additionalWatchers = new List<Watcher>();
+			_trigger = null;
 		}
 
 		public void AddAdditionalWatcher(Watcher watcher)
