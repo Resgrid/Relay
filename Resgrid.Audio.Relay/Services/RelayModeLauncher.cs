@@ -37,7 +37,7 @@ namespace Resgrid.Audio.Relay.Services
 		private readonly ConcurrentDictionary<string, SemaphoreSlim> _lifecycleGates =
 			new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
 
-		// Set while a diagnostic (the Configuration screen's transmit test) holds the "radio" gate through TryClaimRadio.
+		// Set while a diagnostic (the Configuration screen's transmit test or tune meter) holds the "radio" gate through TryClaimRadio.
 		private volatile bool _radioClaimed;
 
 		public RelayModeLauncher(RelayController controller, ConfigurationService configuration, DesktopSettingsService desktop, ILogger logger)
@@ -51,10 +51,11 @@ namespace Resgrid.Audio.Relay.Services
 		private SemaphoreSlim Gate(string mode) => _lifecycleGates.GetOrAdd(mode ?? "", _ => new SemaphoreSlim(1, 1));
 
 		/// <summary>
-		/// Claims the radio's audio devices and PTT line for a diagnostic outside the Radio Bridge (the transmit test), so the
-		/// bridge cannot start while the diagnostic holds or is still releasing them — a bridge start waits for the claim —
-		/// and the diagnostic cannot start while the bridge runs, starts or stops. Returns null, with the reason, when the radio
-		/// is busy. Dispose the claim only once the diagnostic has finished its cleanup (PTT released, devices closed).
+		/// Claims the radio's audio devices and PTT line for a diagnostic outside the Radio Bridge (the transmit test, the tune
+		/// meter), so the bridge cannot start while the diagnostic holds or is still releasing them — a bridge start waits for
+		/// the claim — and the diagnostic cannot start while a bridge is tracked, starting or stopping. Returns null, with the
+		/// reason, when the radio is busy. Dispose the claim only once the diagnostic has finished its cleanup (PTT released,
+		/// devices closed).
 		/// </summary>
 		public IDisposable TryClaimRadio(out string reason)
 		{
@@ -67,7 +68,9 @@ namespace Resgrid.Audio.Relay.Services
 				return null;
 			}
 
-			if (IsActive("radio"))
+			// Any tracked bridge owns the radio, not just an active one: a bridge whose worker has not started yet still reads
+			// Stopped (and opens the devices moments later), and a faulted one is only disposed by its stop.
+			if (_controller.IsModeRunning("radio"))
 			{
 				gate.Release();
 				reason = "Stop the Radio Bridge first — it already owns the radio's audio and PTT.";
@@ -240,7 +243,7 @@ namespace Resgrid.Audio.Relay.Services
 		/// <summary>
 		/// Starts <paramref name="mode"/>. A faulted instance of the same mode is cleared first. Returns null on success, or the
 		/// reason it was not started. Serialized with every other start and stop of the same mode; a Radio Bridge start also
-		/// waits for a transmit test to give the radio back (<see cref="TryClaimRadio"/>). Cancelled when a stop-all is
+		/// waits for a transmit test or tune meter to give the radio back (<see cref="TryClaimRadio"/>). Cancelled when a stop-all is
 		/// requested before it gets to run.
 		/// </summary>
 		public Task<string> StartAsync(string mode) => StartAsync(mode, _controller.StopAllRequests);
@@ -259,7 +262,7 @@ namespace Resgrid.Audio.Relay.Services
 			if (!await gate.WaitAsync(LifecycleWaitTimeout).ConfigureAwait(true))
 			{
 				return string.Equals(mode, "radio", StringComparison.OrdinalIgnoreCase) && _radioClaimed
-					? $"{FriendlyName(mode)} not started: the radio transmit test (Configuration) is still using the radio. Stop it and try again."
+					? $"{FriendlyName(mode)} not started: the transmit test or tune meter (Configuration) is still using the radio. Stop it and try again."
 					: $"{FriendlyName(mode)} not started: it is still starting or stopping. Try again in a moment.";
 			}
 
@@ -285,7 +288,7 @@ namespace Resgrid.Audio.Relay.Services
 					return $"{FriendlyName(mode)} not started: the previous instance is still stopping. Try again in a moment.";
 				}
 
-				// A stop-all requested while this start waited (for the gate, a transmit test's radio claim or a teardown) wins.
+				// A stop-all requested while this start waited (for the gate, a radio test's claim or a teardown) wins.
 				if (_controller.StopAllRequests != stopAllRequests)
 					return StopAllCancelled(mode);
 

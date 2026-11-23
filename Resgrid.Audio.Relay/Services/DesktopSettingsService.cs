@@ -34,9 +34,15 @@ namespace Resgrid.Audio.Relay.Services
 		private readonly ILogger _logger;
 
 		public DesktopSettingsService(ILogger logger)
+			: this(logger, Path.Combine(Path.GetDirectoryName(RelayConfiguration.UserConfigPath) ?? ".", "desktop.json"))
+		{
+		}
+
+		/// <summary>Keeps the desktop settings in <paramref name="settingsPath"/> instead of next to the relay settings (tests).</summary>
+		public DesktopSettingsService(ILogger logger, string settingsPath)
 		{
 			_logger = logger;
-			SettingsPath = Path.Combine(Path.GetDirectoryName(RelayConfiguration.UserConfigPath) ?? ".", "desktop.json");
+			SettingsPath = settingsPath;
 			Current = Load();
 		}
 

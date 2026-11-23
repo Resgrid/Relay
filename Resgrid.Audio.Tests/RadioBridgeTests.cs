@@ -825,6 +825,32 @@ namespace Resgrid.Audio.Tests
 		}
 
 		[Test]
+		public async Task FailedKey_WhoseTurnEndsDuringASlowRetryWrite_ReleasesTheLine_InsteadOfPlayingTheHeldAudio()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt { FailWrites = true };
+			var session = new FakeSession();
+			await using var bridge = await Start(device, ptt, session, Settings(s =>
+			{
+				s.TxLeadMs = 200;
+				s.TxHangMs = 300;
+			}));
+
+			await TalkFor(session, "track-a", 200);
+			bridge.Transmitting.Should().BeTrue("the key-up is waiting for the line");
+
+			// The next retry (within the talker hang, so the turn is still live) goes through, but the write takes longer than
+			// the 500 ms hang: by the time the line is up the turn is over.
+			ptt.KeyDelayMs = 900;
+			ptt.FailWrites = false;
+
+			(await WaitUntil(() => ptt.KeyCalls > 0 && !bridge.Transmitting && !ptt.IsKeyed, 4000))
+				.Should().BeTrue("the line is released once the slow key write returns for an ended turn");
+			device.Writes.Should().BeEmpty("the expired turn's held audio is never played");
+			bridge.Fault.Should().BeNull();
+		}
+
+		[Test]
 		public async Task FailedKey_HeldAudioOfAnEndedTurn_IsNotPlayedAheadOfTheNextTalker()
 		{
 			var device = new FakeRadioDevice();

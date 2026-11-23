@@ -91,7 +91,15 @@ namespace Resgrid.Relay.Engine.Voice
 			// the ones that still need toning out.
 			var seen = state.Announced;
 			if (!state.Primed)
-				PrimeBacklog(await callsApi.GetActiveCallsAsync(deptId, cancellationToken).ConfigureAwait(false), state, DateTime.UtcNow);
+			{
+				// The boundary is when the snapshot was asked for, not when it came back: a call scheduled for a moment in between
+				// was still in the future when Resgrid answered, and is announced when it is dispatched rather than primed away.
+				var snapshotUtc = DateTime.UtcNow;
+				PrimeBacklog(await callsApi.GetActiveCallsAsync(deptId, cancellationToken).ConfigureAwait(false), state, snapshotUtc);
+			}
+
+			// LiveKit outage time already accounted for in the give-up clock (see the top of the poll loop).
+			var unusableSeen = monitor.UnusableTime;
 
 			var pollSeconds = Math.Max(5, options.DispatchVoice.PollSeconds);
 			logger.Information($"Dispatch tone-out on '{channel.Name}', polling new calls every {pollSeconds}s. Press Ctrl+C to stop.");
@@ -101,6 +109,14 @@ namespace Resgrid.Relay.Engine.Voice
 				// A hard LiveKit disconnect ends the poll loop so resilience reconnects.
 				if (monitor.IsDisconnected)
 					throw new InvalidOperationException($"LiveKit dispatch session disconnected ({monitor.Disconnected.Result}); reconnecting");
+
+				// An outage that began and ended between two polls is never seen as !IsUsable below, yet the waiting calls could
+				// not go out during it either: move their give-up clock past it. Skipped while the clock is paused (that pause
+				// already covers the time), so no outage is counted twice.
+				var unusableNow = monitor.UnusableTime;
+				if (!state.IsRetryClockPaused)
+					state.ShiftRetryClock(unusableNow - unusableSeen);
+				unusableSeen = unusableNow;
 
 				try
 				{
@@ -326,12 +342,20 @@ namespace Resgrid.Relay.Engine.Voice
 				return;
 
 			RetryClockPausedSinceUtc = null;
-			var paused = nowUtc - pausedSince;
-			if (paused <= TimeSpan.Zero)
+			ShiftRetryClock(nowUtc - pausedSince);
+		}
+
+		/// <summary>True while the give-up clock is paused (<see cref="PauseRetryClock"/>).</summary>
+		internal bool IsRetryClockPaused => RetryClockPausedSinceUtc != null;
+
+		/// <summary>Moves every waiting call's first attempt forward by <paramref name="outage"/>: time no tone-out could go out.</summary>
+		internal void ShiftRetryClock(TimeSpan outage)
+		{
+			if (outage <= TimeSpan.Zero)
 				return;
 
 			foreach (var callId in FirstAttemptUtc.Keys.ToList())
-				FirstAttemptUtc[callId] += paused;
+				FirstAttemptUtc[callId] += outage;
 		}
 	}
 }

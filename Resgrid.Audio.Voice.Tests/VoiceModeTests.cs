@@ -56,6 +56,36 @@ namespace Resgrid.Audio.Voice.Tests
 		}
 
 		[Test]
+		public void RetryClock_ShiftsPastAnOutageBetweenPolls()
+		{
+			var state = new DispatchToneOutState();
+			state.FirstAttemptUtc["c1"] = Now;
+
+			state.IsRetryClockPaused.Should().BeFalse();
+			state.ShiftRetryClock(TimeSpan.FromMinutes(7));
+			state.FirstAttemptUtc["c1"].Should().Be(Now.AddMinutes(7), "an outage no poll saw still did not count toward giving up");
+
+			state.ShiftRetryClock(TimeSpan.FromMinutes(-3));
+			state.FirstAttemptUtc["c1"].Should().Be(Now.AddMinutes(7), "a non-positive shift changes nothing");
+
+			state.PauseRetryClock(Now.AddMinutes(10));
+			state.IsRetryClockPaused.Should().BeTrue();
+		}
+
+		[Test]
+		public void PrimeBacklog_UsesTheSnapshotTime_SoACallScheduledDuringTheRequestIsStillTonedOut()
+		{
+			// Scheduled for 30 s after the snapshot was requested; the answer arrives a minute later. Judged at the request time
+			// it is still in the future, so it is not primed away as already handled.
+			var call = new CallResultData { CallId = "scheduled-soon", DispatchedOnUtc = Now.AddSeconds(30) };
+			var state = new DispatchToneOutState();
+
+			DispatchVoiceMode.PrimeBacklog(new[] { call }, state, Now);
+
+			state.Announced.Should().BeEmpty();
+		}
+
+		[Test]
 		public void IsScheduledForLater_TreatsAnUnspecifiedKindAsUtc()
 		{
 			var later = DateTime.SpecifyKind(Now.AddMinutes(1), DateTimeKind.Unspecified);
@@ -211,6 +241,30 @@ namespace Resgrid.Audio.Voice.Tests
 			session.RaiseConnection(false, "ServerShutdown");
 			monitor.IsDisconnected.Should().BeTrue();
 			(await monitor.Disconnected).Should().Be("ServerShutdown");
+		}
+
+		[Test]
+		public async Task UnusableTime_CountsReconnectingIntervals_IncludingTheOpenOne()
+		{
+			var session = new TestVoiceSession();
+			using var monitor = new VoiceSessionMonitor(session);
+			monitor.UnusableTime.Should().Be(TimeSpan.Zero);
+
+			// One outage that starts and ends between two checks still adds up.
+			session.RaiseConnection(false, "reconnecting");
+			await Task.Delay(120);
+			session.RaiseConnection(false, "reconnecting"); // a repeat does not restart the interval
+			await Task.Delay(80);
+			session.RaiseConnection(true, "reconnected");
+			var afterFirst = monitor.UnusableTime;
+			afterFirst.Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(180));
+
+			await Task.Delay(100);
+			monitor.UnusableTime.Should().Be(afterFirst, "connected time does not count");
+
+			session.RaiseConnection(false, "reconnecting");
+			await Task.Delay(100);
+			monitor.UnusableTime.Should().BeGreaterThanOrEqualTo(afterFirst + TimeSpan.FromMilliseconds(90), "the outage under way counts too");
 		}
 
 		[Test]

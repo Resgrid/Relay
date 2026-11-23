@@ -21,11 +21,25 @@ namespace Resgrid.Providers.ApiClient.V4
 
 		// Every client sharing a token cache file shares one lock: two relay modes running side by side in one process (the
 		// desktop app) must not both redeem the same refresh token, because Resgrid rotates it and the loser's redemption fails.
-		private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> SharedAuthLocks =
-			new System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+		private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SharedTokenCache> SharedTokenCaches =
+			new System.Collections.Concurrent.ConcurrentDictionary<string, SharedTokenCache>(StringComparer.OrdinalIgnoreCase);
+
+		/// <summary>What the clients on one token cache file in this process share (keyed by the file's full path).</summary>
+		private sealed class SharedTokenCache
+		{
+			public readonly SemaphoreSlim Lock = new SemaphoreSlim(1, 1);
+
+			/// <summary>
+			/// The latest state of each credential chain a client here rotated, by its CredentialId; read and written only under
+			/// <see cref="Lock"/>. Once the file holds another credential its clients leave it alone, so the file can no longer
+			/// carry one client's rotation to the others on the old chain: this does, and only to clients of that chain.
+			/// </summary>
+			public readonly Dictionary<string, ResgridApiTokenState> Chains = new Dictionary<string, ResgridApiTokenState>(StringComparer.Ordinal);
+		}
 
 		private readonly SemaphoreSlim AuthLock;
 		private readonly bool _ownsAuthLock;
+		private readonly SharedTokenCache _sharedTokenCache;
 		private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions()
 		{
 			DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -65,7 +79,8 @@ namespace Resgrid.Providers.ApiClient.V4
 			}
 			else
 			{
-				AuthLock = SharedAuthLocks.GetOrAdd(Path.GetFullPath(options.TokenCachePath), _ => new SemaphoreSlim(1, 1));
+				_sharedTokenCache = SharedTokenCaches.GetOrAdd(Path.GetFullPath(options.TokenCachePath), _ => new SharedTokenCache());
+				AuthLock = _sharedTokenCache.Lock;
 			}
 			_tokenState = LoadTokenState(options);
 
@@ -299,36 +314,42 @@ namespace Resgrid.Providers.ApiClient.V4
 				// Another client on the same cache (a second relay mode, or the previous run of this one) may have rotated the
 				// refresh token since this client loaded it, in which case the one held here is already spent. Pick up the newer
 				// state first; when it still carries a live access token there is nothing to redeem at all.
-				var persistTokenState = true;
 				if (_options.GrantType == ResgridAuthGrantType.RefreshToken)
 				{
+					// A file that now holds another credential (it was replaced, or another sign-in wrote it) is not adopted: that
+					// would send requests as that credential while CredentialScope, and every namespace built from it, still names
+					// this one. The client keeps the chain it started with (and leaves the file alone, see below).
 					var latest = LoadTokenState(_options);
 					if (!String.IsNullOrWhiteSpace(latest.RefreshToken) &&
-						!String.Equals(latest.RefreshToken, _tokenState.RefreshToken, StringComparison.Ordinal))
+						!String.Equals(latest.RefreshToken, _tokenState.RefreshToken, StringComparison.Ordinal) &&
+						IsSameCredentialChain(latest) &&
+						latest.ExpiresAtUtc >= _tokenState.ExpiresAtUtc)
 					{
-						if (!IsSameCredentialChain(latest))
-						{
-							// The file now holds another credential (it was replaced, or another sign-in wrote it). Adopting it would
-							// send requests as that credential while CredentialScope, and every namespace built from it, still names
-							// this one. Keep the chain this client started with, and leave the file alone: writing this chain over
-							// it would destroy the credential put there, which the next start is meant to pick up.
-							persistTokenState = false;
-							OnWarning($"The Resgrid token cache '{Path.GetFullPath(_options.TokenCachePath)}' now holds a different credential than " +
-								"the one this relay started with; it keeps signing in with its own and leaves the file unchanged. Restart the " +
-								"relay to switch to the credential in the file.");
-						}
-						else if (latest.ExpiresAtUtc >= _tokenState.ExpiresAtUtc)
-						{
-							// The cache id names the credential chain, which the rotation continued, and is what the next reload is
-							// compared with. (A client that held no chain yet takes the file's under the file's id; its scope, built
-							// before it had any credential, named no other one.) The adopted token is not one this client was just
-							// issued, so its age is unknown.
-							latest.CredentialId ??= _tokenState.CredentialId;
-							_tokenState = latest;
-							_accessTokenIssuedAtUtc = DateTimeOffset.MinValue;
-							if (HasValidAccessToken())
-								return;
-						}
+						// The cache id names the credential chain, which the rotation continued, and is what the next reload is
+						// compared with. (A client that held no chain yet takes the file's under the file's id; its scope, built
+						// before it had any credential, named no other one.) An id-less file gets the id every client that loads
+						// it at start derives from its token, not this client's own (random if it started before any cache
+						// existed), so they all still recognise each other's rotation. The adopted token is not one this client
+						// was just issued, so its age is unknown.
+						if (String.IsNullOrWhiteSpace(latest.CredentialId))
+							latest.CredentialId = NewCredentialId(latest.RefreshToken);
+						_tokenState = latest;
+						_accessTokenIssuedAtUtc = DateTimeOffset.MinValue;
+						if (HasValidAccessToken())
+							return;
+					}
+
+					// The file no longer carries this chain once it holds another credential; the other clients of the chain in
+					// this process left their rotation here instead.
+					var sharedKey = SharedChainKey();
+					if (sharedKey != null && _sharedTokenCache.Chains.TryGetValue(sharedKey, out var shared) &&
+						!String.Equals(shared.RefreshToken, _tokenState.RefreshToken, StringComparison.Ordinal) &&
+						shared.ExpiresAtUtc >= _tokenState.ExpiresAtUtc)
+					{
+						_tokenState = CopyTokenState(shared);
+						_accessTokenIssuedAtUtc = DateTimeOffset.MinValue;
+						if (HasValidAccessToken())
+							return;
 					}
 				}
 
@@ -340,16 +361,17 @@ namespace Resgrid.Providers.ApiClient.V4
 					["client_secret"] = _options.ClientSecret
 				};
 
+				string redeemedRefreshToken = null;
 				switch (_options.GrantType)
 				{
 					case ResgridAuthGrantType.RefreshToken:
 					{
-						var refreshToken = ResolveRefreshToken();
-						if (String.IsNullOrWhiteSpace(refreshToken))
+						redeemedRefreshToken = ResolveRefreshToken();
+						if (String.IsNullOrWhiteSpace(redeemedRefreshToken))
 							throw new ResgridAuthenticationException("No Resgrid refresh token is available.");
 
 						formData["grant_type"] = "refresh_token";
-						formData["refresh_token"] = refreshToken;
+						formData["refresh_token"] = redeemedRefreshToken;
 						break;
 					}
 
@@ -403,10 +425,19 @@ namespace Resgrid.Providers.ApiClient.V4
 				// nothing may depend on it (Resgrid takes the author of a token caller's upload from the token itself).
 				_tokenState.UserId = TryReadUserId(tokenResponse.AccessToken);
 
+				// Before the file: the other clients of this chain must find the rotation even if the file is not written.
+				var chainKey = SharedChainKey();
+				if (chainKey != null)
+					_sharedTokenCache.Chains[chainKey] = CopyTokenState(_tokenState);
+
 				// Not the caller's token: once Resgrid has rotated the refresh token, the new one must reach disk even if the
 				// request that triggered the refresh is being cancelled, or the next start has only a dead token.
-				if (persistTokenState)
-					await PersistTokenStateAsync(_tokenState, CancellationToken.None).ConfigureAwait(false);
+				if (!await PersistTokenStateAsync(_tokenState, redeemedRefreshToken, CancellationToken.None).ConfigureAwait(false))
+				{
+					OnWarning($"The Resgrid token cache '{Path.GetFullPath(_options.TokenCachePath)}' now holds a different credential than " +
+						"the one this relay started with; it keeps signing in with its own and leaves the file unchanged. Restart the " +
+						"relay to switch to the credential in the file.");
+				}
 			}
 			finally
 			{
@@ -426,6 +457,43 @@ namespace Resgrid.Providers.ApiClient.V4
 
 			return String.Equals(latest.CredentialId, _tokenState.CredentialId, StringComparison.Ordinal);
 		}
+
+		/// <summary>
+		/// Under which key this client's chain is shared with the other clients of it on the same cache file in this process, or
+		/// null: without a cache file nothing is shared, and a configured refresh token names the credential, so the file is never
+		/// left alone and carries every rotation itself.
+		/// </summary>
+		private string SharedChainKey() =>
+			_sharedTokenCache != null && UsesCachedCredentialIdentity(_options) && !String.IsNullOrWhiteSpace(_tokenState.CredentialId)
+				? _tokenState.CredentialId
+				: null;
+
+		/// <summary>
+		/// Whether the cache file, read again now, holds another credential than the chain this client just rotated: it was
+		/// replaced while the token endpoint answered (or before, and this client kept its own chain). The file still holding
+		/// the redeemed token, or one this client's chain wrote, or nothing readable, is this client's to write.
+		/// </summary>
+		private bool CacheHoldsAnotherCredential(ResgridApiTokenState rotated, string redeemedRefreshToken)
+		{
+			if (!UsesCachedCredentialIdentity(_options))
+				return false;
+
+			var current = LoadTokenState(_options);
+			return !String.IsNullOrWhiteSpace(current.RefreshToken) &&
+				   !String.Equals(current.RefreshToken, redeemedRefreshToken, StringComparison.Ordinal) &&
+				   !String.Equals(current.RefreshToken, rotated.RefreshToken, StringComparison.Ordinal) &&
+				   !String.Equals(current.CredentialId, rotated.CredentialId, StringComparison.Ordinal);
+		}
+
+		private static ResgridApiTokenState CopyTokenState(ResgridApiTokenState state) => new ResgridApiTokenState
+		{
+			AccessToken = state.AccessToken,
+			RefreshToken = state.RefreshToken,
+			ExpiresAtUtc = state.ExpiresAtUtc,
+			UserId = state.UserId,
+			ConfiguredRefreshTokenHash = state.ConfiguredRefreshTokenHash,
+			CredentialId = state.CredentialId
+		};
 
 		private void OnWarning(string message)
 		{
@@ -571,10 +639,14 @@ namespace Resgrid.Providers.ApiClient.V4
 			return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken.Trim())));
 		}
 
-		private async Task PersistTokenStateAsync(ResgridApiTokenState tokenState, CancellationToken cancellationToken)
+		/// <summary>
+		/// Writes the state to the token cache; false when the file holds another credential by then and is left alone (writing
+		/// this chain over it would destroy the credential put there, which the next start is meant to pick up).
+		/// </summary>
+		private async Task<bool> PersistTokenStateAsync(ResgridApiTokenState tokenState, string redeemedRefreshToken, CancellationToken cancellationToken)
 		{
 			if (String.IsNullOrWhiteSpace(_options.TokenCachePath))
-				return;
+				return true;
 
 			var cachePath = Path.GetFullPath(_options.TokenCachePath);
 			var cacheDirectory = Path.GetDirectoryName(cachePath);
@@ -603,10 +675,29 @@ namespace Resgrid.Providers.ApiClient.V4
 			// A reader holding the cache open on Windows can briefly block the replace; retry rather than lose the rotated token.
 			for (var attempt = 1; ; attempt++)
 			{
+				// Checked right before every swap rather than once before the redemption: the file may be replaced while the
+				// token endpoint answers, or while it is held open. (In-process clients are serialized by AuthLock; a replacement
+				// by another process landing between this read and the swap itself is still overwritten.)
+				if (CacheHoldsAnotherCredential(tokenState, redeemedRefreshToken))
+				{
+					try
+					{
+						File.Delete(tempPath);
+					}
+					catch (IOException)
+					{
+					}
+					catch (UnauthorizedAccessException)
+					{
+					}
+
+					return false;
+				}
+
 				try
 				{
 					File.Move(tempPath, cachePath, overwrite: true);
-					return;
+					return true;
 				}
 				catch (IOException) when (attempt < 5)
 				{

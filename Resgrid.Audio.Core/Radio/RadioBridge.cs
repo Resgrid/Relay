@@ -825,7 +825,7 @@ namespace Resgrid.Audio.Core.Radio
 				if (_wantKeyed && _keyPending && !IsKeyPendingTurnActive(now))
 					changed = ReleaseTransmit("the talker stopped before the PTT line keyed", now);
 
-				fault = SyncPttLine(now);
+				fault = SyncPttLine(now, ref changed);
 
 				var buffered = Math.Max(0, _device.BufferedTransmit.Ticks);
 				fault ??= CheckTransmitOutput(now, buffered, _device.PlayedTransmit.Ticks);
@@ -841,8 +841,8 @@ namespace Resgrid.Audio.Core.Radio
 		}
 
 		// Under _txLock. Re-drives a PTT line that a failed write left out of step with the bridge; returns a fault reason when
-		// it has stayed out of step too long.
-		private string SyncPttLine(long now)
+		// it has stayed out of step too long. Sets <paramref name="changed"/> when Transmitting changed.
+		private string SyncPttLine(long now, ref bool changed)
 		{
 			if (_ptt.IsKeyed == _wantKeyed)
 			{
@@ -851,7 +851,7 @@ namespace Resgrid.Audio.Core.Radio
 					_pttMismatchSinceTicks = 0;
 					_logger?.Information("PTT line back in step ({State})", _wantKeyed ? "keyed" : "unkeyed");
 				}
-				OnPttLineInStep(now);
+				changed |= OnPttLineInStep(now);
 				return null;
 			}
 
@@ -867,7 +867,7 @@ namespace Resgrid.Audio.Core.Radio
 					_pttMismatchSinceTicks = 0;
 					_logger?.Information("PTT line {State} after retrying", _wantKeyed ? "keyed" : "unkeyed");
 					// Timed from when the write returned (a HID/serial write can take a while).
-					OnPttLineInStep(Math.Max(now, DateTime.UtcNow.Ticks));
+					changed |= OnPttLineInStep(Math.Max(now, DateTime.UtcNow.Ticks));
 					return null;
 				}
 			}
@@ -879,19 +879,28 @@ namespace Resgrid.Audio.Core.Radio
 		}
 
 		// Under _txLock: the PTT line is in the state the bridge wants. A held key-up starts transmitting; an unconfirmed
-		// release lets receive audio through again.
-		private void OnPttLineInStep(long now)
+		// release lets receive audio through again. Returns whether Transmitting changed.
+		private bool OnPttLineInStep(long now)
 		{
 			if (_wantKeyed)
 			{
 				_keyFailingSinceTicks = 0;
 				if (_keyPending)
+				{
+					// Rechecked now that the line is up: the key write runs under _txLock and can block (a HID or serial write),
+					// while the floor changes hands under _talkerLock. A turn that ended meanwhile has nothing left to say, so the
+					// line is released rather than its expired audio played.
+					if (!IsKeyPendingTurnActive(now))
+						return ReleaseTransmit("the talker stopped while the PTT line keyed", now);
 					StartHeldTransmit(now);
+				}
 			}
 			else if (_unkeyPending)
 			{
 				OnUnkeyConfirmed(now);
 			}
+
+			return false;
 		}
 
 		// Under _txLock. Returns a fault reason once the device has stopped playing its transmit backlog: the output plays

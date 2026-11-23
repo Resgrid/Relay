@@ -313,6 +313,9 @@ namespace Resgrid.Audio.Relay.ViewModels
 #if NET10_0_WINDOWS
 		private CancellationTokenSource _tuneCts;
 		private CancellationTokenSource _transmitCts;
+
+		// The latest tune run: completes once it has closed the capture device and given the radio claim back.
+		private Task _tuneRun = Task.CompletedTask;
 #endif
 
 		/// <summary>Setup advice for the selected radio profile.</summary>
@@ -919,18 +922,27 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 			IsTestingConnection = true;
 			ConnectionTestStatus = "Connecting to Resgrid…";
+			var handBackNote = "";
 			try
 			{
 				var api = BuildWorkingOptions().Resgrid;
 				api.Validate();
 				var usesPendingCache = UseTestTokenCache(api);
 
-				var healthy = await Task.Run(async () =>
+				bool healthy;
+				try
 				{
-					using var client = new ResgridV4ApiClient(api);
-					using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-					return await client.IsHealthyAsync(timeout.Token).ConfigureAwait(false);
-				}).ConfigureAwait(true);
+					healthy = await Task.Run(async () =>
+					{
+						using var client = new ResgridV4ApiClient(api);
+						using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+						return await client.IsHealthyAsync(timeout.Token).ConfigureAwait(false);
+					}).ConfigureAwait(true);
+				}
+				finally
+				{
+					handBackNote = ReturnTestedRelayChain();
+				}
 
 				ConnectionTestStatus = healthy
 					? $"Connected: signed in to {api.BaseUrl} with the {api.GrantType} grant." + (usesPendingCache
@@ -948,6 +960,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 			}
 			finally
 			{
+				ConnectionTestStatus += handBackNote;
 				IsTestingConnection = false;
 				if (_disposed)
 					DiscardPendingSignIn(); // the page closed mid-test; nobody can save this sign-in now
@@ -959,14 +972,22 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private string _pendingTokenIdentity;
 		private string _pendingTokenCachePath;
 
+		// While a test of an edited client secret runs on a copy of the relay's chain (TokenCacheFork): the relay's token cache
+		// and the refresh token copied from it (null when it had none), or null.
+		private string _forkedRelayCachePath;
+		private string _forkedRefreshToken;
+
 		/// <summary>
 		/// Points the connection test's token cache at the right place. The relay's cache holds no record of whose token it
 		/// is, so borrowing it for other credentials either passed on the relay's live user token (a wrong client secret
 		/// "connected") or wrote the test's tokens over the relay's rotated refresh token.
 		/// <list type="bullet">
 		/// <item>ClientCredentials / SystemApiKey: no cache — the edited id and secret are exchanged for real, and nothing is written.</item>
-		/// <item>RefreshToken with the relay's own identity (base URL, client id, refresh token): the relay's cache, which holds
-		/// the live rotated token.</item>
+		/// <item>RefreshToken with the relay's own identity (base URL, client id, refresh token) and client secret: the relay's
+		/// cache, which holds the live rotated token.</item>
+		/// <item>RefreshToken with the relay's identity but an edited client secret: a copy of the relay's cache without its access
+		/// token (which would pass without the secret ever being sent), so the edited secret has to redeem the relay's refresh
+		/// token; the rotated chain is handed back to the relay's cache after the test (<see cref="ReturnTestedRelayChain"/>).</item>
 		/// <item>RefreshToken with an edited identity: a separate pending cache, carried into the relay's cache when that identity
 		/// is saved (<see cref="CarryForwardTestedSignIn"/>). Returns true.</item>
 		/// </list>
@@ -980,17 +1001,51 @@ namespace Resgrid.Audio.Relay.ViewModels
 			}
 
 			var relay = _configuration.Current?.Resgrid;
-			if (relay != null && relay.GrantType == ResgridAuthGrantType.RefreshToken && SignInIdentity(api) == SignInIdentity(relay))
+			var relayChain = relay != null && relay.GrantType == ResgridAuthGrantType.RefreshToken && SignInIdentity(api) == SignInIdentity(relay);
+			if (relayChain && string.Equals((api.ClientSecret ?? "").Trim(), (relay.ClientSecret ?? "").Trim(), StringComparison.Ordinal))
 			{
 				api.TokenCachePath = relay.TokenCachePath;
 				return false;
 			}
 
-			var relayCache = string.IsNullOrWhiteSpace(relay?.TokenCachePath) ? RelayConfiguration.DefaultTokenCachePath() : relay.TokenCachePath;
-			_pendingTokenCachePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(relayCache)) ?? ".", "resgrid-token.pending.json");
+			var relayCache = Path.GetFullPath(string.IsNullOrWhiteSpace(relay?.TokenCachePath) ? RelayConfiguration.DefaultTokenCachePath() : relay.TokenCachePath);
+			_pendingTokenCachePath = Path.Combine(Path.GetDirectoryName(relayCache) ?? ".", "resgrid-token.pending.json");
+			if (relayChain)
+			{
+				_forkedRefreshToken = TokenCacheFork.Fork(relayCache, _pendingTokenCachePath);
+				_forkedRelayCachePath = relayCache;
+			}
 			_pendingTokenIdentity = SignInIdentity(api);
 			api.TokenCachePath = _pendingTokenCachePath;
-			return true;
+			return !relayChain;
+		}
+
+		/// <summary>
+		/// After a test of an edited client secret on a copy of the relay's chain: hands the chain the test rotated back to the
+		/// relay's token cache, since the relay's own refresh token is spent by then. Returns a note for the status line, or "".
+		/// </summary>
+		private string ReturnTestedRelayChain()
+		{
+			var relayCache = _forkedRelayCachePath;
+			if (relayCache == null)
+				return "";
+
+			_forkedRelayCachePath = null;
+			try
+			{
+				TokenCacheFork.HandBack(_pendingTokenCachePath, relayCache, _forkedRefreshToken);
+				_pendingTokenIdentity = null;
+				return "";
+			}
+			catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+			{
+				// Left as the pending sign-in of the relay's own identity: a Save carries it over (CarryForwardTestedSignIn).
+				return $" The rotated refresh token could not be handed back to the relay's token cache ({ex.Message}); Save to retry.";
+			}
+			finally
+			{
+				_forkedRefreshToken = null;
+			}
 		}
 
 		/// <summary>The refresh-token chain a sign-in uses: base URL, client id and the configured refresh token.</summary>
@@ -1104,6 +1159,14 @@ namespace Resgrid.Audio.Relay.ViewModels
 			if (IsTuning)
 				StopTune();
 
+			// A tune holds the radio until it has closed its capture device; it is stopping, so wait for it to give the radio back.
+			if (!_tuneRun.IsCompleted)
+			{
+				await _tuneRun.ConfigureAwait(true);
+				if (IsTestingTransmit)
+					return; // another click started the test while this one waited
+			}
+
 			RelayHostOptions options;
 			try
 			{
@@ -1196,6 +1259,12 @@ namespace Resgrid.Audio.Relay.ViewModels
 				return;
 			}
 
+			if (!_tuneRun.IsCompleted)
+			{
+				TuneStatus = "The previous tune is still closing the receive device; try again in a moment.";
+				return;
+			}
+
 			// Tune against an isolated snapshot with the edited form values overlaid, so uncommitted
 			// form changes never mutate the shared Current that active services read.
 			RelayHostOptions options;
@@ -1209,8 +1278,20 @@ namespace Resgrid.Audio.Relay.ViewModels
 				return;
 			}
 
-			_tuneCts?.Dispose();
-			_tuneCts = new CancellationTokenSource();
+			// Claim the radio for the whole tune, cleanup included: the Radio Bridge cannot start (and open the same receive
+			// device) until the capture device is closed, and the tune cannot start while a bridge is tracked, starting or stopping.
+			var claim = _launcher.TryClaimRadio(out var busy);
+			if (claim == null)
+			{
+				TuneStatus = busy;
+				return;
+			}
+
+			// Each run owns its cancellation source: a stopped run still unwinding must not clear or dispose a newer run's.
+			var tuneCts = new CancellationTokenSource();
+			var tuneRun = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+			_tuneCts = tuneCts;
+			_tuneRun = tuneRun.Task;
 			IsTuning = true;
 			TuneStatus = "Tuning… key a radio on the channel to see levels. Squelch should open only on speech.";
 
@@ -1222,7 +1303,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 			try
 			{
-				await RadioMode.RunTuneAsync(options, Log.Logger, _tuneCts.Token, progress).ConfigureAwait(true);
+				await RadioMode.RunTuneAsync(options, Log.Logger, tuneCts.Token, progress).ConfigureAwait(true);
 			}
 			catch (OperationCanceledException)
 			{
@@ -1234,9 +1315,16 @@ namespace Resgrid.Audio.Relay.ViewModels
 			}
 			finally
 			{
-				IsTuning = false;
-				_tuneCts?.Dispose();
-				_tuneCts = null;
+				// RunTuneAsync has closed the capture device by now (also when stopped): only now give the radio back. A Stop
+				// only cancels; the claim is held until here.
+				claim.Dispose();
+				if (ReferenceEquals(_tuneCts, tuneCts))
+				{
+					IsTuning = false;
+					_tuneCts = null;
+				}
+				tuneCts.Dispose();
+				tuneRun.TrySetResult(true);
 			}
 #else
 			TuneStatus = "Tuning is only available on Windows.";
@@ -1289,12 +1377,15 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 			StopTune();
 #if NET10_0_WINDOWS
-			// The running transmit test unwinds on its own (PTT released, devices closed) and only then gives the radio back to
-			// the launcher, so the Radio Bridge can't start on top of its cleanup.
+			// The running transmit test and tune unwind on their own (PTT released, devices closed), dispose their own
+			// cancellation sources and only then give the radio back to the launcher, so the Radio Bridge can't start on top of
+			// their cleanup.
 			try { _transmitCts?.Cancel(); } catch { /* disposed */ }
-			_tuneCts?.Dispose();
 #endif
-			DiscardPendingSignIn();
+			// A connection test still running hands back or discards its own sign-in when it ends: deleting a copy of the relay's
+			// chain under it would have it redeem the configured, already spent refresh token.
+			if (!IsTestingConnection)
+				DiscardPendingSignIn();
 		}
 	}
 }

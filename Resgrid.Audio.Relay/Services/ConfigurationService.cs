@@ -14,9 +14,18 @@ namespace Resgrid.Audio.Relay.Services
 	/// </summary>
 	public sealed class ConfigurationService
 	{
+		private readonly Func<RelayHostOptions> _load;
+
 		public ConfigurationService()
+			: this(RelayConfiguration.Load)
 		{
-			Current = SafeLoad(RelayConfiguration.Load);
+		}
+
+		/// <summary>Reads the effective options with <paramref name="load"/> instead of the settings files (tests).</summary>
+		public ConfigurationService(Func<RelayHostOptions> load)
+		{
+			_load = load ?? throw new ArgumentNullException(nameof(load));
+			Current = SafeLoad(_load);
 		}
 
 		/// <summary>The effective options (files + environment). Services start from a copy of this.</summary>
@@ -34,7 +43,7 @@ namespace Resgrid.Audio.Relay.Services
 		/// <summary>Re-reads the layered configuration and replaces <see cref="Current"/>.</summary>
 		public RelayHostOptions Reload()
 		{
-			Current = SafeLoad(RelayConfiguration.Load);
+			Current = SafeLoad(_load);
 			return Current;
 		}
 
@@ -61,7 +70,7 @@ namespace Resgrid.Audio.Relay.Services
 		public void Save(RelayHostOptions options)
 		{
 			RelayConfiguration.Save(options);
-			Current = SafeLoad(RelayConfiguration.Load);
+			Current = SafeLoad(_load);
 		}
 
 		private RelayHostOptions SafeLoad(Func<RelayHostOptions> load)

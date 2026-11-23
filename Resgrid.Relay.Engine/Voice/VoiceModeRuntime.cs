@@ -86,6 +86,10 @@ namespace Resgrid.Relay.Engine.Voice
 		private volatile bool _degraded;
 		private long _interruptions;
 		private int _disposed;
+		// The time spent "reconnecting": closed intervals plus, while degraded, the open one. Guarded by _unusableLock.
+		private readonly object _unusableLock = new object();
+		private long _unusableTicks;
+		private long _degradedSinceTicks;
 
 		public VoiceSessionMonitor(IVoiceRoomSession session, RelayStatus status = null)
 		{
@@ -110,6 +114,22 @@ namespace Resgrid.Relay.Engine.Voice
 
 		/// <summary>Whether the session can carry audio right now.</summary>
 		public bool IsUsable => !IsDisconnected && !_degraded && _session.IsConnected;
+
+		/// <summary>
+		/// How long the session has spent reconnecting since the monitor was attached, the current outage included. Lets a mode
+		/// account for an outage that started and ended between two of its checks of <see cref="IsUsable"/>.
+		/// </summary>
+		public TimeSpan UnusableTime
+		{
+			get
+			{
+				lock (_unusableLock)
+				{
+					var open = _degradedSinceTicks != 0 ? Math.Max(0, DateTime.UtcNow.Ticks - _degradedSinceTicks) : 0;
+					return TimeSpan.FromTicks(_unusableTicks + open);
+				}
+			}
+		}
 
 		/// <summary>
 		/// Throws when the session is not connected once the monitor is attached (it dropped during the join or the setup
@@ -138,6 +158,13 @@ namespace Resgrid.Relay.Engine.Voice
 
 			if (change.Connected)
 			{
+				lock (_unusableLock)
+				{
+					if (_degradedSinceTicks != 0)
+						_unusableTicks += Math.Max(0, DateTime.UtcNow.Ticks - _degradedSinceTicks);
+					_degradedSinceTicks = 0;
+				}
+
 				// A successful (re)connect clears a prior "reconnecting" degrade so the pill recovers to Connected.
 				_degraded = false;
 				if (_status != null && !IsDisconnected)
@@ -148,6 +175,12 @@ namespace Resgrid.Relay.Engine.Voice
 			Interlocked.Increment(ref _interruptions);
 			if (string.Equals(change.Reason, "reconnecting", StringComparison.OrdinalIgnoreCase))
 			{
+				lock (_unusableLock)
+				{
+					if (_degradedSinceTicks == 0)
+						_degradedSinceTicks = DateTime.UtcNow.Ticks;
+				}
+
 				_degraded = true;
 				if (_status != null)
 					_status.LiveKit = ConnectionState.Degraded;

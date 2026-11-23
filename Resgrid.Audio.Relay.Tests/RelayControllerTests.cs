@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using Resgrid.Audio.Relay.Services;
+using Resgrid.Providers.ApiClient.V4;
 using Resgrid.Relay.Engine;
 using Resgrid.Relay.Engine.Configuration;
 using Serilog;
@@ -27,13 +29,17 @@ namespace Resgrid.Audio.Relay.Tests
 		private readonly List<FakeService> _created = new List<FakeService>();
 		private RelayController _controller;
 
+		// When set, services created from now on hold their worker until it completes (they stay published as Stopped).
+		private TaskCompletionSource<bool> _holdStarts;
+
 		[SetUp]
 		public void SetUp()
 		{
 			_created.Clear();
+			_holdStarts = null;
 			_controller = new RelayController(new LoggerConfiguration().CreateLogger(), (options, _) =>
 			{
-				var service = new FakeService(options.Mode);
+				var service = new FakeService(options.Mode, _holdStarts?.Task);
 				_created.Add(service);
 				return service;
 			});
@@ -42,15 +48,25 @@ namespace Resgrid.Audio.Relay.Tests
 		[TearDown]
 		public void TearDown()
 		{
+			_holdStarts?.TrySetResult(true);
 			foreach (var service in _created)
 				service.ReleaseTeardown();
 			_controller.StopAllAsync().Wait(Long);
 		}
 
+		/// <summary>
+		/// A launcher on isolated settings — valid credentials for the pre-flight checks, and a desktop settings path that does
+		/// not exist — so the tests never read (or depend on) the user's relay.user.json or desktop.json.
+		/// </summary>
 		private RelayModeLauncher Launcher()
 		{
 			var logger = new LoggerConfiguration().CreateLogger();
-			return new RelayModeLauncher(_controller, new ConfigurationService(), new DesktopSettingsService(logger), logger);
+			var configuration = new ConfigurationService(() => new RelayHostOptions
+			{
+				Resgrid = new ResgridApiClientOptions { ClientId = "relay-tests", ClientSecret = "relay-tests-secret", RefreshToken = "relay-tests-token" }
+			});
+			var desktop = new DesktopSettingsService(logger, Path.Combine(Path.GetTempPath(), $"resgrid-relay-tests-{Guid.NewGuid():N}", "desktop.json"));
+			return new RelayModeLauncher(_controller, configuration, desktop, logger);
 		}
 
 		private FakeService Start(string mode)
@@ -230,6 +246,19 @@ namespace Resgrid.Audio.Relay.Tests
 		}
 
 		[Test]
+		public void TryClaimRadio_WhileABridgeIsTrackedButNotRunningYet_IsRefused()
+		{
+			var launcher = Launcher();
+			_holdStarts = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+			Start("radio");
+
+			// Published, but its worker has not started: it still reads Stopped and opens the radio's devices moments later.
+			launcher.IsActive("radio").Should().BeFalse();
+			launcher.TryClaimRadio(out var reason).Should().BeNull();
+			reason.Should().Contain("Stop the Radio Bridge first");
+		}
+
+		[Test]
 		public async Task StartAsync_QueuedBehindARadioClaim_IsCancelledByAStopAll()
 		{
 			var launcher = Launcher();
@@ -260,21 +289,26 @@ namespace Resgrid.Audio.Relay.Tests
 		[Test]
 		public async Task StartAsync_WaitsForThePreviousInstancesTeardown()
 		{
+			// The recorder, not the bridge: the bridge's pre-flight checks count this machine's audio devices. The wait for the old
+			// instance's teardown is the same for every mode.
 			var launcher = Launcher();
-			var radio = Start("radio");
-			await radio.Running.WaitAsync(Long);
+			var recorder = Start("record");
+			await recorder.Running.WaitAsync(Long);
 
 			var stopAll = _controller.StopAllAsync();
-			await radio.Cancelled.WaitAsync(Long);
+			await recorder.Cancelled.WaitAsync(Long);
 
-			// Requested after the stop-all, so it should run — but only once the old bridge has let go of the radio.
-			var start = launcher.StartAsync("radio");
+			// Requested after the stop-all, so it should run — but only once the old recorder has finished its teardown.
+			var start = launcher.StartAsync("record");
 			(await Task.WhenAny(start, Task.Delay(Short))).Should().NotBeSameAs(start);
-			_created.Should().HaveCount(1, "no replacement starts while the old bridge is still tearing down");
+			_created.Should().HaveCount(1, "no replacement starts while the old instance is still tearing down");
 
-			radio.ReleaseTeardown();
+			recorder.ReleaseTeardown();
 			await stopAll.WaitAsync(Long);
-			await start.WaitAsync(Long);
+			(await start.WaitAsync(Long)).Should().BeNull("the replacement starts once the teardown is done");
+			_created.Should().HaveCount(2);
+			await _created[1].Running.WaitAsync(Long);
+			_controller.Find("record").Should().BeSameAs(_created[1]);
 		}
 
 		/// <summary>Runs until cancelled, then holds its teardown open until <see cref="ReleaseTeardown"/>.</summary>
@@ -283,11 +317,13 @@ namespace Resgrid.Audio.Relay.Tests
 			private readonly TaskCompletionSource<bool> _running = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 			private readonly TaskCompletionSource<bool> _cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 			private readonly TaskCompletionSource<bool> _teardown = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+			private readonly Task _startHold;
 			private int _disposeCount;
 
-			public FakeService(string mode)
+			public FakeService(string mode, Task startHold = null)
 			{
 				Mode = mode;
+				_startHold = startHold;
 			}
 
 			public string Mode { get; }
@@ -309,6 +345,9 @@ namespace Resgrid.Audio.Relay.Tests
 
 			public async Task StartAsync(CancellationToken token)
 			{
+				if (_startHold != null)
+					await _startHold.WaitAsync(token).ConfigureAwait(false);
+
 				State = RelayServiceState.Running;
 				_running.TrySetResult(true);
 				try

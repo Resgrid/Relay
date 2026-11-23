@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -155,12 +156,19 @@ namespace Resgrid.Audio.Voice.Tests
 				log.Records.Should().OnlyContain(r => r.Locations.Count == 1 && r.Locations[0].Kind == "fallback");
 
 				store.Release();
-				// The blocked call returns on its pool worker; give its completion a moment to reopen the store.
-				await Task.Delay(500);
-				Transmit(3);
+				// The blocked call returns on its pool worker and only then reopens the store, so probe until a recording lands in
+				// it rather than assume how long that takes. Probes that arrive first still go to the fallback, without a call.
+				var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+				var expected = 2;
+				while (!log.Records.Any(r => r.Locations.Any(l => l.Kind == "s3")) && DateTime.UtcNow < deadline)
+				{
+					Transmit(++expected);
+					if (!log.Records.Any(r => r.Locations.Any(l => l.Kind == "s3")))
+						await Task.Delay(50);
+				}
 
-				store.Calls.Should().Be(2, "once the blocked call returned, the store is used again");
-				log.Records[2].Locations.Should().ContainSingle().Which.Kind.Should().Be("s3");
+				log.Records.Should().Contain(r => r.Locations.Count == 1 && r.Locations[0].Kind == "s3", "once the blocked call returned, the store is used again");
+				store.Calls.Should().Be(2, "only the first probe after the store reopened called it; earlier ones went to the fallback");
 			}
 			finally
 			{
