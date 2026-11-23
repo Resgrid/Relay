@@ -39,6 +39,7 @@ namespace Resgrid.Relay.Engine.Voice
 
 			VoiceModeRuntime.EnsureUserTokenAuth(options, "dispatch");
 			using var apiClient = new ResgridV4ApiClient(options.Resgrid);
+			apiClient.Warning += message => logger?.Warning("Resgrid API client: {Warning}", message);
 			var voiceApi = new VoiceApi(apiClient);
 			var callsApi = new CallsApi(apiClient);
 

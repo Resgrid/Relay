@@ -63,8 +63,61 @@ namespace Resgrid.Audio.Tests
 			Cm108Compatibility.IsSelectedBy(0x0D8C, 0, CMediaCm119.VendorId, CMediaCm119.ProductId).Should().BeTrue();
 			Cm108Compatibility.IsSelectedBy(0x0D8C, 0, Aioc.VendorId, Aioc.ProductId).Should().BeFalse();
 
-			Cm108Compatibility.FindSelected(new[] { Mouse, Aioc, CMediaFob, CMediaCm119 }, 0x0D8C, 0).Should().BeSameAs(CMediaFob);
+			Cm108Compatibility.FindSelected(new[] { Mouse, Aioc, CMediaFob }, 0x0D8C, 0).Should().BeSameAs(CMediaFob);
 			Cm108Compatibility.FindSelected(new[] { Mouse, Aioc }, 0x0D8C, 0).Should().BeNull();
+		}
+
+		// ---- more than one device matches: PTT opens none of them ----------------------------------------------------------
+
+		[Test]
+		public void Two_Identical_Interfaces_Are_Refused_Naming_The_Fix()
+		{
+			var first = Hid(0x1209, 0x7388, "All-In-One-Cable");
+			var second = Hid(0x1209, 0x7388, "All-In-One-Cable");
+			var present = new[] { Mouse, first, second };
+
+			Cm108Compatibility.FindAllSelected(present, 0x1209, 0x7388).Should().Equal(first, second);
+			Cm108Compatibility.FindSelected(present, 0x1209, 0x7388).Should().BeNull("PTT would key neither");
+
+			var refuse = () => Cm108Compatibility.SelectPttDevice(present, 0x1209, 0x7388);
+			refuse.Should().Throw<System.InvalidOperationException>()
+				.WithMessage("2 CM108-class HID devices match*VID 0x1209, PID 0x7388*will not key PTT on any of them*connect only the one wired to this radio*SerialDtr*")
+				.Which.Message.Should().NotContain("Cm108ProductId to its product id", "the product id cannot tell identical interfaces apart");
+		}
+
+		[Test]
+		public void Any_Product_Matching_Two_Different_Fobs_Is_Refused_And_Asks_For_The_Product_Id()
+		{
+			var refuse = () => Cm108Compatibility.SelectPttDevice(new[] { CMediaFob, Aioc, CMediaCm119 }, 0x0D8C, 0);
+
+			refuse.Should().Throw<System.InvalidOperationException>()
+				.WithMessage("2 CM108-class HID devices match*VID 0x0D8C, any PID*USB Audio Device*C-Media CM119*set Radio:Cm108ProductId*")
+				.Which.Message.Should().NotContain("such as two AIOCs");
+
+			// The ids a picker writes for either of them select only that one.
+			Cm108Compatibility.SelectPttDevice(new[] { CMediaFob, Aioc, CMediaCm119 }, 0x0D8C, 0x0008).Should().BeSameAs(CMediaCm119);
+		}
+
+		[Test]
+		public void A_Single_Match_Is_Opened_And_No_Match_Says_So()
+		{
+			Cm108Compatibility.SelectPttDevice(new[] { Mouse, CMediaFob, Aioc }, 0x1209, 0x7388).Should().BeSameAs(Aioc);
+
+			var none = () => Cm108Compatibility.SelectPttDevice(new[] { Mouse }, 0x1209, 0x7388);
+			none.Should().Throw<System.InvalidOperationException>().WithMessage("No CM108-class HID device found*");
+		}
+
+		[Test]
+		public void Device_Lists_Flag_Interfaces_That_Share_Their_Ids()
+		{
+			var first = Hid(0x1209, 0x7388, "All-In-One-Cable");
+			var second = Hid(0x1209, 0x7388, "All-In-One-Cable");
+			var listed = new[] { first, CMediaFob, second };
+
+			Cm108Compatibility.CountWithSameIds(listed, first).Should().Be(2);
+			Cm108Compatibility.CountWithSameIds(listed, CMediaFob).Should().Be(1);
+			Cm108Compatibility.SameIdsNote(1).Should().BeEmpty();
+			Cm108Compatibility.SameIdsNote(2).Should().Contain("2 connected with these ids").And.Contain("only one");
 		}
 
 		[Test]

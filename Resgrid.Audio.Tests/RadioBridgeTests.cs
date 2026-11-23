@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -794,8 +795,156 @@ namespace Resgrid.Audio.Tests
 			bridge.Fault.Should().BeNull("one stalled frame is not a dead channel");
 		}
 
+		// ---- 25: a held key-up belongs to its floor turn ------------------------------------------------------------------
+
+		[Test]
+		public async Task FailedKey_WhoseTalkerStopsBeforeTheLineKeys_DropsTheHeldAudio_AndNeverKeysForIt()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt { FailWrites = true };
+			var session = new FakeSession();
+			await using var bridge = await Start(device, ptt, session, Settings(s =>
+			{
+				s.TxLeadMs = 200;
+				s.TxHangMs = 300;
+			}));
+
+			await TalkFor(session, "track-a", 200);
+			bridge.Transmitting.Should().BeTrue("the key-up is waiting for the line");
+
+			// Quiet past the 500 ms talker hang: the turn the held key-up was for is over.
+			(await WaitUntil(() => !bridge.Transmitting, 2000)).Should().BeTrue("a key-up whose turn has ended is dropped, not retried");
+			var keyCalls = ptt.KeyCalls;
+
+			ptt.FailWrites = false;
+			await Task.Delay(600);
+			ptt.IsKeyed.Should().BeFalse("nothing keys the radio for a turn that has ended");
+			ptt.KeyCalls.Should().Be(keyCalls);
+			device.Writes.Should().BeEmpty("the expired audio is never played");
+			bridge.Fault.Should().BeNull();
+		}
+
+		[Test]
+		public async Task FailedKey_HeldAudioOfAnEndedTurn_IsNotPlayedAheadOfTheNextTalker()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt { FailWrites = true };
+			var session = new FakeSession();
+			await using var bridge = await Start(device, ptt, session, Settings(s =>
+			{
+				s.TxLeadMs = 200;
+				s.TxHangMs = 300;
+			}));
+
+			// A talks (loud) while the line will not key; B (quieter) is already talking and takes the floor once A's hang runs out.
+			await TalkFor(session, "track-a", 200, amplitude: 16000);
+			await using (var b = new Producer(token => TalkFor(session, "track-b", 10_000, token, amplitude: 4000)))
+			{
+				await Task.Delay(900);
+				ptt.IsKeyed.Should().BeFalse();
+				device.Writes.Should().BeEmpty();
+
+				ptt.FailWrites = false;
+				(await WaitUntil(() => ptt.IsKeyed, 1500)).Should().BeTrue("B's turn is on, so the key-up is retried for it");
+				(await WaitUntil(() => device.Writes.Count >= 2)).Should().BeTrue();
+			}
+
+			var writes = device.Writes;
+			writes[0].Length.Should().Be(200 * SamplesPerMs, "the lead runs from when the line actually keyed");
+			writes[0].Should().OnlyContain(s => s == 0);
+			writes[1].Should().Contain(s => s != 0);
+			writes.Skip(1).Should().OnlyContain(w => w.All(s => Math.Abs((int)s) < 8000), "A's expired audio is not played ahead of B");
+		}
+
+		[Test]
+		public async Task KeyUpsThatAllFail_FaultTheBridge_EvenWhenEveryTurnIsShort()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt { FailWrites = true };
+			var session = new FakeSession();
+			await using var bridge = await Start(device, ptt, session, Settings(s => s.TxHangMs = 300));
+			var fault = NextFault(bridge);
+
+			// 300 ms turns 1.2 s apart: each held key-up is dropped when its turn ends, well inside the 5 s PTT fault time.
+			var clock = Stopwatch.StartNew();
+			await using var talker = new Producer(async token =>
+			{
+				while (!token.IsCancellationRequested)
+				{
+					await TalkFor(session, "track-a", 300, token);
+					try { await Task.Delay(900, token); }
+					catch (OperationCanceledException) { }
+				}
+			});
+
+			(await Task.WhenAny(fault, Task.Delay(9000))).Should().BeSameAs(fault, "a line that never keys is still reported");
+			fault.Result.Reason.Should().Contain("PTT line not responding");
+			clock.ElapsedMilliseconds.Should().BeGreaterOrEqualTo(4500);
+		}
+
+		// ---- 26: the squelch guard after a slow unkey write --------------------------------------------------------------
+
+		[Test]
+		public async Task SquelchGuard_RunsFromWhenASlowUnkeyWriteReturned()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt();
+			var session = new FakeSession();
+			await using var bridge = await Start(device, ptt, session, Settings(s =>
+			{
+				s.AntiLoop = true;
+				s.Squelch = new SquelchSettings { Mode = SquelchMode.Vox, OpenDbfs = -38, CloseDbfs = -45, HangMs = 600 };
+			}));
+			var forwarded = 0;
+			bridge.RadioAudioForwarded += (_, __) => Interlocked.Increment(ref forwarded);
+
+			session.Raise(AudibleFrame());
+			ptt.IsKeyed.Should().BeTrue();
+			ptt.UnkeyDelayMs = 300; // longer than the 150 ms squelch guard
+
+			SpinWait.SpinUntil(() => !bridge.Transmitting, 3000).Should().BeTrue();
+
+			// The loopback still carries the end of our own transmission: it falls inside the guard, which started when the
+			// write returned, not before it.
+			device.Receive(Tone(20, 10000));
+			forwarded.Should().Be(0, "the guard is not used up by the unkey write itself");
+			bridge.Receiving.Should().BeFalse();
+
+			await Task.Delay(250);
+			device.Receive(Tone(20, 10000));
+			forwarded.Should().Be(1, "real traffic gets through once the guard is over");
+		}
+
+		// ---- 27: shutdown discards the queued transmit audio --------------------------------------------------------------
+
+		[Test]
+		public async Task Dispose_DiscardsTheQueuedTransmitAudio_BeforeClosingThePublisher()
+		{
+			var device = new FakeRadioDevice();
+			var ptt = new FakePtt();
+			var session = new FakeSession();
+			var bridge = await Start(device, ptt, session, Settings(s =>
+			{
+				s.Ptt = PttKeyingMethod.Vox;
+				s.TxHangMs = 1000;
+			}));
+
+			session.Raise(AudibleFrame());
+			session.Raise(AudibleFrame());
+			device.BufferedTransmit = TimeSpan.FromSeconds(2); // speech still queued: with VOX, the audio itself keys the radio
+			var clearsWhenThePublisherCloses = -1;
+			session.Publisher.Disposing = () => clearsWhenThePublisherCloses = device.ClearCalls;
+
+			await bridge.DisposeAsync();
+
+			clearsWhenThePublisherCloses.Should().Be(1, "the queue is discarded at the shutdown fence, before the (possibly slow) publisher close");
+			device.WritesAtLastClear.Should().Be(device.Writes.Count, "everything queued is discarded");
+			device.BufferedTransmit.Should().Be(TimeSpan.Zero);
+			ptt.IsKeyed.Should().BeFalse();
+		}
+
 		/// <summary>Raises audible frames from one track in real time (10 ms of audio per 10 ms elapsed) for <paramref name="durationMs"/>.</summary>
-		private static async Task TalkFor(FakeSession session, string trackSid, int durationMs, CancellationToken token = default)
+		private static async Task TalkFor(FakeSession session, string trackSid, int durationMs, CancellationToken token = default, double amplitude = 16000)
 		{
 			var elapsed = Stopwatch.StartNew();
 			long sentMs = 0;
@@ -803,7 +952,7 @@ namespace Resgrid.Audio.Tests
 			{
 				while (sentMs <= elapsed.ElapsedMilliseconds)
 				{
-					session.Raise(AudibleFrame(trackSid));
+					session.Raise(AudibleFrame(trackSid, amplitude));
 					sentMs += 10;
 				}
 				try { await Task.Delay(5, token); }

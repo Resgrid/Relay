@@ -90,7 +90,8 @@ namespace Resgrid.Relay.Engine.Smtp
 		/// <summary>Never throws: a connect that fails starts the backoff, one that finishes after disposal closes itself.</summary>
 		private async Task ConnectAsync()
 		{
-			ConnectionMultiplexer redis;
+			ConnectionMultiplexer redis = null;
+			IDatabase db = null;
 			try
 			{
 				var configuration = ConfigurationOptions.Parse(_options.ConnectionString);
@@ -98,9 +99,14 @@ namespace Resgrid.Relay.Engine.Smtp
 				configuration.BacklogPolicy = BacklogPolicy.FailFast;
 
 				redis = await ConnectionMultiplexer.ConnectAsync(configuration).ConfigureAwait(false);
+				// Part of the setup: GetDatabase can throw for a connection string the parser accepted (defaultDatabase=-2),
+				// and a multiplexer that is never published must be closed here, not leaked on every retry.
+				db = redis.GetDatabase();
 			}
 			catch (Exception)
 			{
+				if (redis != null)
+					await CloseAsync(redis).ConfigureAwait(false);
 				redis = null;
 			}
 
@@ -118,7 +124,7 @@ namespace Resgrid.Relay.Engine.Smtp
 				{
 					// Kept even when this first attempt did not get through: the multiplexer retries on its own, and the cache is
 					// skipped until it is connected.
-					Volatile.Write(ref _db, redis.GetDatabase());
+					Volatile.Write(ref _db, db);
 					Volatile.Write(ref _redis, redis);
 					return;
 				}
@@ -155,7 +161,8 @@ namespace Resgrid.Relay.Engine.Smtp
 				// Closing a connection that never came up must not fail the relay's shutdown.
 			}
 
-			redis.Dispose();
+			try { redis.Dispose(); }
+			catch (Exception) { /* same: ConnectAsync relies on this never throwing */ }
 		}
 
 		private TimeSpan Ttl => TimeSpan.FromMinutes(_options.TtlMinutes > 0 ? _options.TtlMinutes : 60);

@@ -112,7 +112,9 @@ Resgrid's API, not by the relay:
 - Resgrid **rotates the refresh token on every use**. Relay writes the newest one to `Resgrid:TokenCachePath` (atomically,
   owner-only on Linux) and prefers it over the configured one, so the cache must be on writable, persistent storage. The
   desktop app defaults it to `%LOCALAPPDATA%\Resgrid\Relay\resgrid-token.json`; the systemd unit to `/var/lib/resgrid-relay`.
-  Several modes may share one cache file. If you paste in a **new** refresh token, Relay notices and starts from it.
+  Several modes may share one cache file. If you paste in a **new** refresh token, Relay notices and starts from it. A cache
+  file replaced by another credential while the relay runs (no refresh token configured) takes effect at the next restart:
+  until then the relay keeps signing in with its own credential, leaves the file alone and logs a warning.
 - A refresh token that is not used for longer than its lifetime (2 days unless the client is configured as long-lived in
   Resgrid) expires: keep the relay running, or re-issue the token.
 - `ApiVersion` accepts `4` or `v4`.
@@ -243,7 +245,9 @@ Resgrid's own inbound-email pipeline:
 ```
 
 - `Type = 1`: department (ALLCALL) watcher, pages the whole department. `Type = 2`: group watcher; `Code` is the group's
-  dispatch code (resolved to its id), or its id or name. `AdditionalCodes` adds more group codes.
+  dispatch code (resolved to its id), or its id or name. `AdditionalCodes` adds more group codes. A code Resgrid answers as
+  unknown is sent as-is (matched as an id or name); a lookup that keeps failing (after retries, including 401/403/404) fails
+  that dispatch with an error in the log instead of sending a code that would page nobody.
 - Fractional tone frequencies (e.g. 368.5 Hz) are matched to the nearest hertz.
 - With `Multiple=false`, stations toned while a recording is running ride along on that call.
 - The call and the audio upload are retried on transient failures with an idempotency key.
@@ -282,7 +286,10 @@ and Relay bridges it to the Resgrid PTT channel. Resgrid PTT users and the PoC u
   (CM108 PTT on GPIO 3, the usual default, or serial DTR); confirm against its firmware notes. It has its own USB ids
   (VID 0x1209, PID 0x7388), not C-Media's: Relay lists it as `[AIOC]` in the desktop CM108 interface picker and the Devices
   screen, and picking it sets `Radio:Cm108VendorId` and `Radio:Cm108ProductId` (the vendor and product id fields can also be
-  typed in hex). On the console, `devices` lists it with the values for `relay.user.json` (`4617` and `29576`). The
+  typed in hex). On the console, `devices` lists it with the values for `relay.user.json` (`4617` and `29576`). Relay tells
+  CM108 interfaces apart by vendor and product id only: when more than one connected interface matches (two AIOCs, or two
+  C-Media fobs with `Cm108ProductId` 0), Cm108 PTT refuses to start rather than key the wrong radio. Pick the specific
+  product id, connect only the radio's interface, or key through the AIOC's own serial port with `SerialDtr`. The
   Base/Car Unit is not suitable: its RJ45 jack carries mic and PTT but no speaker output.
 - The donor radio occupies one radio (and its plan) on the PoC account and bridges whichever talk group it is set to; add
   another radio and interface for each additional talk group.
@@ -294,7 +301,9 @@ and Relay bridges it to the Resgrid PTT channel. Resgrid PTT users and the PoC u
 ## Record mode
 
 Joins one channel or `all` and stores each transmission as a WAV (`Store`: `local`, `s3` or `both`) with a metadata row
-(`Log`: `jsonl`, `sqlite` or `none`). Each recorded channel occupies a voice seat.
+(`Log`: `jsonl`, `sqlite` or `none`). Each recorded channel occupies a voice seat. A store that does not answer in time has
+the recording written to the fallback folder instead; while a store is still stuck on such a call, new recordings go
+straight to the fallback folder until it returns.
 
 ## Dispatch mode
 
@@ -313,7 +322,7 @@ The voice modes reconnect with exponential back-off (`Resilience:*`). After `Max
 instead. A configuration error (e.g. the wrong grant) faults immediately. The radio bridge also restarts itself when its audio
 device stops (USB unplug), and cuts off a channel talker after `Radio:MaxTransmitSeconds` (default 180, 0 = no limit). Sentry (`Telemetry:Sentry:Dsn`) and Countly (`Telemetry:Countly:*`) are
 optional; `SendDefaultPii` defaults to `false`. The local SMTP log includes sender, recipients and subject, never bodies.
-Sentry receives addresses, subject, nature and attachment names only with `SendDefaultPii=true`; otherwise it gets domains and
+Sentry receives addresses, dispatch codes, subject, nature and attachment names only with `SendDefaultPii=true`; otherwise it gets domains and
 counts. Countly receives domains only.
 
 ## Commands

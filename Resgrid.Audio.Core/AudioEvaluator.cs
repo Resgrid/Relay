@@ -40,6 +40,10 @@ namespace Resgrid.Audio.Core
 		private readonly List<Guid> _startedWatchers;
 		private LiveAudioDtmfAnalyzer _analyzer;
 
+		// Tone key and slot durations of every active two-tone trigger whose frequencies round to the same whole-hertz tone.
+		// Replaced as a whole by Init; read by the tone callback.
+		private List<(int Key, TimeSpan Time1, TimeSpan Time2)> _sameToneTriggers = new List<(int Key, TimeSpan Time1, TimeSpan Time2)>();
+
 		public event EventHandler<EvaluatorEventArgs> EvaluatorStarted;
 		public event EventHandler<EvaluatorEventArgs> EvaluatorFinished;
 		public event EventHandler<WatcherEventArgs> WatcherTriggered;
@@ -56,6 +60,7 @@ namespace Resgrid.Audio.Core
 		public void Init(Config config)
 		{
 			_config = config;
+			var sameToneTriggers = new List<(int Key, TimeSpan Time1, TimeSpan Time2)>();
 
 			if (_config.Watchers != null && _config.Watchers.Any())
 			{
@@ -86,14 +91,19 @@ namespace Resgrid.Audio.Core
 									// The detector works in whole hertz, so it cannot tell these two tones apart: the trigger then needs
 									// two separate bursts of that tone, never one long tone.
 									if (Trigger.ToneKey(trigger.Frequency1) == Trigger.ToneKey(trigger.Frequency2))
+									{
 										_logger?.Warning("Watcher {Watcher}: tones {Frequency1} Hz and {Frequency2} Hz are both detected as {Tone} Hz, so the trigger needs two separate tones at that frequency",
 											watcher.Name, trigger.Frequency1, trigger.Frequency2, Trigger.ToneKey(trigger.Frequency1));
+										sameToneTriggers.Add((Trigger.ToneKey(trigger.Frequency1), TimeSpan.FromMilliseconds(trigger.Time1), TimeSpan.FromMilliseconds(trigger.Time2)));
+									}
 								}
 							}
 						}
 					}
 				}
 			}
+
+			_sameToneTriggers = sameToneTriggers;
 		}
 
 		//public void Start(BufferedWaveProvider provider)
@@ -167,55 +177,83 @@ namespace Resgrid.Audio.Core
 				EvaluatorStarted?.Invoke(this, new EvaluatorEventArgs(start, null, DateTime.UtcNow));
 			};
 
-			analyzer.DtmfToneStopped += end =>
-			{
-				_logger.Debug($"AudioEvaluator->DtmfToneStopped {end.TimeStamp.ToString("O")}");
-
-				EvaluatorFinished?.Invoke(this, new EvaluatorEventArgs(null, end, DateTime.UtcNow));
-
-				try
-				{
-					if (end.Duration > new TimeSpan(0, 0, 0, 0, 0))
-					{
-						// Every _finishedTones access is under the lock: the once-a-minute CleanUpTones on the timer thread removes
-						// from the same list, and a tone ending during that sweep threw "Collection was modified" into the analyzer.
-						lock (_lock)
-						{
-							_logger.Debug($"AudioEvaluator->Finished Tones: {_finishedTones.Count}");
-							foreach (var tone in _finishedTones)
-							{
-								_logger.Debug(
-									$"AudioEvaluator->Finished Tone: {tone.DtmfTone.HighTone} finished in {tone.Duration.TotalMilliseconds}ms");
-							}
-
-							var existingTone = _finishedTones.FirstOrDefault(x => x.DtmfTone.HighTone == end.DtmfTone.HighTone &&
-																			 (end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds <= 1000 &&
-																			  end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds >= -1000));
-
-							if (existingTone != null && existingTone.Duration < new TimeSpan(0, 0, 0, 0, 1500))
-							{
-								_logger.Debug($"AudioEvaluator->DtmfToneStopped: Existing tone for {existingTone.DtmfTone.HighTone} adding {end.Duration.TotalMilliseconds}ms");
-								existingTone.Duration += end.Duration;
-							}
-							else
-							{
-								_logger.Debug($"AudioEvaluator->DtmfToneStopped: No Existing tone for {end.DtmfTone.HighTone} for duration {end.Duration}");
-								_finishedTones.Add(end);
-							}
-						}
-					}
-
-					CheckFinishedTonesForTriggers();
-				}
-				catch (Exception ex)
-				{
-					// Never let a failure escape into the analyzer's capture callback: that could stop tone detection while the
-					// mode still reports Running.
-					_logger?.Error(ex, "Tone evaluation failed");
-				}
-			};
+			analyzer.DtmfToneStopped += end => OnToneStopped(end);
 
 			analyzer.StartCapturing();
+		}
+
+		/// <summary>
+		/// Takes a tone the detector has finished into the tone bank and checks every watcher's triggers. The analyzer's capture
+		/// callback calls it for each tone; public so the aggregation can be driven without an audio device.
+		/// </summary>
+		public void OnToneStopped(DtmfToneEnd end)
+		{
+			if (end == null)
+				return;
+
+			_logger?.Debug($"AudioEvaluator->DtmfToneStopped {end.TimeStamp.ToString("O")}");
+
+			EvaluatorFinished?.Invoke(this, new EvaluatorEventArgs(null, end, DateTime.UtcNow));
+
+			try
+			{
+				if (end.Duration > new TimeSpan(0, 0, 0, 0, 0))
+				{
+					// Every _finishedTones access is under the lock: the once-a-minute CleanUpTones on the timer thread removes
+					// from the same list, and a tone ending during that sweep threw "Collection was modified" into the analyzer.
+					lock (_lock)
+					{
+						_logger?.Debug($"AudioEvaluator->Finished Tones: {_finishedTones.Count}");
+						foreach (var tone in _finishedTones)
+						{
+							_logger?.Debug(
+								$"AudioEvaluator->Finished Tone: {tone.DtmfTone.HighTone} finished in {tone.Duration.TotalMilliseconds}ms");
+						}
+
+						var existingTone = _finishedTones.FirstOrDefault(x => x.DtmfTone.HighTone == end.DtmfTone.HighTone &&
+																		 (end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds <= 1000 &&
+																		  end.TimeStamp.Subtract(x.TimeStamp).TotalMilliseconds >= -1000));
+
+						if (existingTone != null && existingTone.Duration < new TimeSpan(0, 0, 0, 0, 1500) && !ArePairForSameToneTrigger(existingTone, end))
+						{
+							_logger?.Debug($"AudioEvaluator->DtmfToneStopped: Existing tone for {existingTone.DtmfTone.HighTone} adding {end.Duration.TotalMilliseconds}ms");
+							existingTone.Duration += end.Duration;
+						}
+						else
+						{
+							_logger?.Debug($"AudioEvaluator->DtmfToneStopped: No Existing tone for {end.DtmfTone.HighTone} for duration {end.Duration}");
+							_finishedTones.Add(end);
+						}
+					}
+				}
+
+				CheckFinishedTonesForTriggers();
+			}
+			catch (Exception ex)
+			{
+				// Never let a failure escape into the analyzer's capture callback: that could stop tone detection while the
+				// mode still reports Running.
+				_logger?.Error(ex, "Tone evaluation failed");
+			}
+		}
+
+		/// <summary>
+		/// The merge in <see cref="OnToneStopped"/> joins the pieces of a tone the detector briefly lost, so the tone is not cut
+		/// short. But for a two-tone trigger whose frequencies round to the same whole-hertz tone, two bursts that each already
+		/// meet their slot's duration are that trigger's two tones: merged, they left a single occurrence, which the trigger
+		/// (rightly) will not use for both slots, so the page never matched. Such bursts stay separate occurrences. One
+		/// continuous tone still arrives as one occurrence, or as pieces of which at least one is too short for its slot and
+		/// which still merge, so it still cannot page such a trigger on its own.
+		/// </summary>
+		private bool ArePairForSameToneTrigger(DtmfToneEnd earlier, DtmfToneEnd later)
+		{
+			foreach (var trigger in _sameToneTriggers)
+			{
+				if (trigger.Key == later.DtmfTone.HighTone && earlier.Duration >= trigger.Time1 && later.Duration >= trigger.Time2)
+					return true;
+			}
+
+			return false;
 		}
 
 		private DtmfTone AddTone(int frequency)

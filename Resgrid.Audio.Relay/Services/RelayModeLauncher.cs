@@ -74,6 +74,15 @@ namespace Resgrid.Audio.Relay.Services
 				return null;
 			}
 
+			// A stop-all takes the bridge out of the controller without this gate, while it is still releasing the radio's
+			// audio and PTT: it owns them until its teardown completes.
+			if (_controller.IsModeStopping("radio"))
+			{
+				gate.Release();
+				reason = "The Radio Bridge is still stopping (releasing the radio's audio and PTT); try again in a moment.";
+				return null;
+			}
+
 			_radioClaimed = true;
 			reason = null;
 			return new RadioClaim(this, gate);
@@ -231,10 +240,21 @@ namespace Resgrid.Audio.Relay.Services
 		/// <summary>
 		/// Starts <paramref name="mode"/>. A faulted instance of the same mode is cleared first. Returns null on success, or the
 		/// reason it was not started. Serialized with every other start and stop of the same mode; a Radio Bridge start also
-		/// waits for a transmit test to give the radio back (<see cref="TryClaimRadio"/>).
+		/// waits for a transmit test to give the radio back (<see cref="TryClaimRadio"/>). Cancelled when a stop-all is
+		/// requested before it gets to run.
 		/// </summary>
-		public async Task<string> StartAsync(string mode)
+		public Task<string> StartAsync(string mode) => StartAsync(mode, _controller.StopAllRequests);
+
+		/// <summary>
+		/// <see cref="StartAsync(string)"/> for a start that is part of a larger request (a restart, a multi-mode start):
+		/// <paramref name="stopAllRequests"/> is the <see cref="RelayController.StopAllRequests"/> value that request captured,
+		/// and the start is cancelled when a stop-all has been requested since.
+		/// </summary>
+		public async Task<string> StartAsync(string mode, long stopAllRequests)
 		{
+			if (_controller.StopAllRequests != stopAllRequests)
+				return StopAllCancelled(mode);
+
 			var gate = Gate(mode);
 			if (!await gate.WaitAsync(LifecycleWaitTimeout).ConfigureAwait(true))
 			{
@@ -254,6 +274,21 @@ namespace Resgrid.Audio.Relay.Services
 					await _controller.StopAsync(existing).ConfigureAwait(true);
 				}
 
+				// A stop-all takes services out of the controller without this gate: the previous instance may still be releasing
+				// its audio devices, PTT line or port, so a replacement waits for that teardown instead of opening them alongside.
+				try
+				{
+					await _controller.WhenModeStopped(mode).WaitAsync(LifecycleWaitTimeout).ConfigureAwait(true);
+				}
+				catch (TimeoutException)
+				{
+					return $"{FriendlyName(mode)} not started: the previous instance is still stopping. Try again in a moment.";
+				}
+
+				// A stop-all requested while this start waited (for the gate, a transmit test's radio claim or a teardown) wins.
+				if (_controller.StopAllRequests != stopAllRequests)
+					return StopAllCancelled(mode);
+
 				var errors = Validate(mode);
 				if (errors.Count > 0)
 					return $"{FriendlyName(mode)} not started: {errors[0]}";
@@ -262,7 +297,7 @@ namespace Resgrid.Audio.Relay.Services
 				{
 					var options = CloneOptions(_configuration.Current);
 					options.Mode = mode;
-					_controller.Start(options);
+					_controller.Start(options, stopAllRequests);
 					_logger?.Information("Started {Mode}", FriendlyName(mode));
 					return null;
 				}
@@ -277,6 +312,8 @@ namespace Resgrid.Audio.Relay.Services
 				gate.Release();
 			}
 		}
+
+		private static string StopAllCancelled(string mode) => $"{FriendlyName(mode)} not started: Stop all was requested.";
 
 		public async Task StopAsync(string mode)
 		{
@@ -301,7 +338,7 @@ namespace Resgrid.Audio.Relay.Services
 			await StopAsync(mode).ConfigureAwait(true);
 			if (_controller.StopAllRequests != stopAllRequests)
 				return $"{FriendlyName(mode)} stopped; restart cancelled.";
-			return await StartAsync(mode).ConfigureAwait(true);
+			return await StartAsync(mode, stopAllRequests).ConfigureAwait(true);
 		}
 
 		/// <summary>The modes the master Start runs: the auto-start set, or the configured default mode when none is chosen.</summary>
@@ -319,28 +356,33 @@ namespace Resgrid.Audio.Relay.Services
 			return AllModes.Contains(configured) ? new[] { configured } : new[] { "smtp" };
 		}
 
-		/// <summary>Starts every default mode that isn't already running; returns the problems (empty when all started).</summary>
+		/// <summary>
+		/// Starts every default mode that isn't already running; returns the problems (empty when all started). A stop-all
+		/// requested while the modes start one by one cancels the modes not yet started.
+		/// </summary>
 		public async Task<IReadOnlyList<string>> StartDefaultModesAsync()
 		{
+			var stopAllRequests = _controller.StopAllRequests;
 			var problems = new List<string>();
 			foreach (var mode in DefaultModes())
 			{
 				if (IsActive(mode))
 					continue;
-				var error = await StartAsync(mode).ConfigureAwait(true);
+				var error = await StartAsync(mode, stopAllRequests).ConfigureAwait(true);
 				if (error != null)
 					problems.Add(error);
 			}
 			return problems;
 		}
 
-		/// <summary>Starts the modes chosen for auto-start at launch; returns the problems.</summary>
+		/// <summary>Starts the modes chosen for auto-start at launch; returns the problems. Cancelled as a whole by a stop-all.</summary>
 		public async Task<IReadOnlyList<string>> StartAutoStartModesAsync()
 		{
+			var stopAllRequests = _controller.StopAllRequests;
 			var problems = new List<string>();
 			foreach (var mode in AllModes.Where(_desktop.IsAutoStart))
 			{
-				var error = await StartAsync(mode).ConfigureAwait(true);
+				var error = await StartAsync(mode, stopAllRequests).ConfigureAwait(true);
 				if (error != null)
 					problems.Add(error);
 			}

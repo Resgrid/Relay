@@ -109,7 +109,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 					return;
 				}
 
-				var error = await _launcher.StartAsync(Mode).ConfigureAwait(true);
+				var error = await _launcher.StartAsync(Mode, stopAllRequests).ConfigureAwait(true);
 				_report?.Invoke(error ?? $"{DisplayName} restarted.");
 			}
 			catch (Exception ex)

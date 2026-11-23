@@ -39,6 +39,24 @@ namespace Resgrid.Audio.Relay.Tests
 		}
 
 		[Test]
+		public void Identical_Interfaces_Are_Both_Listed_And_Flagged()
+		{
+			// Two AIOCs: picking either writes the same ids, so the picker cannot say which; PTT refuses both, and the list says so.
+			var service = new DeviceEnumerationService(() => new[]
+			{
+				Hid(0x1209, 0x7388, "All-In-One-Cable"),
+				Hid(0x0D8C, 0x013C, "USB Audio Device"),
+				Hid(0x1209, 0x7388, "All-In-One-Cable")
+			});
+
+			var devices = service.GetCm108Devices();
+
+			devices.Select(d => d.SameIdsCount).Should().Equal(2, 1, 2);
+			devices[0].Display.Should().StartWith("VID=0x1209 PID=0x7388 All-In-One-Cable [AIOC] (2 connected with these ids");
+			devices[1].Display.Should().Be("VID=0x0D8C PID=0x013C USB Audio Device [C-Media CM108/CM119]");
+		}
+
+		[Test]
 		public void A_Failing_Hid_Backend_Yields_An_Empty_List()
 		{
 			var service = new DeviceEnumerationService(() => throw new InvalidOperationException("no HID backend"));

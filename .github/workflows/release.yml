@@ -334,9 +334,11 @@ jobs:
         run: |
           set -euo pipefail
           ls -la
-          # A Docker-only release has no ResgridRelay-* archives: hash whatever was produced, and fail only on nothing.
+          # A Docker-only release has no ResgridRelay-* archives, a desktop/console-only one no docker-image.txt: hash
+          # whatever was produced, and fail only on nothing. (nullglob drops an unmatched pattern, not a literal name.)
           shopt -s nullglob
-          files=(ResgridRelay-* docker-image.txt)
+          files=(ResgridRelay-*)
+          if [ -f docker-image.txt ]; then files+=(docker-image.txt); fi
           if [ ${#files[@]} -eq 0 ]; then
             echo "::error::No release files to checksum"
             exit 1

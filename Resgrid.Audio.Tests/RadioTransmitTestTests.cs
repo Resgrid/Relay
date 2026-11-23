@@ -126,15 +126,31 @@ namespace Resgrid.Audio.Tests
 		}
 
 		[Test]
-		public async Task KeyFailure_IsReported_WithoutAReleaseFailure()
+		public async Task KeyFailure_ThatTheReleaseClears_IsReportedAsTheKeyFailure()
+		{
+			var device = new TxTestDevice();
+			var ptt = new TxTestPtt { FailKey = true };
+
+			Func<Task> run = () => RadioMode.RunTransmitTestAsync(device, ptt, Settings(), null, CancellationToken.None, toneMs: 200);
+
+			(await run.Should().ThrowAsync<InvalidOperationException>().WithMessage("*could not key*")).Which.Should().NotBeOfType<PttReleaseException>(
+				"the release after the failed key went through");
+			ptt.UnkeyCalls.Should().Be(1, "a failed key is still followed by a release (the line state is unknown)");
+			device.Stopped.Should().BeTrue();
+		}
+
+		[Test]
+		public async Task KeyFailure_WhoseReleaseAlsoFails_ThrowsPttReleaseException()
 		{
 			var device = new TxTestDevice();
 			var ptt = new TxTestPtt { FailKey = true, FailUnkey = true };
 
 			Func<Task> run = () => RadioMode.RunTransmitTestAsync(device, ptt, Settings(), null, CancellationToken.None, toneMs: 200);
 
-			(await run.Should().ThrowAsync<InvalidOperationException>()).Which.Should().NotBeOfType<PttReleaseException>(
-				"a line that was never keyed is not left transmitting");
+			// After a failed Key() the line may be keyed (the write can half-happen): the operator is told it may be on the air.
+			var thrown = await run.Should().ThrowAsync<PttReleaseException>().WithMessage("*could not be released*");
+			thrown.Which.InnerException.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Contain("could not key");
+			ptt.UnkeyCalls.Should().BeGreaterThan(1, "the release after a failed key is retried like any other");
 			device.Stopped.Should().BeTrue();
 		}
 

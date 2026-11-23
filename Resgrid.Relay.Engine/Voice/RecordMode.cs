@@ -27,6 +27,7 @@ namespace Resgrid.Relay.Engine.Voice
 		{
 			VoiceModeRuntime.EnsureUserTokenAuth(options, "record");
 			using var apiClient = new ResgridV4ApiClient(options.Resgrid);
+			apiClient.Warning += message => logger?.Warning("Resgrid API client: {Warning}", message);
 			var voiceApi = new VoiceApi(apiClient);
 
 			var deptId = FirstNonEmpty(options.Recorder.DepartmentId, options.Voice.DepartmentId);

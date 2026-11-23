@@ -37,7 +37,7 @@ namespace Resgrid.Providers.ApiClient.V4
 		private OpenIdConfiguration _openIdConfiguration;
 		private ResgridApiClientOptions _options;
 		private ResgridApiTokenState _tokenState;
-		private string _credentialScope;
+		private readonly string _credentialScope;
 
 		// When this client last obtained an access token from the token endpoint (MinValue: never, or loaded from the cache).
 		private DateTimeOffset _accessTokenIssuedAtUtc = DateTimeOffset.MinValue;
@@ -71,10 +71,22 @@ namespace Resgrid.Providers.ApiClient.V4
 
 			// A cache from before the id existed (or a new one) gets it now; it is written with the next rotated token.
 			if (UsesCachedCredentialIdentity(options) && String.IsNullOrWhiteSpace(_tokenState.CredentialId))
-				_tokenState.CredentialId = Guid.NewGuid().ToString("N");
+				_tokenState.CredentialId = NewCredentialId(_tokenState.RefreshToken);
+
+			// Fixed for the client's lifetime: callers build namespaces from it once (the SMTP relay's Redis lookup cache takes it
+			// as its key prefix at construction), so the credential this client acts with must never change underneath it. A
+			// reloaded cache that names another credential is therefore not adopted (see EnsureAuthenticatedAsync).
+			_credentialScope = BuildCredentialScope(options, _tokenState.CredentialId);
 
 			_client = CreateClient(options.BaseUrl, handler);
 		}
+
+		/// <summary>
+		/// Raised (with a message for the operator log) when the token cache file turns out to hold a different credential than
+		/// the one this client started with, and the client keeps its own. Nothing secret is in the message. Without a
+		/// subscriber the message goes to <see cref="System.Diagnostics.Trace"/>.
+		/// </summary>
+		public event Action<string> Warning;
 
 		public string CurrentUserId
 		{
@@ -92,11 +104,26 @@ namespace Resgrid.Providers.ApiClient.V4
 
 		public bool IsSystemCaller => _options.IsSystemCaller();
 
-		public string CredentialScope => _credentialScope ??= BuildCredentialScope(_options, _tokenState?.CredentialId);
+		public string CredentialScope => _credentialScope;
 
 		/// <summary>A refresh-token relay without a configured refresh token: only its token cache knows which credential it is.</summary>
 		private static bool UsesCachedCredentialIdentity(ResgridApiClientOptions options) =>
 			options.GrantType == ResgridAuthGrantType.RefreshToken && String.IsNullOrWhiteSpace(options.RefreshToken) && !options.IsSystemCaller();
+
+		/// <summary>
+		/// The id a cache without one is given. Derived from the refresh token the cache holds, so every client that loads the same
+		/// id-less cache (two relay modes on one file in the desktop app) names its chain alike and still recognises the rotation
+		/// another one persists as the same credential; another chain's token gives another id. Random only with no token at all.
+		/// </summary>
+		private static string NewCredentialId(string refreshToken)
+		{
+			if (String.IsNullOrWhiteSpace(refreshToken))
+				return Guid.NewGuid().ToString("N");
+
+			return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes($"resgrid-relay-credential-id|{refreshToken.Trim()}")))
+				.Substring(0, 32)
+				.ToLowerInvariant();
+		}
 
 		/// <summary>
 		/// A system caller sees every department, so all system callers share one scope. A token sees only its own department:
@@ -272,20 +299,36 @@ namespace Resgrid.Providers.ApiClient.V4
 				// Another client on the same cache (a second relay mode, or the previous run of this one) may have rotated the
 				// refresh token since this client loaded it, in which case the one held here is already spent. Pick up the newer
 				// state first; when it still carries a live access token there is nothing to redeem at all.
+				var persistTokenState = true;
 				if (_options.GrantType == ResgridAuthGrantType.RefreshToken)
 				{
 					var latest = LoadTokenState(_options);
 					if (!String.IsNullOrWhiteSpace(latest.RefreshToken) &&
-						!String.Equals(latest.RefreshToken, _tokenState.RefreshToken, StringComparison.Ordinal) &&
-						latest.ExpiresAtUtc >= _tokenState.ExpiresAtUtc)
+						!String.Equals(latest.RefreshToken, _tokenState.RefreshToken, StringComparison.Ordinal))
 					{
-						// The cache id names the credential chain, which the rotation continued; the adopted token is not one this
-						// client was just issued, so its age is unknown.
-						latest.CredentialId ??= _tokenState.CredentialId;
-						_tokenState = latest;
-						_accessTokenIssuedAtUtc = DateTimeOffset.MinValue;
-						if (HasValidAccessToken())
-							return;
+						if (!IsSameCredentialChain(latest))
+						{
+							// The file now holds another credential (it was replaced, or another sign-in wrote it). Adopting it would
+							// send requests as that credential while CredentialScope, and every namespace built from it, still names
+							// this one. Keep the chain this client started with, and leave the file alone: writing this chain over
+							// it would destroy the credential put there, which the next start is meant to pick up.
+							persistTokenState = false;
+							OnWarning($"The Resgrid token cache '{Path.GetFullPath(_options.TokenCachePath)}' now holds a different credential than " +
+								"the one this relay started with; it keeps signing in with its own and leaves the file unchanged. Restart the " +
+								"relay to switch to the credential in the file.");
+						}
+						else if (latest.ExpiresAtUtc >= _tokenState.ExpiresAtUtc)
+						{
+							// The cache id names the credential chain, which the rotation continued, and is what the next reload is
+							// compared with. (A client that held no chain yet takes the file's under the file's id; its scope, built
+							// before it had any credential, named no other one.) The adopted token is not one this client was just
+							// issued, so its age is unknown.
+							latest.CredentialId ??= _tokenState.CredentialId;
+							_tokenState = latest;
+							_accessTokenIssuedAtUtc = DateTimeOffset.MinValue;
+							if (HasValidAccessToken())
+								return;
+						}
 					}
 				}
 
@@ -362,11 +405,44 @@ namespace Resgrid.Providers.ApiClient.V4
 
 				// Not the caller's token: once Resgrid has rotated the refresh token, the new one must reach disk even if the
 				// request that triggered the refresh is being cancelled, or the next start has only a dead token.
-				await PersistTokenStateAsync(_tokenState, CancellationToken.None).ConfigureAwait(false);
+				if (persistTokenState)
+					await PersistTokenStateAsync(_tokenState, CancellationToken.None).ConfigureAwait(false);
 			}
 			finally
 			{
 				AuthLock.Release();
+			}
+		}
+
+		/// <summary>
+		/// Whether a reloaded cache continues the credential this client acts with. Only a cache-identified relay's scope depends
+		/// on it (the others are named by their configuration): there every client of the chain writes the same id, so another id,
+		/// or none, is another credential. A client still holding no chain at all has nothing to keep and takes the file's.
+		/// </summary>
+		private bool IsSameCredentialChain(ResgridApiTokenState latest)
+		{
+			if (!UsesCachedCredentialIdentity(_options) || String.IsNullOrWhiteSpace(_tokenState.RefreshToken))
+				return true;
+
+			return String.Equals(latest.CredentialId, _tokenState.CredentialId, StringComparison.Ordinal);
+		}
+
+		private void OnWarning(string message)
+		{
+			var handler = Warning;
+			if (handler == null)
+			{
+				System.Diagnostics.Trace.TraceWarning(message);
+				return;
+			}
+
+			try
+			{
+				handler(message);
+			}
+			catch (Exception)
+			{
+				// A logging subscriber must never fail authentication.
 			}
 		}
 

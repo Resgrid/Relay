@@ -86,12 +86,20 @@ namespace Resgrid.Audio.Voice.Tests
 
 		public int Calls => Volatile.Read(ref _calls);
 
+		/// <summary>When set, a call that gets through (the share is back) stores the recording instead of failing.</summary>
+		public bool SucceedOnceReleased { get; set; }
+
 		public Task<StoredLocation> SaveAsync(string objectName, byte[] data, CancellationToken cancellationToken = default)
 		{
 			Interlocked.Increment(ref _calls);
 			_release.Wait();
-			return Task.FromException<StoredLocation>(new System.IO.IOException("The network path was not found."));
+			return SucceedOnceReleased
+				? Task.FromResult(new StoredLocation { Kind = Kind, Location = "s3://bucket/" + objectName, SizeBytes = data.LongLength })
+				: Task.FromException<StoredLocation>(new System.IO.IOException("The network path was not found."));
 		}
+
+		/// <summary>The share comes back: blocked calls return, and later ones no longer block.</summary>
+		public void Release() => _release.Set();
 
 		public void Dispose() => _release.Set();
 	}

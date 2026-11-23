@@ -91,13 +91,23 @@ namespace Resgrid.Audio.Tests
 				options.TokenCachePath = cachePath;
 
 				var oldTokenRequests = 0;
+				var otherCredentials = new List<string>();
 				var bothSent = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 				var releaseFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 				var releaseSecond = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 				var handler = new StubHandler(async request =>
 				{
-					if (request.Headers.Authorization?.Parameter != "expired-token")
+					var sentToken = request.Headers.Authorization?.Parameter;
+					if (sentToken == "opaque-1")
 						return Json(HttpStatusCode.OK, "{}");
+
+					if (sentToken != "expired-token")
+					{
+						// A retry that sent anything but the one replacement token (no token at all included) must not pass.
+						lock (otherCredentials)
+							otherCredentials.Add(sentToken ?? "<none>");
+						return Json(HttpStatusCode.Forbidden, "{}");
+					}
 
 					var arrival = Interlocked.Increment(ref oldTokenRequests);
 					if (arrival == 2)
@@ -120,6 +130,9 @@ namespace Resgrid.Audio.Tests
 					releaseSecond.SetResult(true);
 					(await second).Should().BeTrue("its 401 was for the token the first request had already replaced");
 					handler.TokenRequests.Should().Be(1, "the token already replaced is not redeemed again");
+					otherCredentials.Should().BeEmpty();
+					handler.ApiRequests.Count(x => x.Headers.Authorization?.Parameter == "opaque-1")
+						.Should().Be(2, "both retries send the one replacement token");
 				}
 				finally
 				{
@@ -207,6 +220,113 @@ namespace Resgrid.Audio.Tests
 			}
 		}
 
+		[TestCase(",\"CredentialId\":\"another-credential\"")]
+		[TestCase("")]
+		public async Task A_Reloaded_Token_Cache_Holding_Another_Credential_Should_Not_Be_Adopted(string credentialId)
+		{
+			// The SMTP relay's Redis lookup cache takes CredentialScope as its prefix once. Adopting another department's cache
+			// while running would store that department's lookups under this one's namespace.
+			var directory = Path.Combine(Path.GetTempPath(), $"resgrid-api-tests-{Guid.NewGuid():N}");
+			Directory.CreateDirectory(directory);
+			try
+			{
+				var cachePath = Path.Combine(directory, "resgrid-token.json");
+				var options = CreateOptions(ResgridAuthGrantType.RefreshToken, serviceAccount: false, clientId: "RelayApp", refreshToken: null);
+				options.TokenCachePath = cachePath;
+				// Shorter than the one-minute margin: every request redeems the refresh token again.
+				var handler = new StubHandler(_ => Json(HttpStatusCode.OK, "{}")) { ExpiresIn = 30 };
+				var warnings = new List<string>();
+
+				File.WriteAllText(cachePath, "{\"RefreshToken\":\"department-a-chain\"}");
+				using var client = new ResgridV4ApiClient(options, handler);
+				client.Warning += warnings.Add;
+				var scope = client.CredentialScope;
+				(await client.IsHealthyAsync()).Should().BeTrue();
+
+				var replacement = "{\"RefreshToken\":\"department-b-chain\",\"ExpiresAtUtc\":\"2099-01-01T00:00:00+00:00\"" + credentialId + "}";
+				File.WriteAllText(cachePath, replacement);
+				(await client.IsHealthyAsync()).Should().BeTrue();
+
+				handler.RedeemedRefreshTokens.Should().Equal(new[] { "department-a-chain", "rotated-1" }, "the client keeps its own chain");
+				client.CredentialScope.Should().Be(scope);
+				warnings.Should().ContainSingle().Which.Should().Contain("different credential").And.NotContain("department-");
+				File.ReadAllText(cachePath).Should().Be(replacement, "the credential put in the file is left for the next start");
+
+				using var restarted = new ResgridV4ApiClient(options, handler);
+				restarted.CredentialScope.Should().NotBe(scope, "after a restart the file's credential is used, under its own scope");
+			}
+			finally
+			{
+				Directory.Delete(directory, recursive: true);
+			}
+		}
+
+		[Test]
+		public async Task A_Client_Started_Before_Its_Token_Cache_Existed_Should_Adopt_The_Cache_That_Appears()
+		{
+			// It held no credential yet, so its scope named none: taking the file's credential mixes nothing.
+			var directory = Path.Combine(Path.GetTempPath(), $"resgrid-api-tests-{Guid.NewGuid():N}");
+			Directory.CreateDirectory(directory);
+			try
+			{
+				var cachePath = Path.Combine(directory, "resgrid-token.json");
+				var options = CreateOptions(ResgridAuthGrantType.RefreshToken, serviceAccount: false, clientId: "RelayApp", refreshToken: null);
+				options.TokenCachePath = cachePath;
+				var handler = new StubHandler(_ => Json(HttpStatusCode.OK, "{}"));
+				var warnings = new List<string>();
+
+				using var client = new ResgridV4ApiClient(options, handler);
+				client.Warning += warnings.Add;
+				var scope = client.CredentialScope;
+				File.WriteAllText(cachePath, "{\"RefreshToken\":\"dropped-in-chain\",\"CredentialId\":\"dropped-in\"}");
+
+				(await client.IsHealthyAsync()).Should().BeTrue();
+
+				handler.RedeemedRefreshTokens.Should().Equal("dropped-in-chain");
+				client.CredentialScope.Should().Be(scope);
+				warnings.Should().BeEmpty();
+				File.ReadAllText(cachePath).Should().Contain("rotated-1").And.Contain("\"dropped-in\"", "the chain keeps the id the file gave it");
+			}
+			finally
+			{
+				Directory.Delete(directory, recursive: true);
+			}
+		}
+
+		[Test]
+		public async Task Clients_Loading_The_Same_Id_Less_Token_Cache_Should_Share_Its_Scope_And_Its_Rotation()
+		{
+			// Two relay modes in one process on one cache written before the id existed: each used to give it its own random id,
+			// so the one that did not rotate first took the other's rotation for another credential.
+			var directory = Path.Combine(Path.GetTempPath(), $"resgrid-api-tests-{Guid.NewGuid():N}");
+			Directory.CreateDirectory(directory);
+			try
+			{
+				var cachePath = Path.Combine(directory, "resgrid-token.json");
+				var options = CreateOptions(ResgridAuthGrantType.RefreshToken, serviceAccount: false, clientId: "RelayApp", refreshToken: null);
+				options.TokenCachePath = cachePath;
+				var handler = new StubHandler(_ => Json(HttpStatusCode.OK, "{}"));
+				var warnings = new List<string>();
+
+				File.WriteAllText(cachePath, "{\"RefreshToken\":\"chain-0\"}");
+				using var smtp = new ResgridV4ApiClient(options, handler);
+				using var audio = new ResgridV4ApiClient(options, handler);
+				smtp.Warning += warnings.Add;
+				audio.Warning += warnings.Add;
+
+				audio.CredentialScope.Should().Be(smtp.CredentialScope);
+				(await smtp.IsHealthyAsync()).Should().BeTrue();
+				(await audio.IsHealthyAsync()).Should().BeTrue();
+
+				handler.RedeemedRefreshTokens.Should().Equal(new[] { "chain-0" }, "the second client adopts the first one's rotation");
+				warnings.Should().BeEmpty();
+			}
+			finally
+			{
+				Directory.Delete(directory, recursive: true);
+			}
+		}
+
 		// ─── 404 from a lookup endpoint (finding 9) ───
 
 		[Test]
@@ -266,6 +386,8 @@ namespace Resgrid.Audio.Tests
 
 			public int TokenRequests => Volatile.Read(ref _tokenRequests);
 			public List<HttpRequestMessage> ApiRequests { get; } = new List<HttpRequestMessage>();
+			public List<string> RedeemedRefreshTokens { get; } = new List<string>();
+			public int ExpiresIn { get; set; } = 3600;
 
 			protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
 			{
@@ -275,10 +397,22 @@ namespace Resgrid.Audio.Tests
 
 				if (path.EndsWith("/connect/token", StringComparison.Ordinal))
 				{
+					var form = await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+					var refreshToken = form.Split('&')
+						.Select(x => x.Split('=', 2))
+						.Where(x => x.Length == 2 && x[0] == "refresh_token")
+						.Select(x => Uri.UnescapeDataString(x[1]))
+						.FirstOrDefault();
+					if (refreshToken != null)
+					{
+						lock (RedeemedRefreshTokens)
+							RedeemedRefreshTokens.Add(refreshToken);
+					}
+
 					var count = Interlocked.Increment(ref _tokenRequests);
 					// Resgrid's access tokens are encrypted: nothing in them can be read by the relay. It rotates refresh tokens.
 					return Json(HttpStatusCode.OK,
-						$"{{\"access_token\":\"opaque-{count}\",\"refresh_token\":\"rotated-{count}\",\"expires_in\":3600,\"token_type\":\"Bearer\"}}");
+						$"{{\"access_token\":\"opaque-{count}\",\"refresh_token\":\"rotated-{count}\",\"expires_in\":{ExpiresIn},\"token_type\":\"Bearer\"}}");
 				}
 
 				lock (ApiRequests)

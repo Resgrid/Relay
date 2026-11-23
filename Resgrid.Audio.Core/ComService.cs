@@ -111,7 +111,7 @@ namespace Resgrid.Audio.Core
 			}
 			else
 			{
-				await ResolveGroupCodesAsync(dispatchContext.DispatchCodes).ConfigureAwait(false);
+				await ResolveGroupCodesAsync(dispatchContext.DispatchCodes, e.Watcher.Name).ConfigureAwait(false);
 				dispatchList = DispatchListBuilder.Build(dispatchContext.DispatchCodes, _config?.DispatchMapping?.DepartmentDispatchPrefix);
 				if (String.IsNullOrWhiteSpace(dispatchList))
 					throw new InvalidOperationException($"No valid Resgrid dispatch targets were found for watcher '{e.Watcher.Name}'.");
@@ -194,33 +194,41 @@ namespace Resgrid.Audio.Core
 
 		/// <summary>
 		/// Group watchers carry the group's dispatch email code (the local part of its groups-domain address), but the DispatchList
-		/// needs the numeric group id. A code Resgrid cannot resolve is sent as-is, which Resgrid still matches to a group id or
-		/// name, so configurations that used the id or name directly keep working.
+		/// needs the numeric group id. A code Resgrid answers as unknown (null) is sent as-is, which Resgrid still matches to a
+		/// group id or name, so configurations that used the id or name directly keep working. A lookup that fails is not such an
+		/// answer: it is retried, and if it still fails the dispatch is reported as failed rather than sent as G:&lt;code&gt;, which
+		/// pages nobody when the code is a dispatch code.
 		/// </summary>
-		private async Task ResolveGroupCodesAsync(List<DispatchCode> dispatchCodes)
+		private async Task ResolveGroupCodesAsync(List<DispatchCode> dispatchCodes, string watcherName)
 		{
 			if (_lookupsApi == null)
 				return;
 
 			foreach (var code in dispatchCodes.Where(x => x.Type == DispatchCodeType.Group && !x.IsResolved && !Int32.TryParse(x.Code, out _)))
 			{
+				GroupLookupResult group;
 				try
 				{
 					// Same bounded retry as the save: one 503 from the token endpoint threw an authentication error out of here
-					// before the save's retries ever ran, and the page was dropped. A code Resgrid does not know (null) is sent
-					// as-is; an authentication failure that outlasts the retries still aborts the dispatch.
-					var group = await WithRetriesAsync(() => _lookupsApi.LookupGroupByDispatchCodeAsync(code.Code, _departmentId)).ConfigureAwait(false);
-					if (group != null)
-						code.ResolvedId = group.GroupId;
+					// before the save's retries ever ran, and the page was dropped.
+					group = await WithRetriesAsync(() => _lookupsApi.LookupGroupByDispatchCodeAsync(code.Code, _departmentId), IsRetryableLookupFailure)
+						.ConfigureAwait(false);
 				}
-				catch (Exception ex) when (!(ex is ResgridAuthenticationException))
+				catch (Exception ex)
 				{
-					_logger.Warning(ex, "Could not resolve group dispatch code {Code}; sending it as a group name", code.Code);
+					throw new InvalidOperationException(
+						$"The Resgrid lookup of group dispatch code '{code.Code}' for watcher '{watcherName}' failed after its retries; the call " +
+						"was not created, because sending the unresolved code would not page that group.", ex);
 				}
+
+				if (group != null)
+					code.ResolvedId = group.GroupId;
 			}
 		}
 
-		private async Task<T> WithRetriesAsync<T>(Func<Task<T>> action)
+		private Task<T> WithRetriesAsync<T>(Func<Task<T>> action) => WithRetriesAsync(action, IsTransient);
+
+		private async Task<T> WithRetriesAsync<T>(Func<Task<T>> action, Func<Exception, bool> isRetryable)
 		{
 			for (var attempt = 1; ; attempt++)
 			{
@@ -228,12 +236,28 @@ namespace Resgrid.Audio.Core
 				{
 					return await action().ConfigureAwait(false);
 				}
-				catch (Exception ex) when (attempt < 3 && IsTransient(ex))
+				catch (Exception ex) when (attempt < 3 && isRetryable(ex))
 				{
 					_logger.Warning(ex, "Resgrid request failed (attempt {Attempt} of 3); retrying", attempt);
 					await Task.Delay(TimeSpan.FromSeconds(2 * attempt)).ConfigureAwait(false);
 				}
 			}
+		}
+
+		/// <summary>
+		/// A lookup is a read, so beyond the usual transient failures it is also worth retrying the answers LookupsApi raises
+		/// instead of "unknown code": a 404 (every lookup endpoint exists, so the request never reached it), a 403 (a gateway or
+		/// permission problem) and a system-key 401.
+		/// </summary>
+		private static bool IsRetryableLookupFailure(Exception exception)
+		{
+			if (IsTransient(exception))
+				return true;
+
+			return exception is HttpRequestException http &&
+				   (http.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+					http.StatusCode == System.Net.HttpStatusCode.Forbidden ||
+					http.StatusCode == System.Net.HttpStatusCode.NotFound);
 		}
 
 		private static bool IsTransient(Exception exception)

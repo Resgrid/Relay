@@ -542,19 +542,22 @@ namespace Resgrid.Audio.Relay.Console
 			try { radio = LoadHostOptions().Radio; }
 			catch (Exception) { /* list the devices without the configured marker */ }
 
+			var matching = radio == null ? Array.Empty<Resgrid.Audio.Core.Radio.UsbHidDevice>() : Cm108Compatibility.FindAllSelected(allHids, radio.Cm108VendorId, radio.Cm108ProductId);
 			var selected = radio == null ? null : Cm108Compatibility.FindSelected(allHids, radio.Cm108VendorId, radio.Cm108ProductId);
 			foreach (var hid in hids)
 			{
 				var note = ReferenceEquals(hid, selected)
 					? "  <- selected by the current settings"
 					: $"  (to use it: {Cm108Compatibility.SettingsFor(hid)})";
-				Cli.WriteLine($"  {Cm108Compatibility.Describe(hid)}{note}");
+				Cli.WriteLine($"  {Cm108Compatibility.Describe(hid)}{Cm108Compatibility.SameIdsNote(Cm108Compatibility.CountWithSameIds(hids, hid))}{note}");
 			}
 
 			if (radio != null)
 			{
 				var ids = Cm108Compatibility.FormatIds(radio.Cm108VendorId, radio.Cm108ProductId);
-				if (selected == null)
+				if (matching.Count > 1)
+					Cli.WriteLine($"  {Cm108Compatibility.AmbiguousDevicesMessage(radio.Cm108VendorId, radio.Cm108ProductId, matching)}");
+				else if (selected == null)
 					Cli.WriteLine($"  The current settings ({ids}) select no connected device: Cm108 PTT keying would fail.");
 				else if (!hids.Contains(selected))
 					Cli.WriteLine($"  The current settings ({ids}) select {Cm108Compatibility.Describe(selected)}, not a known CM108-compatible interface.");

@@ -82,8 +82,12 @@ namespace Resgrid.Audio.Core.Radio
 
 		// A key-up whose PTT write failed: playing the lead and speech to a radio that is not keyed loses them (a retry that
 		// keys it 250 ms later would start mid-sentence), so the audio is held back until the line keys, then the lead starts
-		// from there. Bounded (the most recent audio is kept) and dropped if the transmission ends first.
+		// from there. Bounded (the most recent audio is kept) and dropped if the transmission ends first. The held key-up is
+		// for one floor turn: once that turn is over (its talker went quiet past the talker hang, or the floor changed hands),
+		// its audio has expired and is dropped, never played into a later transmission.
 		private bool _keyPending;
+		private long _keyPendingTurn;          // the floor turn the held key-up and its audio belong to
+		private long _keyFailingSinceTicks;    // the first of an unbroken run of failed key-ups (0 = the last key-up keyed)
 		private readonly Queue<short[]> _heldTransmit = new Queue<short[]>();
 		private int _heldTransmitSamples;
 		private static readonly int MaxHeldTransmitSamples = AudioFormat.SampleRate; // 1 s
@@ -516,7 +520,7 @@ namespace Resgrid.Audio.Core.Radio
 			var audible = AudioFormat.Dbfs(frame.Pcm) >= TxActivityDbfs;
 			var talker = frame.TrackSid ?? frame.Participant?.ToString() ?? "remote";
 			var nowTicks = DateTime.UtcNow.Ticks;
-			var talkerHangTicks = TimeSpan.FromMilliseconds(Math.Max(_settings.TxHangMs, 500)).Ticks;
+			var talkerHangTicks = TalkerHangTicks;
 
 			long turn;
 			lock (_talkerLock)
@@ -580,13 +584,21 @@ namespace Resgrid.Audio.Core.Radio
 						return;
 				}
 
+				// A key-up still waiting for the line from an earlier turn: that turn is over (the floor changed hands), so the
+				// audio held for it has expired. It is dropped rather than played ahead of this talker, who now owns the key-up.
+				if (_keyPending && _keyPendingTurn != turn)
+				{
+					ClearHeldTransmit();
+					_keyPendingTurn = turn;
+				}
+
 				if (!_wantKeyed)
 				{
 					// Silence never keys the radio.
 					if (!audible)
 						return;
 
-					changed = KeyUp(ref nowTicks, frame.Participant?.ToString() ?? "remote");
+					changed = KeyUp(ref nowTicks, frame.Participant?.ToString() ?? "remote", turn);
 				}
 				else if (!audible && nowTicks - _lastTxTicks >= TimeSpan.TicksPerMillisecond * Math.Max(0, _settings.TxHangMs))
 				{
@@ -608,8 +620,11 @@ namespace Resgrid.Audio.Core.Radio
 				RaiseTxRxChanged();
 		}
 
+		// The talker hang: how long a talker keeps the floor (and their turn stays on) after their last audible frame.
+		private long TalkerHangTicks => TimeSpan.FromMilliseconds(Math.Max(_settings.TxHangMs, 500)).Ticks;
+
 		// Under _txLock. Returns whether Transmitting changed; nowTicks is advanced to when the line was driven.
-		private bool KeyUp(ref long nowTicks, string who)
+		private bool KeyUp(ref long nowTicks, string who, long turn)
 		{
 			// The new transmission's state is recorded before the line is driven, so the tail logic never sees a keyed radio
 			// with the previous transmission's (long expired) idle time.
@@ -632,13 +647,19 @@ namespace Resgrid.Audio.Core.Radio
 			if (keyed)
 			{
 				_pttMismatchSinceTicks = 0;
+				_keyFailingSinceTicks = 0;
 				_keyPending = false;
 			}
 			else
 			{
-				_pttMismatchSinceTicks = nowTicks;
+				// The PTT fault is timed from the first of an unbroken run of failed key-ups: a held key-up is dropped when its
+				// turn ends, so a line that fails every key-up still faults when each turn is shorter than PttFaultAfter.
+				if (_keyFailingSinceTicks == 0)
+					_keyFailingSinceTicks = nowTicks;
+				_pttMismatchSinceTicks = _keyFailingSinceTicks;
 				_lastPttRetryTicks = nowTicks;
 				_keyPending = true;
+				_keyPendingTurn = turn;
 				_logger?.Warning("PTT key failed; holding the transmit audio and retrying");
 			}
 			_logger?.Debug("PTT keyed (channel audio from {Who})", who);
@@ -700,8 +721,23 @@ namespace Resgrid.Audio.Core.Radio
 		private void DropHeldTransmit()
 		{
 			_keyPending = false;
+			ClearHeldTransmit();
+		}
+
+		// Under _txLock: discards the held audio; a held key-up stays pending.
+		private void ClearHeldTransmit()
+		{
 			_heldTransmit.Clear();
 			_heldTransmitSamples = 0;
+		}
+
+		// Under _txLock (takes _talkerLock, in the usual order). Whether the floor turn a held key-up belongs to is still on:
+		// nobody has taken or cleared the floor since, and its talker has been audible within the talker hang (the floor is
+		// cleared lazily, on the next channel frame, so the deadline is checked here as well).
+		private bool IsKeyPendingTurnActive(long now)
+		{
+			lock (_talkerLock)
+				return _floorTurn == _keyPendingTurn && _activeTalker != null && now - _activeTalkerLastAudibleTicks <= TalkerHangTicks;
 		}
 
 		// Under _txLock, on a forced unkey (the transmit time-out, a fault): throws away the transmit audio still queued. A
@@ -733,7 +769,9 @@ namespace Resgrid.Audio.Core.Radio
 			if (_ptt.Unkey() || !_ptt.IsKeyed)
 			{
 				_pttMismatchSinceTicks = 0;
-				OnUnkeyConfirmed(nowTicks);
+				// The squelch guard runs from when the write returned (a HID/serial write can take a while), as on a retry: timed
+				// from before it, a slow write used the guard up while receive was still suppressed.
+				OnUnkeyConfirmed(Math.Max(nowTicks, DateTime.UtcNow.Ticks));
 			}
 			else
 			{
@@ -781,13 +819,19 @@ namespace Resgrid.Audio.Core.Radio
 			lock (_txLock)
 			{
 				var now = DateTime.UtcNow.Ticks;
+
+				// Checked before the PTT line is retried: a held key-up whose turn is over has nothing left to transmit (its
+				// audio has expired), so the transmission ends instead of keying the radio later to play it.
+				if (_wantKeyed && _keyPending && !IsKeyPendingTurnActive(now))
+					changed = ReleaseTransmit("the talker stopped before the PTT line keyed", now);
+
 				fault = SyncPttLine(now);
 
 				var buffered = Math.Max(0, _device.BufferedTransmit.Ticks);
 				fault ??= CheckTransmitOutput(now, buffered, _device.PlayedTransmit.Ticks);
 
 				if (_wantKeyed && fault == null)
-					changed = ManageKeyedTail(now, buffered);
+					changed |= ManageKeyedTail(now, buffered);
 			}
 
 			if (changed)
@@ -840,6 +884,7 @@ namespace Resgrid.Audio.Core.Radio
 		{
 			if (_wantKeyed)
 			{
+				_keyFailingSinceTicks = 0;
 				if (_keyPending)
 					StartHeldTransmit(now);
 			}
@@ -1025,8 +1070,11 @@ namespace Resgrid.Audio.Core.Radio
 			{
 				_stopping = true;
 				_wantKeyed = false;
-				DropHeldTransmit();
 				released = TryUnkey();
+				// Then the queued transmit audio goes (after the unkey, so discarding it never stands between shutdown and the
+				// release). The device keeps playing its queue while the publisher below closes, and with VOX keying that audio
+				// itself holds the radio on the air; nothing refills the queue past this fence.
+				DiscardQueuedTransmit(DateTime.UtcNow.Ticks);
 				changed = UpdateTransmitting(false);
 			}
 

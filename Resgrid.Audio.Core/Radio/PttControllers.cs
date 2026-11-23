@@ -121,7 +121,8 @@ namespace Resgrid.Audio.Core.Radio
 	/// Keys PTT via a CM108/CM119 USB sound-fob GPIO line (DMK URI, RA-40/RIM-Lite,
 	/// RB-USB) or a CM108-compatible interface such as the AIOC. Writes the HID output report that drives the GPIO pin. The
 	/// exact pin varies by interface, so it is configurable (URI/RIM and the AIOC commonly use GPIO3). Which device the
-	/// vendor/product ids select follows <see cref="Cm108Compatibility.IsSelectedBy"/>, the rule the device pickers use.
+	/// vendor/product ids select follows <see cref="Cm108Compatibility.IsSelectedBy"/>, the rule the device pickers use; ids
+	/// that select more than one connected device are refused (<see cref="Cm108Compatibility.SelectPttDevice"/>).
 	/// </summary>
 	public sealed class Cm108PttController : IPttController
 	{
@@ -136,10 +137,12 @@ namespace Resgrid.Audio.Core.Radio
 			_logger = logger;
 			_gpioBit = 1 << (Math.Max(1, gpioPin) - 1);
 
+			// Exactly one device must match: two with the same ids (two AIOCs) cannot be told apart, and opening the first could
+			// key a different radio, so that throws (naming the fix) as no match does.
 			var devices = DeviceList.Local.GetHidDevices().ToList();
-			_device = devices.FirstOrDefault(d => Cm108Compatibility.IsSelectedBy(vendorId, productId, d.VendorID, d.ProductID))
-				?? throw new InvalidOperationException(Cm108Compatibility.NoDeviceFoundMessage(vendorId, productId,
-					devices.Select(d => new UsbHidDevice { VendorId = d.VendorID, ProductId = d.ProductID, Name = Cm108Compatibility.SafeName(d) })));
+			var present = devices.Select(Cm108Compatibility.ToUsbHidDevice).ToList();
+			var selected = Cm108Compatibility.SelectPttDevice(present, vendorId, productId);
+			_device = devices[present.IndexOf(selected)];
 
 			if (!_device.TryOpen(out _stream))
 				throw new InvalidOperationException("Failed to open the CM108 HID device for PTT control.");

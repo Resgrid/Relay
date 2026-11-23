@@ -33,6 +33,7 @@ namespace Resgrid.Relay.Engine.Voice
 		{
 			VoiceModeRuntime.EnsureUserTokenAuth(options, "radio");
 			using var apiClient = new ResgridV4ApiClient(options.Resgrid);
+			apiClient.Warning += message => logger?.Warning("Resgrid API client: {Warning}", message);
 			var voiceApi = new VoiceApi(apiClient);
 			var callsApi = new CallsApi(apiClient);
 
@@ -220,8 +221,9 @@ namespace Resgrid.Relay.Engine.Voice
 
 		/// <summary>
 		/// The transmit test on an already-open <paramref name="device"/> and <paramref name="ptt"/> line (which the caller owns
-		/// and disposes). Never keys after <paramref name="cancellationToken"/> is cancelled; once keyed, PTT is released on every
-		/// path — completion, cancellation, a device fault or any other failure — before this returns or throws.
+		/// and disposes). Never keys after <paramref name="cancellationToken"/> is cancelled; once a key is attempted (also one
+		/// that failed), PTT is released on every path — completion, cancellation, a device fault or any other failure — before
+		/// this returns or throws.
 		/// <list type="bullet">
 		/// <item>PTT could not be released (every retry failed): <see cref="PttReleaseException"/>, whatever else went wrong.</item>
 		/// <item>The device faulted (<see cref="IRadioDevice.Faulted"/>) or stopped playing: <see cref="InvalidOperationException"/>.</item>
@@ -286,10 +288,11 @@ namespace Resgrid.Relay.Engine.Voice
 					failure = ExceptionDispatchInfo.Capture(ex);
 				}
 
-				if (keyed || (keyAttempted && ptt.IsKeyed))
+				// Once a key was attempted, also one that failed: after a failed Key() the line state is unknown (the write can
+				// half-happen), so it gets the same bounded release, and a release that never succeeds is reported as one. A key
+				// failure the release clears is still reported as the key failure.
+				if (keyAttempted)
 					released = await ReleasePttAsync(ptt).ConfigureAwait(false);
-				else if (keyAttempted)
-					TryUnkey(ptt); // Key() failed and left the line unkeyed; drop it anyway in case the write half-happened.
 			}
 			finally
 			{

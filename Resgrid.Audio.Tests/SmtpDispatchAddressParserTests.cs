@@ -234,6 +234,54 @@ namespace Resgrid.Audio.Tests
 		}
 
 		[Test]
+		public void ParseRecipients_Should_Treat_Bare_And_Hosted_Addresses_For_The_Same_Code_As_One_Target()
+		{
+			var options = new SmtpRelayOptions
+			{
+				HostedMode = true,
+				DefaultDepartmentId = "dept123",
+				GroupAddressDomains = new[] { "groups.resgrid.com", "groups.example.org" },
+				GroupMessageAddressDomains = new[] { "gm.resgrid.com" },
+				DepartmentDomainSeparator = "."
+			};
+
+			// With DefaultDepartmentId the bare addresses carry no department of their own; they are still the default
+			// department's station5, as is the hosted one. A group message with the same code is a different target.
+			var result = new SmtpDispatchAddressParser(options).ParseRecipients(new[]
+			{
+				"station5@groups.resgrid.com",
+				"station5@groups.example.org",
+				"station5@dept123.groups.resgrid.com",
+				"station5@gm.resgrid.com"
+			});
+
+			result.DepartmentId.Should().Be("dept123");
+			result.DispatchCodes.Select(x => (x.Type, x.Code)).Should().Equal(
+				(DispatchCodeType.Group, "station5"), (DispatchCodeType.GroupMessage, "station5"));
+			result.OtherDepartmentAddresses.Should().BeEmpty();
+		}
+
+		[Test]
+		public void ParseRecipients_Should_Take_The_Department_From_A_Hosted_Duplicate_Of_A_Bare_Address()
+		{
+			var options = new SmtpRelayOptions
+			{
+				HostedMode = true,
+				GroupAddressDomains = new[] { "groups.resgrid.com" },
+				DepartmentDomainSeparator = "."
+			};
+
+			var result = new SmtpDispatchAddressParser(options).ParseRecipients(new[]
+			{
+				"station5@groups.resgrid.com",
+				"station5@dept123.groups.resgrid.com"
+			});
+
+			result.DepartmentId.Should().Be("dept123");
+			result.DispatchCodes.Should().ContainSingle();
+		}
+
+		[Test]
 		public void ParseRecipients_Should_Not_Let_An_Envelope_Address_Of_Another_Department_Than_The_Default_One_Claim_The_Dispatch()
 		{
 			var options = new SmtpRelayOptions

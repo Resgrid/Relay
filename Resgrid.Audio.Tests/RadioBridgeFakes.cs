@@ -21,8 +21,8 @@ namespace Resgrid.Audio.Tests
 			return pcm;
 		}
 
-		public static VoiceAudioFrame AudibleFrame(string trackSid = "track-1") =>
-			new VoiceAudioFrame(null, trackSid, Tone(10, 16000), DateTime.UtcNow);
+		public static VoiceAudioFrame AudibleFrame(string trackSid = "track-1", double amplitude = 16000) =>
+			new VoiceAudioFrame(null, trackSid, Tone(10, amplitude), DateTime.UtcNow);
 
 		/// <summary>Polls <paramref name="condition"/> until it holds or <paramref name="timeoutMs"/> passes.</summary>
 		public static async Task<bool> WaitUntil(Func<bool> condition, int timeoutMs = 3000)
@@ -122,6 +122,9 @@ namespace Resgrid.Audio.Tests
 		/// <summary>How long Key() takes to return after the line is asserted (a slow HID write).</summary>
 		public int KeyDelayMs { get; set; }
 
+		/// <summary>How long Unkey() takes to return after the line is released (a slow HID write).</summary>
+		public int UnkeyDelayMs { get; set; }
+
 		public int KeyCalls => Volatile.Read(ref _keyCalls);
 		public int UnkeyCalls => Volatile.Read(ref _unkeyCalls);
 
@@ -142,6 +145,8 @@ namespace Resgrid.Audio.Tests
 			if (FailWrites)
 				return false;
 			_keyed = false;
+			if (UnkeyDelayMs > 0)
+				Thread.Sleep(UnkeyDelayMs);
 			return true;
 		}
 
@@ -236,7 +241,15 @@ namespace Resgrid.Audio.Tests
 			return ValueTask.CompletedTask;
 		}
 
+		/// <summary>Runs when the bridge starts closing the publisher.</summary>
+		public Action Disposing { get; set; }
+
 		public ValueTask FlushAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
-		public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+		public ValueTask DisposeAsync()
+		{
+			Disposing?.Invoke();
+			return ValueTask.CompletedTask;
+		}
 	}
 }

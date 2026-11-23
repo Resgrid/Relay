@@ -14,8 +14,9 @@ namespace Resgrid.Audio.Relay.Tests
 {
 	/// <summary>
 	/// The desktop shutdown barrier of <see cref="RelayController"/>: stops already in progress are waited for, modes stop in
-	/// parallel, and no mode starts once shutdown has begun. Runs against fake services whose teardown is held open by a gate
-	/// (standing in for a recorder still saving a transmission).
+	/// parallel, and no mode starts once shutdown has begun — plus the <see cref="RelayModeLauncher"/> rules built on it (a
+	/// stop-all cancels starts issued before it; a bridge still tearing down keeps the radio). Runs against fake services whose
+	/// teardown is held open by a gate (standing in for a recorder still saving a transmission).
 	/// </summary>
 	[TestFixture]
 	public class RelayControllerTests
@@ -43,6 +44,13 @@ namespace Resgrid.Audio.Relay.Tests
 		{
 			foreach (var service in _created)
 				service.ReleaseTeardown();
+			_controller.StopAllAsync().Wait(Long);
+		}
+
+		private RelayModeLauncher Launcher()
+		{
+			var logger = new LoggerConfiguration().CreateLogger();
+			return new RelayModeLauncher(_controller, new ConfigurationService(), new DesktopSettingsService(logger), logger);
 		}
 
 		private FakeService Start(string mode)
@@ -162,6 +170,111 @@ namespace Resgrid.Audio.Relay.Tests
 			await _controller.StopAllAsync();
 
 			_controller.StopAllRequests.Should().Be(before + 2);
+		}
+
+		[Test]
+		public async Task Start_RequestedBeforeAStopAll_IsRefused()
+		{
+			var requested = _controller.StopAllRequests;
+			await _controller.StopAllAsync();
+
+			Action start = () => _controller.Start(new RelayHostOptions { Mode = "radio" }, requested);
+
+			start.Should().Throw<InvalidOperationException>();
+			_created.Should().BeEmpty();
+			_controller.IsRunning.Should().BeFalse();
+		}
+
+		[Test]
+		public async Task WhenModeStopped_WaitsForThatModesTeardownOnly()
+		{
+			var radio = Start("radio");
+			await radio.Running.WaitAsync(Long);
+
+			var stopAll = _controller.StopAllAsync();
+			await radio.Cancelled.WaitAsync(Long);
+
+			_controller.Find("radio").Should().BeNull("the stop took it out of the tracked set");
+			_controller.IsModeStopping("radio").Should().BeTrue();
+			_controller.IsModeStopping("record").Should().BeFalse();
+			_controller.WhenModeStopped("record").IsCompleted.Should().BeTrue();
+			var radioStopped = _controller.WhenModeStopped("radio");
+			(await Task.WhenAny(radioStopped, Task.Delay(Short))).Should().NotBeSameAs(radioStopped);
+
+			radio.ReleaseTeardown();
+			await Task.WhenAll(stopAll, radioStopped).WaitAsync(Long);
+			_controller.IsModeStopping("radio").Should().BeFalse();
+		}
+
+		// ─────────── RelayModeLauncher ───────────
+
+		[Test]
+		public async Task TryClaimRadio_WhileTheBridgeIsStillStopping_IsRefused()
+		{
+			var launcher = Launcher();
+			var radio = Start("radio");
+			await radio.Running.WaitAsync(Long);
+
+			// Stop all doesn't take the launcher's gate, and the bridge is still releasing the radio's audio and PTT.
+			var stopAll = _controller.StopAllAsync();
+			await radio.Cancelled.WaitAsync(Long);
+
+			launcher.TryClaimRadio(out var reason).Should().BeNull();
+			reason.Should().Contain("still stopping");
+
+			radio.ReleaseTeardown();
+			await stopAll.WaitAsync(Long);
+
+			using var claim = launcher.TryClaimRadio(out reason);
+			claim.Should().NotBeNull(reason);
+		}
+
+		[Test]
+		public async Task StartAsync_QueuedBehindARadioClaim_IsCancelledByAStopAll()
+		{
+			var launcher = Launcher();
+			var claim = launcher.TryClaimRadio(out var reason);
+			claim.Should().NotBeNull(reason);
+
+			var start = launcher.StartAsync("radio");
+			(await Task.WhenAny(start, Task.Delay(Short))).Should().NotBeSameAs(start, "the transmit test holds the radio");
+
+			await _controller.StopAllAsync();
+			claim.Dispose();
+
+			(await start.WaitAsync(Long)).Should().Contain("Stop all");
+			_created.Should().BeEmpty("the start was issued before the stop-all");
+		}
+
+		[Test]
+		public async Task StartAsync_ForARequestThatPrecedesAStopAll_IsCancelled()
+		{
+			var launcher = Launcher();
+			var requested = _controller.StopAllRequests;
+			await _controller.StopAllAsync();
+
+			(await launcher.StartAsync("smtp", requested).WaitAsync(Long)).Should().Contain("Stop all");
+			_created.Should().BeEmpty();
+		}
+
+		[Test]
+		public async Task StartAsync_WaitsForThePreviousInstancesTeardown()
+		{
+			var launcher = Launcher();
+			var radio = Start("radio");
+			await radio.Running.WaitAsync(Long);
+
+			var stopAll = _controller.StopAllAsync();
+			await radio.Cancelled.WaitAsync(Long);
+
+			// Requested after the stop-all, so it should run — but only once the old bridge has let go of the radio.
+			var start = launcher.StartAsync("radio");
+			(await Task.WhenAny(start, Task.Delay(Short))).Should().NotBeSameAs(start);
+			_created.Should().HaveCount(1, "no replacement starts while the old bridge is still tearing down");
+
+			radio.ReleaseTeardown();
+			await stopAll.WaitAsync(Long);
+			await start.WaitAsync(Long);
 		}
 
 		/// <summary>Runs until cancelled, then holds its teardown open until <see cref="ReleaseTeardown"/>.</summary>

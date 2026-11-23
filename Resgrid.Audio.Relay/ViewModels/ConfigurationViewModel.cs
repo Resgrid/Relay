@@ -45,9 +45,10 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private bool _disposed;
 		private bool _loading;
 
-		// Why the on-disk layers (appsettings.json + relay.user.json) could not be read, or null. Tracked apart from the
-		// effective load error: an environment value can mask a bad value in the file, and the form then shows defaults that a
-		// Save would write over the file's other settings.
+		// Why the on-disk layers (appsettings.json + relay.user.json) could not be read when the form was last populated from
+		// them, or null. Tracked apart from the effective load error: an environment value can mask a bad value in the file,
+		// and the form then shows defaults that a Save would write over the file's other settings. Only repopulating the form
+		// (open, Reload, after a Save) updates it: a file repaired meanwhile must not let a Save write those defaults over it.
 		private string _diskLoadError;
 
 		public ConfigurationViewModel(ConfigurationService configuration, DeviceEnumerationService devices, RelayModeLauncher launcher)
@@ -58,7 +59,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 			RefreshDeviceLists();
 			// The form edits the on-disk layers only, so a Save never writes RESGRID__RELAY__ environment values into the
 			// user file (the banner says when the environment overrides what is shown).
-			LoadFromOptions(LoadDiskModel());
+			LoadFormFromDisk();
 		}
 
 		/// <summary>Why the settings files could not be read (defaults are shown), or null.</summary>
@@ -156,6 +157,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private bool _resgridServiceAccount;
 
 		[ObservableProperty]
+		[NotifyCanExecuteChangedFor(nameof(SaveCommand))]
 		private bool _isTestingConnection;
 
 		[ObservableProperty]
@@ -680,21 +682,32 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 		/// <summary>
 		/// The on-disk layers (appsettings.json + relay.user.json, no environment), or defaults when they can't be read — with
-		/// the reason kept in <see cref="_diskLoadError"/> (shown in the banner, and Save refuses to write over the file).
+		/// the reason in <paramref name="error"/>. Does not change the form's load state; see <see cref="LoadFormFromDisk"/>.
 		/// </summary>
-		private RelayHostOptions LoadDiskModel()
+		private static RelayHostOptions LoadDiskModel(out string error)
 		{
 			try
 			{
 				var options = RelayConfiguration.LoadFromDisk();
-				_diskLoadError = null;
+				error = null;
 				return options;
 			}
 			catch (RelayConfigurationException ex)
 			{
-				_diskLoadError = ex.Message;
+				error = ex.Message;
 				return new RelayHostOptions();
 			}
+		}
+
+		/// <summary>
+		/// Repopulates the form from the on-disk layers, keeping why they could not be read in <see cref="_diskLoadError"/>
+		/// (shown in the banner; Save refuses to write the defaults then shown over the file until a Reload reads it).
+		/// </summary>
+		private void LoadFormFromDisk()
+		{
+			var options = LoadDiskModel(out var error);
+			_diskLoadError = error;
+			LoadFromOptions(options);
 		}
 
 		private void NotifyLoadState()
@@ -707,7 +720,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 		/// <summary>The edited form overlaid on the on-disk settings, without saving; for tests that must use unsaved edits.</summary>
 		private RelayHostOptions BuildWorkingOptions()
 		{
-			var disk = LoadDiskModel();
+			var disk = LoadDiskModel(out _);
 			ApplyToOptions(disk);
 
 			// What will actually run: the edited form plus the environment layer (which wins at run time).
@@ -720,9 +733,19 @@ namespace Resgrid.Audio.Relay.ViewModels
 			return options;
 		}
 
-		[RelayCommand]
+		// Not while a connection test runs: its rotated refresh token is only handed to the relay's cache by a Save made after
+		// the test has signed in (CarryForwardTestedSignIn), so a Save mid-test left it stranded in the pending cache.
+		private bool CanSave() => !IsTestingConnection;
+
+		[RelayCommand(CanExecute = nameof(CanSave))]
 		private void Save()
 		{
+			if (IsTestingConnection)
+			{
+				StatusMessage = "Wait for the connection test to finish, then Save.";
+				return;
+			}
+
 			ValidateAllProperties();
 			if (HasErrors)
 			{
@@ -730,14 +753,23 @@ namespace Resgrid.Audio.Relay.ViewModels
 				return;
 			}
 
-			// Start from a disk-only snapshot (no RESGRID__RELAY__ env overrides) so unedited/unknown fields survive without
-			// baking environment values into the user config file.
-			var options = LoadDiskModel();
 			if (_diskLoadError != null)
 			{
-				// The form holds defaults, not the file: saving would replace every setting the file has with them.
+				// The form holds defaults, not the file: saving would replace every setting the file has with them — even once
+				// the file is readable again, until a Reload shows what it holds.
 				NotifyLoadState();
-				StatusMessage = $"Cannot save — the settings files could not be read ({_diskLoadError}). Fix {UserConfigPathDisplay} " +
+				StatusMessage = $"Cannot save — the settings files could not be read ({_diskLoadError}), so this form shows defaults. " +
+					$"Fix {UserConfigPathDisplay} (Open settings folder), or delete it to start over, then Reload.";
+				return;
+			}
+
+			// Start from a disk-only snapshot (no RESGRID__RELAY__ env overrides) so unedited/unknown fields survive without
+			// baking environment values into the user config file.
+			var options = LoadDiskModel(out var readError);
+			if (readError != null)
+			{
+				// The file broke after the form was loaded: the snapshot is defaults, and saving would drop its other settings.
+				StatusMessage = $"Cannot save — the settings files could not be read ({readError}). Fix {UserConfigPathDisplay} " +
 					"(Open settings folder), or delete it to start over, then Reload.";
 				return;
 			}
@@ -772,7 +804,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 			var signInNote = CarryForwardTestedSignIn();
 
 			// Re-load so masked secrets reflect the now-stored values.
-			LoadFromOptions(LoadDiskModel());
+			LoadFormFromDisk();
 			NotifyLoadState();
 			var running = RelayModeLauncher.AllModes.Where(_launcher.IsActive).Select(RelayModeLauncher.FriendlyName).ToList();
 			StatusMessage = (running.Count == 0
@@ -784,7 +816,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private void Reload()
 		{
 			_configuration.Reload();
-			LoadFromOptions(LoadDiskModel());
+			LoadFormFromDisk();
 			NotifyLoadState();
 			StatusMessage = "Reloaded from disk.";
 		}

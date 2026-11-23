@@ -33,6 +33,7 @@ namespace Resgrid.Relay.Engine.Voice
 			var config = LoadAudioConfig(options.AudioConfigPath);
 			var apiOptions = ResolveResgridOptions(options, config);
 			using var apiClient = new ResgridV4ApiClient(apiOptions);
+			apiClient.Warning += message => logger.Warning("Resgrid API client: {Warning}", message);
 			var healthApi = new HealthApi(apiClient);
 			var callsApi = new CallsApi(apiClient);
 
@@ -155,10 +156,12 @@ namespace Resgrid.Relay.Engine.Voice
 				Scope = FirstNonEmpty(hostOptions.Resgrid.Scope, config.Resgrid?.Scope, "openid profile email offline_access mobile"),
 				TokenCachePath = FirstNonEmpty(hostOptions.Resgrid.TokenCachePath, config.Resgrid?.TokenCachePath, Path.Combine(AppContext.BaseDirectory, "data", "resgrid-token.json")),
 				// settings.json predates these, so they only come from the host options; dropping them silently forced every audio
-				// relay onto the refresh_token grant even when it was configured for client credentials or a system API key.
+				// relay onto the refresh_token grant even when it was configured for client credentials or a system API key. A
+				// dropped ServiceAccount flag made a service-account relay page and upload as an ordinary department caller.
 				GrantType = hostOptions.Resgrid.GrantType,
 				SystemApiKey = hostOptions.Resgrid.SystemApiKey,
-				DepartmentId = hostOptions.Resgrid.DepartmentId
+				DepartmentId = hostOptions.Resgrid.DepartmentId,
+				ServiceAccount = hostOptions.Resgrid.ServiceAccount
 			};
 		}
 

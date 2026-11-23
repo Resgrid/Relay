@@ -4,7 +4,9 @@ using DtmfDetection;
 using DtmfDetection.NAudio;
 using FluentAssertions;
 using NUnit.Framework;
+using Resgrid.Audio.Core;
 using Resgrid.Audio.Core.Model;
+using Serilog;
 
 namespace Resgrid.Audio.Tests
 {
@@ -56,6 +58,51 @@ namespace Resgrid.Audio.Tests
 			matched.Should().HaveCount(2);
 			matched[0].Should().BeSameAs(first);
 			matched[1].Should().BeSameAs(second);
+		}
+
+		// ─── The evaluator's tone bank, which merges the pieces of one tone before the triggers see them ───
+
+		/// <summary>Feeds the tones to a real evaluator watching for <paramref name="trigger"/>; returns how often it paged.</summary>
+		private static int Evaluate(Trigger trigger, params DtmfToneEnd[] tones)
+		{
+			var watcher = new Watcher { Name = "Station 5", Active = true, Code = "station5", Type = 2, Triggers = new List<Trigger> { trigger } };
+			var evaluator = new AudioEvaluator(new LoggerConfiguration().CreateLogger());
+			evaluator.Init(new Config { Watchers = new List<Watcher> { watcher } });
+			var triggered = 0;
+			evaluator.WatcherTriggered += (_, _) => triggered++;
+
+			foreach (var tone in tones)
+				evaluator.OnToneStopped(tone);
+
+			return triggered;
+		}
+
+		[Test]
+		public void Two_Separate_Bursts_800_Ms_Apart_Should_Page_When_Both_Frequencies_Round_To_The_Same_Tone()
+		{
+			// Inside the bank's 1 s merge window: the two bursts were merged into one occurrence, which the trigger then refused
+			// to use for both slots, so this page never matched.
+			var trigger = new Trigger { Count = 2, Frequency1 = 368.5, Frequency2 = 369.4, Time1 = 500, Time2 = 500 };
+
+			Evaluate(trigger, Tone(369, 600, 0), Tone(369, 600, 0.8)).Should().Be(1);
+		}
+
+		[Test]
+		public void One_Continuous_Tone_Should_Not_Page_When_Both_Frequencies_Round_To_The_Same_Tone()
+		{
+			var trigger = new Trigger { Count = 2, Frequency1 = 368.5, Frequency2 = 369.4, Time1 = 500, Time2 = 500 };
+
+			Evaluate(trigger, Tone(369, 1300, 0)).Should().Be(0);
+			// The same tone, lost by the detector for a moment: its short second piece is merged back into it.
+			Evaluate(trigger, Tone(369, 600, 0), Tone(369, 300, 0.4)).Should().Be(0);
+		}
+
+		[Test]
+		public void The_Pieces_Of_One_Tone_Should_Still_Be_Merged_For_Its_Duration()
+		{
+			var trigger = new Trigger { Count = 1, Frequency1 = 369, Time1 = 600 };
+
+			Evaluate(trigger, Tone(369, 300, 0), Tone(369, 400, 0.45)).Should().Be(1, "300 ms + 400 ms of one tone meet its 600 ms");
 		}
 	}
 }

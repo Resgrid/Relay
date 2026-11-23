@@ -73,15 +73,6 @@ namespace Resgrid.Relay.Engine.Smtp
 			if (!TryParse(address, out var dispatchCode, out var departmentId))
 				return;
 
-			// Reject entries that are duplicates on (departmentId, Type, Code)
-			// rather than just Code alone — same code with a different type
-			// or from a different department is a distinct dispatch target.
-			if (result.DispatchCodes.Any(x =>
-				String.Equals(x.Code, dispatchCode.Code, StringComparison.OrdinalIgnoreCase) &&
-				x.Type == dispatchCode.Type &&
-				String.Equals(departmentId, result.DepartmentId, StringComparison.OrdinalIgnoreCase)))
-				return;
-
 			// In hosted mode, an entry for a different department than the one already resolved for this message is not
 			// part of this dispatch. It is recorded rather than dropped, so the caller can dispatch it on its own.
 			if (!String.IsNullOrWhiteSpace(departmentId) &&
@@ -92,9 +83,19 @@ namespace Resgrid.Relay.Engine.Smtp
 				return;
 			}
 
-			result.DispatchCodes.Add(dispatchCode);
-			result.SetAddress(dispatchCode, address);
+			// Everything kept is in this dispatch's one department (a bare address takes it, DefaultDepartmentId included), so
+			// the same type and code is the same target whether it came bare or hosted, or on another configured domain. The same
+			// code with a different type is a distinct target.
+			var duplicate = result.DispatchCodes.Any(x =>
+				String.Equals(x.Code, dispatchCode.Code, StringComparison.OrdinalIgnoreCase) &&
+				x.Type == dispatchCode.Type);
+			if (!duplicate)
+			{
+				result.DispatchCodes.Add(dispatchCode);
+				result.SetAddress(dispatchCode, address);
+			}
 
+			// A hosted duplicate of a bare address still names the department the bare one needs.
 			if (!String.IsNullOrWhiteSpace(departmentId) && String.IsNullOrWhiteSpace(result.DepartmentId))
 				result.DepartmentId = departmentId;
 		}

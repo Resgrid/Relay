@@ -39,6 +39,11 @@ namespace Resgrid.Audio.Voice.Recording
 		private Timer _scanTimer;
 		private int _started;
 
+		// One admission gate per store, one for the fallback folder and one for the metadata log (see CallGate).
+		private readonly Dictionary<ITransmissionStore, CallGate> _storeGates;
+		private readonly CallGate _fallbackGate = new CallGate();
+		private readonly CallGate _logGate = new CallGate();
+
 		// Set when DisposeAsync begins; frames arriving after it are dropped. Together with the in-flight count it lets
 		// DisposeAsync wait out a frame callback already running: a rollover takes its segment out of _segments before it
 		// registers the finalization, and shutdown must not take its snapshot in between and miss that transmission.
@@ -63,6 +68,12 @@ namespace Resgrid.Audio.Voice.Recording
 			_session = session ?? throw new ArgumentNullException(nameof(session));
 			_settings = settings ?? new RecorderSettings();
 			_stores = stores ?? Array.Empty<ITransmissionStore>();
+			_storeGates = new Dictionary<ITransmissionStore, CallGate>(ReferenceEqualityComparer.Instance);
+			foreach (var store in _stores)
+			{
+				if (store != null && !_storeGates.ContainsKey(store))
+					_storeGates.Add(store, new CallGate());
+			}
 			_log = log;
 			_logger = logger;
 			_fallbackDirectory = string.IsNullOrWhiteSpace(fallbackDirectory) ? null : fallbackDirectory;
@@ -212,7 +223,7 @@ namespace Resgrid.Audio.Voice.Recording
 				{
 					try
 					{
-						var location = await SaveBoundedAsync(store, objectName, wav, abandonOnShutdown: true).ConfigureAwait(false);
+						var location = await SaveBoundedAsync(store, _storeGates[store], objectName, wav, abandonOnShutdown: true).ConfigureAwait(false);
 						record.Locations.Add(location);
 						if (string.Equals(store.Kind, "local", StringComparison.OrdinalIgnoreCase))
 							haveLocalCopy = true;
@@ -239,7 +250,7 @@ namespace Resgrid.Audio.Voice.Recording
 					{
 						using var cts = new CancellationTokenSource(StoreTimeout);
 						var token = cts.Token;
-						await RunBounded(() => _log.AppendAsync(record, token), token).ConfigureAwait(false);
+						await RunBounded(_logGate, "metadata log", () => _log.AppendAsync(record, token), token).ConfigureAwait(false);
 					}
 					catch (Exception ex)
 					{
@@ -268,7 +279,7 @@ namespace Resgrid.Audio.Voice.Recording
 		// A store that never answers (an S3 endpoint black-holing requests) must not hold a finalization, and with it shutdown,
 		// forever: the call gets StoreTimeout and, when it is an upload, no more than ShutdownGrace once disposal starts. WaitAsync
 		// bounds it even if the store ignores the token.
-		private async Task<StoredLocation> SaveBoundedAsync(ITransmissionStore store, string objectName, byte[] wav, bool abandonOnShutdown)
+		private async Task<StoredLocation> SaveBoundedAsync(ITransmissionStore store, CallGate gate, string objectName, byte[] wav, bool abandonOnShutdown)
 		{
 			using var cts = abandonOnShutdown
 				? CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token)
@@ -277,7 +288,7 @@ namespace Resgrid.Audio.Voice.Recording
 			var token = cts.Token;   // read here: the call can still be starting on the pool after cts is disposed
 			try
 			{
-				var location = await RunBounded(() => store.SaveAsync(objectName, wav, token), token).ConfigureAwait(false);
+				var location = await RunBounded(gate, $"{store.Kind} store", () => store.SaveAsync(objectName, wav, token), token).ConfigureAwait(false);
 				if (location == null)
 					throw new InvalidOperationException($"The {store.Kind} store returned no location.");
 				return location;
@@ -293,11 +304,29 @@ namespace Resgrid.Audio.Voice.Recording
 		// WaitAsync can only bound a task it has been handed, and an async store or log can block before it returns one
 		// (LocalFileTransmissionStore creates its folder synchronously, which hangs on an unreachable network share). Starting
 		// the call on the thread pool puts that part inside the timeout too, and off the finalization (or disposing) thread.
-		private static Task<T> RunBounded<T>(Func<Task<T>> call, CancellationToken token) =>
-			Task.Run(call, token).WaitAsync(token);
+		// The timeout releases this transmission, not the call: one that outlives it is handed to the gate, which admits no
+		// further call to that target until it returns.
+		private static async Task<T> RunBounded<T>(CallGate gate, string target, Func<Task<T>> call, CancellationToken token)
+		{
+			gate.ThrowIfBlocked(target);
+			var running = Task.Run(call, token);
+			try
+			{
+				return await running.WaitAsync(token).ConfigureAwait(false);
+			}
+			catch (OperationCanceledException) when (!running.IsCompleted)
+			{
+				gate.Abandon(running);
+				throw;
+			}
+		}
 
-		private static Task RunBounded(Func<Task> call, CancellationToken token) =>
-			Task.Run(call, token).WaitAsync(token);
+		private static Task RunBounded(CallGate gate, string target, Func<Task> call, CancellationToken token) =>
+			RunBounded(gate, target, async () =>
+			{
+				await call().ConfigureAwait(false);
+				return true;
+			}, token);
 
 		private async Task<StoredLocation> SaveFallbackAsync(string objectName, byte[] wav, IReadOnlyList<string> failedStores)
 		{
@@ -310,7 +339,8 @@ namespace Resgrid.Audio.Voice.Recording
 
 			try
 			{
-				var saved = await SaveBoundedAsync(new LocalFileTransmissionStore(_fallbackDirectory), objectName, wav, abandonOnShutdown: false).ConfigureAwait(false);
+				var saved = await SaveBoundedAsync(new LocalFileTransmissionStore(_fallbackDirectory), _fallbackGate, objectName, wav, abandonOnShutdown: false)
+					.ConfigureAwait(false);
 				_logger?.Warning("Transmission {Object} could not be stored to {Stores}; saved to the fallback folder instead at {Path} (upload it manually)",
 					objectName, failed, saved.Location);
 				return new StoredLocation { Kind = "fallback", Location = saved.Location, SizeBytes = saved.SizeBytes };
@@ -382,6 +412,35 @@ namespace Resgrid.Audio.Voice.Recording
 				{
 					_logger?.Warning(ex, "A recording finalization failed during shutdown");
 				}
+			}
+		}
+
+		/// <summary>
+		/// Admission to one store (or the fallback folder, or the metadata log). A call blocked inside the store (a filesystem
+		/// outage blocks LocalFileTransmissionStore's synchronous folder creation) keeps its pool worker and the transmission's
+		/// WAV buffer after the timeout has released the recorder, and nothing can reclaim them. While such an abandoned call is
+		/// still running, every new call to that target is refused at once, so the transmission goes straight to the fallback
+		/// instead of tying up another worker and buffer the same way; the target is admitted again once the call returns.
+		/// </summary>
+		private sealed class CallGate
+		{
+			private int _abandoned;
+
+			public void ThrowIfBlocked(string target)
+			{
+				if (Volatile.Read(ref _abandoned) > 0)
+					throw new InvalidOperationException(
+						$"The {target} is still blocked in an earlier call that outlived its timeout; nothing more is sent to it until that call returns.");
+			}
+
+			public void Abandon(Task running)
+			{
+				Interlocked.Increment(ref _abandoned);
+				_ = running.ContinueWith(t =>
+				{
+					_ = t.Exception; // observed: nobody awaits an abandoned call
+					Interlocked.Decrement(ref _abandoned);
+				}, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 			}
 		}
 

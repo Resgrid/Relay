@@ -126,6 +126,50 @@ namespace Resgrid.Audio.Voice.Tests
 		}
 
 		[Test]
+		public async Task StoreStillBlockedInAnEarlierCall_GetsNoNewCalls_UntilThatCallReturns()
+		{
+			// The timeout releases a transmission, not the pool worker (and WAV buffer) a blocked store call holds. During an
+			// outage each later transmission used to start another such call; it goes straight to the fallback instead.
+			var log = new CapturingTransmissionLog();
+			using var store = new BlockingTransmissionStore { SucceedOnceReleased = true };
+			// Every 1 s frame fills a 1 s segment, so each frame is one transmission, finalized as it arrives.
+			var recorder = new TransmissionRecorder(new TestVoiceSession(), new RecorderSettings { ScanIntervalMs = 60_000, MaxSegmentSeconds = 1 },
+				new ITransmissionStore[] { store }, log, logger: null, FallbackDir)
+			{
+				StoreTimeout = TimeSpan.FromMilliseconds(200)
+			};
+			recorder.Start();
+			var participant = new VoiceParticipant("PA_1", "unit-1", "Engine 1", "standard");
+
+			void Transmit(int expectedRecords)
+			{
+				recorder.Record(new VoiceAudioFrame(participant, "TR_1", TestAudio.Tone(1000), DateTime.UtcNow));
+				SpinWait.SpinUntil(() => log.Records.Count >= expectedRecords, TimeSpan.FromSeconds(10)).Should().BeTrue();
+			}
+
+			try
+			{
+				Transmit(1);
+				Transmit(2);
+				store.Calls.Should().Be(1, "the store was still blocked in the first call, so the second never started one");
+				log.Records.Should().OnlyContain(r => r.Locations.Count == 1 && r.Locations[0].Kind == "fallback");
+
+				store.Release();
+				// The blocked call returns on its pool worker; give its completion a moment to reopen the store.
+				await Task.Delay(500);
+				Transmit(3);
+
+				store.Calls.Should().Be(2, "once the blocked call returned, the store is used again");
+				log.Records[2].Locations.Should().ContainSingle().Which.Kind.Should().Be("s3");
+			}
+			finally
+			{
+				store.Release();
+				await recorder.DisposeAsync();
+			}
+		}
+
+		[Test]
 		public async Task ShutdownDuringRollovers_FinishesEveryTransmissionBeforeItReturns_AndStartsNoneAfter()
 		{
 			var log = new CapturingTransmissionLog();

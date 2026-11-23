@@ -649,11 +649,16 @@ namespace Resgrid.Relay.Engine.Smtp
 						scope.SetTag("smtp.route_kind", message.RouteKind);
 						scope.SetExtra("smtp.stable_message_id", message.StableMessageId);
 						scope.SetExtra("smtp.message_id", message.ReferenceMessageId);
-						scope.SetExtra("smtp.dispatch_targets", message.DispatchTargets);
 						scope.SetExtra("smtp.raw_message_path", message.RawMessagePath);
 						scope.SetExtra("smtp.call_id", message.CallId);
+						scope.SetExtra("smtp.department_target_count", message.DepartmentDispatchCount);
+						scope.SetExtra("smtp.group_target_count", message.GroupDispatchCount);
+						scope.SetExtra("smtp.group_message_target_count", message.GroupMessageDispatchCount);
 						if (_sendDefaultPii)
 						{
+							// The dispatch codes are behind the gate too: a department's code is a secret (anyone who knows it can
+							// page the whole department), and so is the local part of every address above.
+							scope.SetExtra("smtp.dispatch_targets", message.DispatchTargets);
 							scope.SetExtra("smtp.subject", message.Subject);
 							scope.SetExtra("smtp.nature", message.Nature);
 							scope.SetExtra("smtp.from_addresses", message.FromAddresses);

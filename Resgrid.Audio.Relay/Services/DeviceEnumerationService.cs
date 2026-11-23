@@ -34,7 +34,14 @@ namespace Resgrid.Audio.Relay.Services
 		/// <summary>The CM108-compatible family ("C-Media CM108/CM119", "AIOC"), or null.</summary>
 		public string InterfaceName => Cm108Compatibility.FindInterface(VendorId, ProductId)?.Name;
 
-		public string Display => Cm108Compatibility.Describe(new UsbHidDevice { VendorId = VendorId, ProductId = ProductId, Name = Name });
+		/// <summary>
+		/// How many listed interfaces have these same ids (itself included). Picking one of several identical interfaces (two
+		/// AIOCs) cannot say which one: PTT refuses to key any of them, and the list says so.
+		/// </summary>
+		public int SameIdsCount { get; set; } = 1;
+
+		public string Display => Cm108Compatibility.Describe(new UsbHidDevice { VendorId = VendorId, ProductId = ProductId, Name = Name }) +
+			Cm108Compatibility.SameIdsNote(SameIdsCount);
 	}
 
 	/// <summary>
@@ -136,12 +143,14 @@ namespace Resgrid.Audio.Relay.Services
 		{
 			try
 			{
-				return Cm108Compatibility.SelectCompatible(_hidDevices())
+				var compatible = Cm108Compatibility.SelectCompatible(_hidDevices());
+				return compatible
 					.Select(d => new HidDeviceInfo
 					{
 						VendorId = d.VendorId,
 						ProductId = d.ProductId,
-						Name = d.Name
+						Name = d.Name,
+						SameIdsCount = Cm108Compatibility.CountWithSameIds(compatible, d)
 					})
 					.ToList();
 			}

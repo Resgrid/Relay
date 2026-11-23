@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Net.Http;
 using FluentAssertions;
 using NUnit.Framework;
 using Resgrid.Audio.Core;
@@ -8,6 +9,8 @@ using Resgrid.Audio.Core.Model;
 using Resgrid.Providers.ApiClient.V4;
 using Resgrid.Providers.ApiClient.V4.Models;
 using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 
 namespace Resgrid.Audio.Tests
 {
@@ -19,6 +22,7 @@ namespace Resgrid.Audio.Tests
 		private AudioPipelineFakes.CallsApi _calls;
 		private AudioPipelineFakes.LookupsApi _lookups;
 		private Watcher _watcher;
+		private CapturingSink _log;
 
 		[SetUp]
 		public void SetUp()
@@ -29,6 +33,7 @@ namespace Resgrid.Audio.Tests
 			_calls = new AudioPipelineFakes.CallsApi();
 			_lookups = new AudioPipelineFakes.LookupsApi();
 			_watcher = new Watcher { Name = "Station 5", Active = true, Code = "station5", Type = (int)DispatchCodeType.Group };
+			_log = new CapturingSink();
 		}
 
 		[TearDown]
@@ -41,7 +46,7 @@ namespace Resgrid.Audio.Tests
 		private void Dispatch()
 		{
 			var config = new Config { AudioLength = 60, Watchers = new List<Watcher> { _watcher } };
-			var comService = new ComService(new LoggerConfiguration().CreateLogger(), _processor, new AudioPipelineFakes.ApiClient(), null, _calls, _lookups, "42");
+			var comService = new ComService(new LoggerConfiguration().WriteTo.Sink(_log).CreateLogger(), _processor, new AudioPipelineFakes.ApiClient(), null, _calls, _lookups, "42");
 			comService.Init(config);
 			_processor.Init(config);
 
@@ -70,6 +75,57 @@ namespace Resgrid.Audio.Tests
 
 			_lookups.Attempts.Should().Be(1);
 			_calls.SavedCalls.Should().ContainSingle().Which.DispatchList.Should().Be("G:station5");
+		}
+
+		[Test]
+		public void A_Group_Lookup_That_Fails_With_A_404_Once_Should_Be_Retried()
+		{
+			// A routing or gateway hiccup is not "unknown code": once it passes, the group's id is what gets paged.
+			_lookups.FailuresBeforeAnswer = 1;
+			_lookups.Failure = () => new HttpRequestException("not found", null, HttpStatusCode.NotFound);
+			_lookups.GroupLookup = _ => new GroupLookupResult { GroupId = "17" };
+
+			Dispatch();
+
+			_lookups.Attempts.Should().Be(2);
+			_calls.SavedCalls.Should().ContainSingle().Which.DispatchList.Should().Be("G:17");
+		}
+
+		[Test]
+		public void A_Group_Lookup_That_Keeps_Failing_Should_Fail_The_Dispatch_Instead_Of_Sending_The_Raw_Code()
+		{
+			// station5 is group 17's dispatch code: G:station5 would page nobody, so a lookup outage must not be read as unknown.
+			_lookups.FailuresBeforeAnswer = Int32.MaxValue;
+			_lookups.Failure = () => new HttpRequestException("forbidden", null, HttpStatusCode.Forbidden);
+			_lookups.GroupLookup = _ => new GroupLookupResult { GroupId = "17" };
+
+			Dispatch();
+
+			_lookups.Attempts.Should().Be(3, "a 403 is retried like the other recoverable failures");
+			_calls.SavedCalls.Should().BeEmpty();
+			_log.Events.Should().Contain(x => x.Level == LogEventLevel.Error &&
+				x.Exception != null && x.Exception.Message.Contains("station5") && x.Exception.InnerException is HttpRequestException,
+				"the lost page is reported with the code whose lookup failed");
+		}
+
+		private sealed class CapturingSink : ILogEventSink
+		{
+			private readonly List<LogEvent> _events = new List<LogEvent>();
+
+			public List<LogEvent> Events
+			{
+				get
+				{
+					lock (_events)
+						return new List<LogEvent>(_events);
+				}
+			}
+
+			public void Emit(LogEvent logEvent)
+			{
+				lock (_events)
+					_events.Add(logEvent);
+			}
 		}
 	}
 }

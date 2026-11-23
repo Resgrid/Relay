@@ -121,8 +121,9 @@ namespace Resgrid.Audio.Relay.Services
 		}
 
 		/// <summary>
-		/// How many times <see cref="StopAllAsync"/> has been requested. A restart compares it across its stop so a
-		/// "stop all" issued meanwhile is not reversed by the restart's start.
+		/// How many times <see cref="StopAllAsync"/> has been requested. A start captures it when requested and passes it to
+		/// <see cref="Start"/>, so a "stop all" issued meanwhile (while a restart tore down, or a start waited its turn) is not
+		/// reversed by that start.
 		/// </summary>
 		public long StopAllRequests => Interlocked.Read(ref _stopAllRequests);
 
@@ -163,16 +164,49 @@ namespace Resgrid.Audio.Relay.Services
 		}
 
 		/// <summary>
+		/// True while a stopped service for <paramref name="mode"/> is still being torn down: it has left the tracked set
+		/// (<see cref="Find"/> no longer returns it) but may still hold its audio devices, PTT line or port.
+		/// </summary>
+		public bool IsModeStopping(string mode)
+		{
+			lock (_gate)
+			{
+				return _stopping.Keys.Any(s => string.Equals(s.Mode, mode, StringComparison.OrdinalIgnoreCase));
+			}
+		}
+
+		/// <summary>
+		/// Completes when every stopped service for <paramref name="mode"/> has finished its teardown (already complete when
+		/// none is pending), so a replacement does not start on hardware the old instance is still releasing.
+		/// </summary>
+		public Task WhenModeStopped(string mode)
+		{
+			lock (_gate)
+			{
+				var pending = _stopping
+					.Where(p => string.Equals(p.Key.Mode, mode, StringComparison.OrdinalIgnoreCase))
+					.Select(p => p.Value)
+					.ToArray();
+				return pending.Length == 0 ? Task.CompletedTask : Task.WhenAll(pending);
+			}
+		}
+
+		/// <summary>
 		/// Creates the configured mode via <see cref="RelayServiceFactory"/>, adds it to the
 		/// running set and launches its background run loop. Returns the created service.
-		/// Throws <see cref="InvalidOperationException"/> once <see cref="BeginShutdown"/> was called.
+		/// Throws <see cref="InvalidOperationException"/> once <see cref="BeginShutdown"/> was called, and when
+		/// <paramref name="stopAllRequests"/> (the <see cref="StopAllRequests"/> value captured when the start was requested)
+		/// no longer matches: a stop-all came after the request. That check runs under the lock <see cref="StopAllAsync"/>
+		/// counts and snapshots under, so the start is either in that stop-all's snapshot or refused.
 		/// </summary>
-		public IRelayService Start(RelayHostOptions options)
+		public IRelayService Start(RelayHostOptions options, long? stopAllRequests = null)
 		{
 			if (options == null)
 				throw new ArgumentNullException(nameof(options));
 			if (IsShuttingDown)
 				throw ShuttingDownException();
+			if (stopAllRequests.HasValue && StopAllRequests != stopAllRequests.Value)
+				throw StopAllRequestedException();
 
 			var service = _factory(options, _logger);
 			lock (_gate)
@@ -205,20 +239,23 @@ namespace Resgrid.Audio.Relay.Services
 			});
 			entry.RunTask = run.Unwrap();
 
-			bool accepted;
+			InvalidOperationException refused = null;
 			lock (_gate)
 			{
-				accepted = !_shuttingDown;
-				if (accepted)
+				if (_shuttingDown)
+					refused = ShuttingDownException();
+				else if (stopAllRequests.HasValue && Interlocked.Read(ref _stopAllRequests) != stopAllRequests.Value)
+					refused = StopAllRequestedException();
+				else
 					_entries[service] = entry;
 			}
 
-			if (!accepted)
+			if (refused != null)
 			{
 				service.StateChanged -= OnServiceStateChanged;
 				cts.Dispose();
 				_ = DisposeUnstartedAsync(service);
-				throw ShuttingDownException();
+				throw refused;
 			}
 
 			run.Start(TaskScheduler.Default);
@@ -230,6 +267,9 @@ namespace Resgrid.Audio.Relay.Services
 
 		private static InvalidOperationException ShuttingDownException() =>
 			new InvalidOperationException("Resgrid Relay is shutting down; no relay mode can be started.");
+
+		private static InvalidOperationException StopAllRequestedException() =>
+			new InvalidOperationException("Stop all was requested after this start.");
 
 		private async Task DisposeUnstartedAsync(IRelayService service)
 		{
@@ -305,12 +345,13 @@ namespace Resgrid.Audio.Relay.Services
 		/// </summary>
 		public Task StopAllAsync()
 		{
-			Interlocked.Increment(ref _stopAllRequests);
-
 			IRelayService[] running;
 			Task[] pending;
 			lock (_gate)
 			{
+				// Counted under the lock Start publishes under: a start requested before this call (it passes the count it
+				// captured) is either in the snapshot below or refused, never left running after the stop-all completes.
+				Interlocked.Increment(ref _stopAllRequests);
 				running = _entries.Keys.ToArray();
 				pending = _stopping.Values.ToArray();
 			}

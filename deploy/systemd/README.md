@@ -85,6 +85,30 @@ If you published **self-contained**, change `ExecStart` in the unit to run the b
 directly: `ExecStart=/opt/resgrid-relay/Resgrid.Audio.Relay.Console run`. Otherwise confirm
 the `dotnet` path (`which dotnet`); the unit assumes `/usr/bin/dotnet`.
 
+### From a GitHub release archive (no repository checkout)
+
+The `ResgridRelay-Console-<version>-linux-x64.tar.gz` / `-linux-arm64.tar.gz` archives hold the
+self-contained binary (LiveKit library included) at the top level and these files under
+`systemd/`, not `deploy/systemd/`. Extract it, then install from the extracted folder:
+
+```bash
+mkdir relay && tar -xzf ResgridRelay-Console-<version>-linux-x64.tar.gz -C relay && cd relay
+
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin resgrid
+sudo mkdir -p /opt/resgrid-relay /etc/resgrid-relay
+sudo cp -r ./* /opt/resgrid-relay/ && sudo rm -rf /opt/resgrid-relay/systemd
+sudo chown -R resgrid:resgrid /opt/resgrid-relay
+
+sudo cp systemd/relay.env.example /etc/resgrid-relay/relay.env
+sudo chmod 600 /etc/resgrid-relay/relay.env
+sudo "$EDITOR" /etc/resgrid-relay/relay.env
+
+sudo cp systemd/resgrid-relay.service /etc/systemd/system/
+```
+
+The archive's binary is self-contained, so set `ExecStart` as above
+(`/opt/resgrid-relay/Resgrid.Audio.Relay.Console run`), then continue with step 4.
+
 ## 4. Enable + run
 
 ```bash
