@@ -55,6 +55,13 @@ namespace Resgrid.Audio.Relay.Console
 				Cli.Error.WriteLine($"Configuration error: {ex.Message}");
 				return ConfigurationErrorExitCode;
 			}
+			catch (RelaySettingsUnavailableException ex)
+			{
+				// Locked or unreadable settings file: an ordinary failure (exit 1), so systemd's Restart=on-failure tries again
+				// once the lock clears. A file that stays unreadable keeps failing with this message in the journal.
+				Cli.Error.WriteLine($"Settings unavailable: {ex.Message}");
+				return 1;
+			}
 		}
 
 		private static async Task<int> RunCommandAsync(string command, string[] args)

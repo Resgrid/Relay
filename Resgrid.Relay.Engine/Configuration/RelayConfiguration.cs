@@ -73,13 +73,18 @@ namespace Resgrid.Relay.Engine.Configuration
 			{
 				configuration = builder.Build();
 			}
-			catch (Exception ex) when (ex is InvalidDataException || ex is FormatException || ex is JsonException ||
-				ex is IOException || ex is UnauthorizedAccessException)
+			catch (Exception ex) when (ex is InvalidDataException || ex is FormatException || ex is JsonException)
 			{
 				// A hand-edit that breaks relay.user.json (or appsettings.json) surfaces as a configuration error with the file
-				// named, not an unhandled exception. So does a file that cannot be opened (another program holds it locked, or
-				// its permissions shut this account out): the JSON provider opens it outside its own exception wrapping.
+				// named, not an unhandled exception.
 				throw new RelayConfigurationException($"A settings file could not be read: {ex.Message}");
+			}
+			catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+			{
+				// A file that cannot be opened (another program holds it locked, or its permissions shut this account out; the
+				// JSON provider opens it outside its own exception wrapping) is not wrong settings: it may open on the next try,
+				// so it must not end as a configuration error, which stops a service manager from restarting the relay.
+				throw new RelaySettingsUnavailableException($"A settings file could not be opened: {ex.Message}", ex);
 			}
 
 			var options = Bind(configuration);

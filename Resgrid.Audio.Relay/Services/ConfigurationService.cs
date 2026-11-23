@@ -57,7 +57,7 @@ namespace Resgrid.Audio.Relay.Services
 			{
 				return RelayConfiguration.LoadFromDisk();
 			}
-			catch (RelayConfigurationException)
+			catch (Exception ex) when (ex is RelayConfigurationException || ex is RelaySettingsUnavailableException)
 			{
 				return new RelayHostOptions();
 			}
@@ -81,8 +81,9 @@ namespace Resgrid.Audio.Relay.Services
 				LoadError = null;
 				return options;
 			}
-			catch (RelayConfigurationException ex)
+			catch (Exception ex) when (ex is RelayConfigurationException || ex is RelaySettingsUnavailableException)
 			{
+				// Wrong settings, or a file that could not be opened (locked by another program): start on defaults and say why.
 				LoadError = ex.Message;
 				// Log the exception itself (type + stack), not just its message, alongside the user settings path.
 				Serilog.Log.Error(ex, "Relay settings could not be read; using defaults (user settings: {ConfigPath})", RelayConfiguration.UserConfigPath);

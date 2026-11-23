@@ -268,6 +268,32 @@ namespace Resgrid.Audio.Voice.Tests
 			options.Radio.Profile.Should().Be("digatalkplus");
 			options.Radio.TxLeadMs.Should().Be(650);
 		}
+
+		[Test]
+		[Platform("Win")] // FileShare.None only keeps other openers out on Windows
+		public void A_Settings_File_That_Cannot_Be_Opened_Is_Not_Reported_As_A_Configuration_Error()
+		{
+			// A locked file may open on the next attempt: it must not become a configuration error (console exit 78, which
+			// systemd's RestartPreventExitStatus never restarts). The desktop app still falls back to defaults for it.
+			var path = System.IO.Path.Combine(System.AppContext.BaseDirectory, "appsettings.json");
+			if (System.IO.File.Exists(path))
+				Assert.Ignore("The test output already has an appsettings.json; not replacing it.");
+
+			System.IO.File.WriteAllText(path, "{}");
+			try
+			{
+				using (new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.ReadWrite, System.IO.FileShare.None))
+				{
+					System.Action load = () => RelayConfiguration.LoadFromDisk();
+
+					load.Should().Throw<RelaySettingsUnavailableException>().WithMessage("*could not be opened*");
+				}
+			}
+			finally
+			{
+				System.IO.File.Delete(path);
+			}
+		}
 	}
 
 	[TestFixture]

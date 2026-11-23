@@ -695,7 +695,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 				error = null;
 				return options;
 			}
-			catch (RelayConfigurationException ex)
+			catch (Exception ex) when (ex is RelayConfigurationException || ex is RelaySettingsUnavailableException)
 			{
 				error = ex.Message;
 				return new RelayHostOptions();
