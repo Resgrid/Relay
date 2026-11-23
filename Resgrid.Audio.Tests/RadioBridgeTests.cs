@@ -844,8 +844,14 @@ namespace Resgrid.Audio.Tests
 			ptt.KeyDelayMs = 900;
 			ptt.FailWrites = false;
 
-			(await WaitUntil(() => ptt.KeyCalls > 0 && !bridge.Transmitting && !ptt.IsKeyed, 4000))
+			// The successful retry must have started while the turn was still live (otherwise the pre-retry expiry check
+			// drops the key-up without ever calling Key, and this test would not exercise the post-write recheck).
+			(await WaitUntil(() => ptt.SuccessfulKeyCalls > 0, 2000)).Should().BeTrue("the retry keys the line within the talker hang");
+			bridge.Transmitting.Should().BeTrue("the turn was live when the retry started");
+
+			(await WaitUntil(() => !bridge.Transmitting && !ptt.IsKeyed, 4000))
 				.Should().BeTrue("the line is released once the slow key write returns for an ended turn");
+			ptt.SuccessfulKeyCalls.Should().Be(1);
 			device.Writes.Should().BeEmpty("the expired turn's held audio is never played");
 			bridge.Fault.Should().BeNull();
 		}

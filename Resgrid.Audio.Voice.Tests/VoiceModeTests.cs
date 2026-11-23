@@ -73,6 +73,57 @@ namespace Resgrid.Audio.Voice.Tests
 		}
 
 		[Test]
+		public void OutageTracker_CountsAnOutageDuringTheCallsRequest_BeforeTheGiveUpCheck()
+		{
+			// First attempt at t=0, 60 s limit. A poll starts at t=40; the channel reconnects during t=45..75 and the API answers
+			// at t=80 with the channel usable again. Reconciled after the request, the call's age is 50 s, not 80.
+			var state = new DispatchToneOutState();
+			state.FirstAttemptUtc["c1"] = Now;
+			var tracker = new RetryClockOutageTracker(state, TimeSpan.Zero);
+
+			tracker.Reconcile(TimeSpan.FromSeconds(30));
+			tracker.Resume(Now.AddSeconds(80), TimeSpan.FromSeconds(30)); // not paused: nothing to resume
+
+			(Now.AddSeconds(80) - state.FirstAttemptUtc["c1"]).Should().Be(TimeSpan.FromSeconds(50));
+		}
+
+		[Test]
+		public void OutageTracker_CountsUnusableTimeInsideAPauseOnlyOnce()
+		{
+			var state = new DispatchToneOutState();
+			state.FirstAttemptUtc["c1"] = Now;
+			var tracker = new RetryClockOutageTracker(state, TimeSpan.Zero);
+
+			// Paused at t=10 (channel down); 20 s of monitor-reported outage pass while paused; resumed at t=40.
+			tracker.Pause(Now.AddSeconds(10), TimeSpan.Zero);
+			tracker.Reconcile(TimeSpan.FromSeconds(5)); // a poll while paused: covered by the pause
+			tracker.Resume(Now.AddSeconds(40), TimeSpan.FromSeconds(20));
+			state.FirstAttemptUtc["c1"].Should().Be(Now.AddSeconds(30), "the resume covers the whole 30 s pause");
+
+			// The next poll sees no new outage: the 20 s inside the pause must not be shifted again.
+			tracker.Reconcile(TimeSpan.FromSeconds(20));
+			state.FirstAttemptUtc["c1"].Should().Be(Now.AddSeconds(30));
+
+			// A later outage between polls is still counted.
+			tracker.Reconcile(TimeSpan.FromSeconds(27));
+			state.FirstAttemptUtc["c1"].Should().Be(Now.AddSeconds(37));
+		}
+
+		[Test]
+		public void OutageTracker_CountsFromItsStartingWatermark()
+		{
+			// The run's tracker starts from the monitor's value when it attached, so an outage during setup and the backlog
+			// snapshot is counted at the first reconcile, and nothing from before the monitor existed is.
+			var state = new DispatchToneOutState();
+			state.FirstAttemptUtc["c1"] = Now;
+			var tracker = new RetryClockOutageTracker(state, TimeSpan.FromSeconds(4));
+
+			tracker.Reconcile(TimeSpan.FromSeconds(10));
+
+			state.FirstAttemptUtc["c1"].Should().Be(Now.AddSeconds(6));
+		}
+
+		[Test]
 		public void PrimeBacklog_UsesTheSnapshotTime_SoACallScheduledDuringTheRequestIsStillTonedOut()
 		{
 			// Scheduled for 30 s after the snapshot was requested; the answer arrives a minute later. Judged at the request time

@@ -68,6 +68,27 @@ namespace Resgrid.Audio.Tests
 			_calls.SavedCalls.Should().ContainSingle().Which.DispatchList.Should().Be("G:17");
 		}
 
+		[TestCase(HttpStatusCode.BadRequest)]
+		[TestCase(HttpStatusCode.Unauthorized)]
+		[TestCase(null)]
+		public void A_Permanent_Authentication_Failure_During_The_Group_Lookup_Should_Not_Be_Retried(HttpStatusCode? status)
+		{
+			// invalid_grant / invalid_client, or no refresh token at all: only an operator fixes those, and three attempts held the
+			// audio dispatch for six seconds before it reported the same failure.
+			_lookups.FailuresBeforeAnswer = Int32.MaxValue;
+			_lookups.Failure = () => status == null
+				? new ResgridAuthenticationException("No Resgrid refresh token is available.")
+				: new ResgridAuthenticationException("The Resgrid token request failed", status);
+			_lookups.GroupLookup = _ => new GroupLookupResult { GroupId = "17" };
+
+			Dispatch();
+
+			_lookups.Attempts.Should().Be(1);
+			_calls.SavedCalls.Should().BeEmpty();
+			_log.Events.Should().Contain(x => x.Level == LogEventLevel.Error &&
+				x.Exception != null && x.Exception.InnerException is ResgridAuthenticationException);
+		}
+
 		[Test]
 		public void A_Group_Code_Resgrid_Does_Not_Know_Should_Be_Sent_As_Is_Without_Retrying()
 		{

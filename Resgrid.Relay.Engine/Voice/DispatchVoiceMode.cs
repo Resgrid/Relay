@@ -63,6 +63,14 @@ namespace Resgrid.Relay.Engine.Voice
 			using var monitor = new VoiceSessionMonitor(session, status);
 			await monitor.EnsureConnectedAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
 
+			// The give-up clock must not count time the channel could not carry a tone-out. A poll that finds it unusable pauses
+			// the clock; an outage that comes and goes between two checks is read off the monitor instead. unusableSeen is the
+			// tracker counts the monitor's outage time from the moment it attached (setup and the backlog snapshot included).
+			var outages = new RetryClockOutageTracker(state, monitor.UnusableTime);
+			void ReconcileOutage() => outages.Reconcile(monitor.UnusableTime);
+			void PauseRetryClock() => outages.Pause(DateTime.UtcNow, monitor.UnusableTime);
+			void ResumeRetryClock() => outages.Resume(DateTime.UtcNow, monitor.UnusableTime);
+
 			IAudioPublisher publisher = null;
 			// Enter the try BEFORE the remaining setup (publisher, TTS client, backlog prime) so the finally below always
 			// disposes the publisher — a transient API failure during startup must not leak it.
@@ -98,9 +106,6 @@ namespace Resgrid.Relay.Engine.Voice
 				PrimeBacklog(await callsApi.GetActiveCallsAsync(deptId, cancellationToken).ConfigureAwait(false), state, snapshotUtc);
 			}
 
-			// LiveKit outage time already accounted for in the give-up clock (see the top of the poll loop).
-			var unusableSeen = monitor.UnusableTime;
-
 			var pollSeconds = Math.Max(5, options.DispatchVoice.PollSeconds);
 			logger.Information($"Dispatch tone-out on '{channel.Name}', polling new calls every {pollSeconds}s. Press Ctrl+C to stop.");
 
@@ -110,17 +115,12 @@ namespace Resgrid.Relay.Engine.Voice
 				if (monitor.IsDisconnected)
 					throw new InvalidOperationException($"LiveKit dispatch session disconnected ({monitor.Disconnected.Result}); reconnecting");
 
-				// An outage that began and ended between two polls is never seen as !IsUsable below, yet the waiting calls could
-				// not go out during it either: move their give-up clock past it. Skipped while the clock is paused (that pause
-				// already covers the time), so no outage is counted twice.
-				var unusableNow = monitor.UnusableTime;
-				if (!state.IsRetryClockPaused)
-					state.ShiftRetryClock(unusableNow - unusableSeen);
-				unusableSeen = unusableNow;
-
 				try
 				{
 					var calls = await callsApi.GetActiveCallsAsync(deptId, cancellationToken).ConfigureAwait(false);
+					// An outage that came and went while waiting (between polls, or during this request) is never seen as
+					// !IsUsable below, yet the waiting calls could not go out during it either.
+					ReconcileOutage();
 					foreach (var call in calls)
 					{
 						if (call == null || string.IsNullOrWhiteSpace(call.CallId) || seen.Contains(call.CallId))
@@ -136,11 +136,13 @@ namespace Resgrid.Relay.Engine.Voice
 						// the tone-out failing, and an outage longer than GiveUpAfterMinutes used to drop calls never attempted.
 						if (!monitor.IsUsable)
 						{
-							state.PauseRetryClock(DateTime.UtcNow);
+							PauseRetryClock();
 							logger.Warning("LiveKit channel '{Channel}' is not connected; holding the tone-out for call {CallId} until it is", channel.Name, call.CallId);
 							break;
 						}
-						state.ResumeRetryClock(DateTime.UtcNow);
+						ResumeRetryClock();
+						// Earlier calls in this poll took time (synthesis, playout): account for any outage during it before judging age.
+						ReconcileOutage();
 
 						// A call whose tone-out keeps failing is retried every poll, but only for so long: past that the announcement
 						// is stale, and a call the TTS service will never accept would otherwise be retried, and logged, for as long
@@ -189,7 +191,7 @@ namespace Resgrid.Relay.Engine.Voice
 						// Synthesis can take seconds: check the channel again right before publishing.
 						if (!monitor.IsUsable)
 						{
-							state.PauseRetryClock(DateTime.UtcNow);
+							PauseRetryClock();
 							logger.Warning("LiveKit channel '{Channel}' dropped while preparing the tone-out for call {CallId}; holding it until the channel is back", channel.Name, call.CallId);
 							break;
 						}
@@ -253,7 +255,7 @@ namespace Resgrid.Relay.Engine.Voice
 			{
 				// Until the next run finds the channel usable (a rejoin after a disconnect, or a restart), the waiting calls are
 				// not being attempted.
-				state.PauseRetryClock(DateTime.UtcNow);
+				PauseRetryClock();
 				if (publisher != null)
 					await publisher.DisposeAsync().ConfigureAwait(false);
 			}
@@ -305,6 +307,51 @@ namespace Resgrid.Relay.Engine.Voice
 				logger.Warning(ex, "Could not load the department's call priorities; announcing the default priority names");
 				return new Dictionary<int, string>();
 			}
+		}
+	}
+
+	/// <summary>
+	/// Keeps a run's LiveKit outage time out of the tone-out give-up clock exactly once. A poll that finds the channel unusable
+	/// pauses the clock (<see cref="Pause"/>), and the resume moves the waiting calls past the whole pause; an outage that comes
+	/// and goes between two checks is read off the session monitor's cumulative unusable time (<see cref="Reconcile"/>). The
+	/// watermark is the unusable time already accounted for, so no interval is counted by both.
+	/// </summary>
+	internal sealed class RetryClockOutageTracker
+	{
+		private readonly DispatchToneOutState _state;
+		private TimeSpan _accounted;
+
+		public RetryClockOutageTracker(DispatchToneOutState state, TimeSpan unusableAtStart)
+		{
+			_state = state ?? throw new ArgumentNullException(nameof(state));
+			_accounted = unusableAtStart;
+		}
+
+		/// <summary>Moves the waiting calls past the unusable time since the last reconcile, unless a pause already covers it.</summary>
+		public void Reconcile(TimeSpan unusableNow)
+		{
+			if (!_state.IsRetryClockPaused)
+				_state.ShiftRetryClock(unusableNow - _accounted);
+			_accounted = unusableNow;
+		}
+
+		/// <summary>Accounts for the outage time up to now, then stops the clock; the pause covers what follows.</summary>
+		public void Pause(DateTime nowUtc, TimeSpan unusableNow)
+		{
+			Reconcile(unusableNow);
+			_state.PauseRetryClock(nowUtc);
+		}
+
+		/// <summary>
+		/// Restarts a paused clock. The resume moves the calls past the whole pause, outage time inside it included, so the
+		/// watermark jumps to now: only unusable time after the resume is counted again.
+		/// </summary>
+		public void Resume(DateTime nowUtc, TimeSpan unusableNow)
+		{
+			if (!_state.IsRetryClockPaused)
+				return;
+			_state.ResumeRetryClock(nowUtc);
+			_accounted = unusableNow;
 		}
 	}
 

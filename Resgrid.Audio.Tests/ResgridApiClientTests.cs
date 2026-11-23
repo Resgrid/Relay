@@ -354,6 +354,8 @@ namespace Resgrid.Audio.Tests
 				(await late.IsHealthyAsync()).Should().BeTrue();
 
 				handler.RedeemedRefreshTokens.Should().Equal(new[] { "chain-0" }, "the late client adopts the early one's rotation");
+				handler.ApiRequests.Select(x => x.Headers.Authorization?.Parameter)
+					.Should().Equal(new[] { "opaque-1", "opaque-1" }, "the late client sends the access token of the rotation it adopted");
 				warnings.Should().BeEmpty();
 				early.CredentialScope.Should().Be(earlyScope, "a running client's lookup namespace never changes");
 
@@ -503,6 +505,170 @@ namespace Resgrid.Audio.Tests
 			}
 		}
 
+		[TestCase(false)]
+		[TestCase(true)]
+		public async Task Clients_On_One_Chain_Should_Order_Its_Rotations_By_Count_And_Not_By_Access_Token_Expiry(bool cacheReplaced)
+		{
+			// Both clients start from an access token that expires in 45 seconds (inside the one-minute margin: both must redeem),
+			// and the first is issued one that lasts 30. The second took that rotation for an older one, as its token expires
+			// sooner, and redeemed the refresh token the first had already spent. Through the file, or through memory once the
+			// file holds another credential.
+			var directory = Path.Combine(Path.GetTempPath(), $"resgrid-api-tests-{Guid.NewGuid():N}");
+			Directory.CreateDirectory(directory);
+			try
+			{
+				var cachePath = Path.Combine(directory, "resgrid-token.json");
+				var options = CreateOptions(ResgridAuthGrantType.RefreshToken, serviceAccount: false, clientId: "RelayApp", refreshToken: null);
+				options.TokenCachePath = cachePath;
+				var handler = new StubHandler(_ => Json(HttpStatusCode.OK, "{}")) { ExpiresIn = 30 };
+
+				var expiresAt = DateTimeOffset.UtcNow.AddSeconds(45).ToString("o");
+				File.WriteAllText(cachePath, $"{{\"AccessToken\":\"start\",\"RefreshToken\":\"chain-a\",\"ExpiresAtUtc\":\"{expiresAt}\"}}");
+				using var smtp = new ResgridV4ApiClient(options, handler);
+				using var audio = new ResgridV4ApiClient(options, handler);
+				if (cacheReplaced)
+					File.WriteAllText(cachePath, "{\"RefreshToken\":\"chain-b\",\"CredentialId\":\"another-credential\"}");
+
+				(await smtp.IsHealthyAsync()).Should().BeTrue();
+				(await audio.IsHealthyAsync()).Should().BeTrue();
+
+				handler.RedeemedRefreshTokens.Should().Equal(new[] { "chain-a", "rotated-1" }, "no spent token is redeemed again");
+			}
+			finally
+			{
+				Directory.Delete(directory, recursive: true);
+			}
+		}
+
+		// ─── Connection tests of edited credentials (RequireTokenRedemption) ───
+
+		[Test]
+		public async Task A_Client_That_Must_Redeem_Should_Send_Its_Secret_Instead_Of_The_Access_Token_In_Its_Token_Cache()
+		{
+			// The Configuration screen tests edited credentials on one pending cache: the access token an earlier test (with another
+			// client secret) left there passed the next test without its secret ever reaching Resgrid.
+			var directory = Path.Combine(Path.GetTempPath(), $"resgrid-api-tests-{Guid.NewGuid():N}");
+			Directory.CreateDirectory(directory);
+			try
+			{
+				var cachePath = Path.Combine(directory, "resgrid-token.pending.json");
+				var handler = new StubHandler(_ => Json(HttpStatusCode.OK, "{}"));
+				var options = CreateOptions(ResgridAuthGrantType.RefreshToken, serviceAccount: false, clientId: "RelayApp", refreshToken: "typed-token");
+				options.TokenCachePath = cachePath;
+				options.RequireTokenRedemption = true;
+
+				options.ClientSecret = "first-secret";
+				using (var earlier = new ResgridV4ApiClient(options, handler))
+					(await earlier.IsHealthyAsync()).Should().BeTrue();
+
+				options.ClientSecret = "edited-secret";
+				using (var test = new ResgridV4ApiClient(options, handler))
+					(await test.IsHealthyAsync()).Should().BeTrue();
+
+				handler.RedeemingSecrets.Should().Equal("first-secret", "edited-secret");
+				handler.RedeemedRefreshTokens.Should().Equal(new[] { "typed-token", "rotated-1" }, "the chain in the cache is continued, not restarted");
+				handler.ApiRequests.Select(x => x.Headers.Authorization?.Parameter).Should().Equal("opaque-1", "opaque-2");
+				File.ReadAllText(cachePath).Should().Contain("rotated-2", "the rotation is still written, for a Save to carry over");
+
+				// A running relay mode still signs in on the live access token.
+				options.RequireTokenRedemption = false;
+				using (var relay = new ResgridV4ApiClient(options, handler))
+					(await relay.IsHealthyAsync()).Should().BeTrue();
+
+				handler.TokenRequests.Should().Be(2);
+				handler.ApiRequests.Last().Headers.Authorization?.Parameter.Should().Be("opaque-2");
+			}
+			finally
+			{
+				Directory.Delete(directory, recursive: true);
+			}
+		}
+
+		[TestCase(5)]
+		[TestCase(0)]
+		public async Task A_Client_That_Must_Redeem_Should_Not_Take_The_Rotation_An_Earlier_Client_Left_In_Memory(long copiedRotation)
+		{
+			// A test of an edited secret on a cache-only relay chain signs in on a copy of the relay's cache without its access token.
+			// An earlier test's rotation of the chain stayed in the API client's memory for that copy; taking it passed the next test
+			// on the earlier test's access token without the edited secret being sent. (0: a copy of a cache written before
+			// rotations were counted.)
+			var directory = Path.Combine(Path.GetTempPath(), $"resgrid-api-tests-{Guid.NewGuid():N}");
+			Directory.CreateDirectory(directory);
+			try
+			{
+				var cachePath = Path.Combine(directory, "resgrid-token.pending.json");
+				var handler = new StubHandler(_ => Json(HttpStatusCode.OK, "{}"));
+				var options = CreateOptions(ResgridAuthGrantType.RefreshToken, serviceAccount: false, clientId: "RelayApp", refreshToken: null);
+				options.TokenCachePath = cachePath;
+				options.RequireTokenRedemption = true;
+
+				File.WriteAllText(cachePath, "{\"RefreshToken\":\"relay-1\",\"CredentialId\":\"relay-chain\"}");
+				options.ClientSecret = "first-secret";
+				using (var earlier = new ResgridV4ApiClient(options, handler))
+					(await earlier.IsHealthyAsync()).Should().BeTrue();
+
+				// The relay rotated on since; the next test's copy of its cache:
+				File.WriteAllText(cachePath, $"{{\"RefreshToken\":\"relay-3\",\"CredentialId\":\"relay-chain\",\"Rotation\":{copiedRotation}}}");
+				options.ClientSecret = "edited-secret";
+				using (var test = new ResgridV4ApiClient(options, handler))
+					(await test.IsHealthyAsync()).Should().BeTrue();
+
+				handler.RedeemingSecrets.Should().Equal("first-secret", "edited-secret");
+				handler.RedeemedRefreshTokens.Should().Equal("relay-1", "relay-3");
+				handler.ApiRequests.Select(x => x.Headers.Authorization?.Parameter).Should().Equal("opaque-1", "opaque-2");
+			}
+			finally
+			{
+				Directory.Delete(directory, recursive: true);
+			}
+		}
+
+		[Test]
+		public void WithIsolatedTokenCache_Should_Keep_RequireTokenRedemption()
+		{
+			var options = CreateOptions(ResgridAuthGrantType.RefreshToken, serviceAccount: false);
+			options.TokenCachePath = "data/resgrid-token.json";
+			options.RequireTokenRedemption = true;
+
+			options.WithIsolatedTokenCache("smtp").RequireTokenRedemption.Should().BeTrue();
+		}
+
+		// ─── Which authentication failures are worth retrying ───
+
+		[TestCase(HttpStatusCode.ServiceUnavailable, true)]
+		[TestCase(HttpStatusCode.InternalServerError, true)]
+		[TestCase(HttpStatusCode.TooManyRequests, true)]
+		[TestCase(HttpStatusCode.RequestTimeout, true)]
+		[TestCase(HttpStatusCode.BadRequest, false)]
+		[TestCase(HttpStatusCode.Unauthorized, false)]
+		[TestCase(HttpStatusCode.Forbidden, false)]
+		[TestCase(null, false)]
+		public void An_Authentication_Failure_Should_Be_Transient_Only_When_The_Endpoint_Failed_For_The_Moment(HttpStatusCode? status, bool expected)
+		{
+			new ResgridAuthenticationException("The Resgrid token request failed", status).IsTransient.Should().Be(expected);
+		}
+
+		[Test]
+		public async Task A_Missing_Refresh_Token_Should_Not_Be_A_Transient_Authentication_Failure()
+		{
+			var directory = Path.Combine(Path.GetTempPath(), $"resgrid-api-tests-{Guid.NewGuid():N}");
+			Directory.CreateDirectory(directory);
+			try
+			{
+				var options = CreateOptions(ResgridAuthGrantType.RefreshToken, serviceAccount: false, refreshToken: null);
+				options.TokenCachePath = Path.Combine(directory, "resgrid-token.json");
+				using var client = new ResgridV4ApiClient(options, new StubHandler(_ => Json(HttpStatusCode.OK, "{}")));
+
+				Func<Task> healthCheck = () => client.IsHealthyAsync();
+
+				(await healthCheck.Should().ThrowAsync<ResgridAuthenticationException>()).Which.IsTransient.Should().BeFalse();
+			}
+			finally
+			{
+				Directory.Delete(directory, recursive: true);
+			}
+		}
+
 		// ─── 404 from a lookup endpoint (finding 9) ───
 
 		[Test]
@@ -563,6 +729,10 @@ namespace Resgrid.Audio.Tests
 			public int TokenRequests => Volatile.Read(ref _tokenRequests);
 			public List<HttpRequestMessage> ApiRequests { get; } = new List<HttpRequestMessage>();
 			public List<string> RedeemedRefreshTokens { get; } = new List<string>();
+
+			/// <summary>The client secret each token request was sent with.</summary>
+			public List<string> RedeemingSecrets { get; } = new List<string>();
+
 			public int ExpiresIn { get; set; } = 3600;
 
 			/// <summary>Runs with each redeemed refresh token while the token endpoint is answering.</summary>
@@ -576,12 +746,14 @@ namespace Resgrid.Audio.Tests
 
 				if (path.EndsWith("/connect/token", StringComparison.Ordinal))
 				{
-					var form = await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-					var refreshToken = form.Split('&')
+					var form = (await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false)).Split('&')
 						.Select(x => x.Split('=', 2))
-						.Where(x => x.Length == 2 && x[0] == "refresh_token")
-						.Select(x => Uri.UnescapeDataString(x[1]))
-						.FirstOrDefault();
+						.Where(x => x.Length == 2)
+						.ToDictionary(x => x[0], x => Uri.UnescapeDataString(x[1].Replace('+', ' ')));
+					lock (RedeemingSecrets)
+						RedeemingSecrets.Add(form.GetValueOrDefault("client_secret"));
+
+					var refreshToken = form.GetValueOrDefault("refresh_token");
 					if (refreshToken != null)
 					{
 						lock (RedeemedRefreshTokens)

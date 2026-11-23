@@ -50,5 +50,13 @@ namespace Resgrid.Providers.ApiClient.V4.Models
 		/// namespace; a running client never adopts a reloaded cache carrying another id.
 		/// </summary>
 		public string CredentialId { get; set; }
+
+		/// <summary>
+		/// How many times the clients that wrote this cache have redeemed the chain's refresh token: of two states of one chain,
+		/// the one with the higher count continues the other (whose refresh token is spent). Access-token expiry cannot order
+		/// them, since lifetimes differ between redemptions; it only says whether an access token can still be sent. 0 in a
+		/// cache written before the count existed.
+		/// </summary>
+		public long Rotation { get; set; }
 	}
 }

@@ -963,7 +963,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 				ConnectionTestStatus += handBackNote;
 				IsTestingConnection = false;
 				if (_disposed)
-					DiscardPendingSignIn(); // the page closed mid-test; nobody can save this sign-in now
+					DiscardPendingSignIn(); // the page closed mid-test; nobody can save this sign-in now (a relay chain still to hand back is kept)
 			}
 		}
 
@@ -972,8 +972,9 @@ namespace Resgrid.Audio.Relay.ViewModels
 		private string _pendingTokenIdentity;
 		private string _pendingTokenCachePath;
 
-		// While a test of an edited client secret runs on a copy of the relay's chain (TokenCacheFork): the relay's token cache
-		// and the refresh token copied from it (null when it had none), or null.
+		// While a test of an edited client secret runs on a copy of the relay's chain (TokenCacheFork), and after it until the
+		// rotated chain is handed back: the relay's token cache and the refresh token copied from it (null when it had none), or
+		// null. Still set after the test means the hand-back failed and the pending cache holds the relay's only live token.
 		private string _forkedRelayCachePath;
 		private string _forkedRefreshToken;
 
@@ -991,6 +992,8 @@ namespace Resgrid.Audio.Relay.ViewModels
 		/// <item>RefreshToken with an edited identity: a separate pending cache, carried into the relay's cache when that identity
 		/// is saved (<see cref="CarryForwardTestedSignIn"/>). Returns true.</item>
 		/// </list>
+		/// On the pending cache the test must redeem (<see cref="ResgridApiClientOptions.RequireTokenRedemption"/>): an access token
+		/// an earlier test left there, or in the API client's memory, was issued for another client secret.
 		/// </summary>
 		private bool UseTestTokenCache(ResgridApiClientOptions api)
 		{
@@ -998,6 +1001,15 @@ namespace Resgrid.Audio.Relay.ViewModels
 			{
 				api.TokenCachePath = null;
 				return false;
+			}
+
+			// A failed hand-back left the relay's only live refresh token in the pending cache: it goes back before this test writes
+			// there, or redeems the relay's spent one.
+			if (_forkedRelayCachePath != null)
+			{
+				var stillPending = ReturnTestedRelayChain();
+				if (_forkedRelayCachePath != null)
+					throw new IOException(stillPending.Trim());
 			}
 
 			var relay = _configuration.Current?.Resgrid;
@@ -1017,6 +1029,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 			}
 			_pendingTokenIdentity = SignInIdentity(api);
 			api.TokenCachePath = _pendingTokenCachePath;
+			api.RequireTokenRedemption = true;
 			return !relayChain;
 		}
 
@@ -1030,22 +1043,21 @@ namespace Resgrid.Audio.Relay.ViewModels
 			if (relayCache == null)
 				return "";
 
-			_forkedRelayCachePath = null;
 			try
 			{
 				TokenCacheFork.HandBack(_pendingTokenCachePath, relayCache, _forkedRefreshToken);
-				_pendingTokenIdentity = null;
-				return "";
 			}
 			catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
 			{
-				// Left as the pending sign-in of the relay's own identity: a Save carries it over (CarryForwardTestedSignIn).
+				// Kept, with what a retry needs, as the pending sign-in of the relay's own identity: a Save carries it over
+				// (CarryForwardTestedSignIn), and the next test or the page closing hands it back first (never deletes it).
 				return $" The rotated refresh token could not be handed back to the relay's token cache ({ex.Message}); Save to retry.";
 			}
-			finally
-			{
-				_forkedRefreshToken = null;
-			}
+
+			_forkedRelayCachePath = null;
+			_forkedRefreshToken = null;
+			_pendingTokenIdentity = null;
+			return "";
 		}
 
 		/// <summary>The refresh-token chain a sign-in uses: base URL, client id and the configured refresh token.</summary>
@@ -1078,6 +1090,8 @@ namespace Resgrid.Audio.Relay.ViewModels
 					Directory.CreateDirectory(directory);
 				File.Move(_pendingTokenCachePath, target, overwrite: true);
 				_pendingTokenIdentity = null;
+				_forkedRelayCachePath = null; // a relay chain whose hand-back failed has now reached the relay
+				_forkedRefreshToken = null;
 				return "";
 			}
 			catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
@@ -1088,6 +1102,15 @@ namespace Resgrid.Audio.Relay.ViewModels
 
 		private void DiscardPendingSignIn()
 		{
+			// The relay's chain from a test whose hand-back failed is not an unused sign-in: the relay's own token is spent, so this
+			// file is the only live one. Try the hand-back again; until it succeeds the file stays.
+			if (_forkedRelayCachePath != null)
+			{
+				ReturnTestedRelayChain();
+				if (_forkedRelayCachePath != null)
+					return;
+			}
+
 			_pendingTokenIdentity = null;
 			if (string.IsNullOrWhiteSpace(_pendingTokenCachePath))
 				return;
@@ -1166,6 +1189,10 @@ namespace Resgrid.Audio.Relay.ViewModels
 				if (IsTestingTransmit)
 					return; // another click started the test while this one waited
 			}
+
+			// The page may have closed while the tune gave the radio back: nothing would cancel a test started now.
+			if (_disposed)
+				return;
 
 			RelayHostOptions options;
 			try
@@ -1383,7 +1410,8 @@ namespace Resgrid.Audio.Relay.ViewModels
 			try { _transmitCts?.Cancel(); } catch { /* disposed */ }
 #endif
 			// A connection test still running hands back or discards its own sign-in when it ends: deleting a copy of the relay's
-			// chain under it would have it redeem the configured, already spent refresh token.
+			// chain under it would have it redeem the configured, already spent refresh token. (A relay chain whose hand-back
+			// failed is retried here, and kept if it fails again.)
 			if (!IsTestingConnection)
 				DiscardPendingSignIn();
 		}

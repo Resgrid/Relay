@@ -113,6 +113,7 @@ namespace Resgrid.Audio.Tests
 	{
 		private volatile bool _keyed;
 		private int _keyCalls;
+		private int _successfulKeyCalls;
 		private int _unkeyCalls;
 
 		public bool IsKeyed => _keyed;
@@ -126,6 +127,9 @@ namespace Resgrid.Audio.Tests
 		public int UnkeyDelayMs { get; set; }
 
 		public int KeyCalls => Volatile.Read(ref _keyCalls);
+
+		/// <summary>Key() calls that asserted the line (FailWrites was off), counted when the write starts.</summary>
+		public int SuccessfulKeyCalls => Volatile.Read(ref _successfulKeyCalls);
 		public int UnkeyCalls => Volatile.Read(ref _unkeyCalls);
 
 		public bool Key()
@@ -133,6 +137,7 @@ namespace Resgrid.Audio.Tests
 			Interlocked.Increment(ref _keyCalls);
 			if (FailWrites)
 				return false;
+			Interlocked.Increment(ref _successfulKeyCalls);
 			_keyed = true;
 			if (KeyDelayMs > 0)
 				Thread.Sleep(KeyDelayMs);

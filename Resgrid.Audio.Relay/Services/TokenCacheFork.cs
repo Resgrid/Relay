@@ -52,7 +52,9 @@ namespace Resgrid.Audio.Relay.Services
 		/// After a sign-in on a <see cref="Fork"/> that rotated the refresh token it was given (<paramref name="forkedRefreshToken"/>,
 		/// now spent), moves the fork into <paramref name="relayCachePath"/> and returns true. Returns false, removing the fork,
 		/// when there is nothing to hand back: the sign-in redeemed nothing (the edited secret was refused) or got no new token,
-		/// or the relay's cache no longer holds the forked token (the relay redeemed it itself, and keeps its own chain). Throws
+		/// or the relay's cache no longer holds the forked token (the relay redeemed it itself, and keeps its own chain). A null
+		/// <paramref name="forkedRefreshToken"/> (<see cref="Fork"/> found no usable relay cache, so the sign-in redeemed the
+		/// configured token) matches a relay cache that still has none, which then gets the rotated chain. Throws
 		/// <see cref="IOException"/> or <see cref="UnauthorizedAccessException"/>, leaving the fork in place, when it cannot be moved.
 		/// </summary>
 		public static bool HandBack(string forkPath, string relayCachePath, string forkedRefreshToken)

@@ -56,6 +56,9 @@ namespace Resgrid.Providers.ApiClient.V4
 		// When this client last obtained an access token from the token endpoint (MinValue: never, or loaded from the cache).
 		private DateTimeOffset _accessTokenIssuedAtUtc = DateTimeOffset.MinValue;
 
+		// Until the first redemption of a client that must redeem (RequireTokenRedemption): it uses no state another client left.
+		private bool _redemptionRequired;
+
 		public ResgridV4ApiClient(ResgridApiClientOptions options)
 			: this(options, null)
 		{
@@ -83,6 +86,15 @@ namespace Resgrid.Providers.ApiClient.V4
 				AuthLock = _sharedTokenCache.Lock;
 			}
 			_tokenState = LoadTokenState(options);
+
+			// An access token in the cache was issued to whichever credentials signed in before (another client secret, perhaps):
+			// a client that must prove its own redeems the cached refresh token instead.
+			_redemptionRequired = options.RequireTokenRedemption && options.GrantType != ResgridAuthGrantType.SystemApiKey;
+			if (_redemptionRequired)
+			{
+				_tokenState.AccessToken = null;
+				_tokenState.ExpiresAtUtc = DateTimeOffset.MinValue;
+			}
 
 			// A cache from before the id existed (or a new one) gets it now; it is written with the next rotated token.
 			if (UsesCachedCredentialIdentity(options) && String.IsNullOrWhiteSpace(_tokenState.CredentialId))
@@ -313,8 +325,9 @@ namespace Resgrid.Providers.ApiClient.V4
 
 				// Another client on the same cache (a second relay mode, or the previous run of this one) may have rotated the
 				// refresh token since this client loaded it, in which case the one held here is already spent. Pick up the newer
-				// state first; when it still carries a live access token there is nothing to redeem at all.
-				if (_options.GrantType == ResgridAuthGrantType.RefreshToken)
+				// state first; when it still carries a live access token there is nothing to redeem at all. (Not before a client
+				// that must redeem has: another client's state could hand it an access token issued to other credentials.)
+				if (_options.GrantType == ResgridAuthGrantType.RefreshToken && !_redemptionRequired)
 				{
 					// A file that now holds another credential (it was replaced, or another sign-in wrote it) is not adopted: that
 					// would send requests as that credential while CredentialScope, and every namespace built from it, still names
@@ -323,7 +336,7 @@ namespace Resgrid.Providers.ApiClient.V4
 					if (!String.IsNullOrWhiteSpace(latest.RefreshToken) &&
 						!String.Equals(latest.RefreshToken, _tokenState.RefreshToken, StringComparison.Ordinal) &&
 						IsSameCredentialChain(latest) &&
-						latest.ExpiresAtUtc >= _tokenState.ExpiresAtUtc)
+						ContinuesHeldChain(latest))
 					{
 						// The cache id names the credential chain, which the rotation continued, and is what the next reload is
 						// compared with. (A client that held no chain yet takes the file's under the file's id; its scope, built
@@ -344,7 +357,7 @@ namespace Resgrid.Providers.ApiClient.V4
 					var sharedKey = SharedChainKey();
 					if (sharedKey != null && _sharedTokenCache.Chains.TryGetValue(sharedKey, out var shared) &&
 						!String.Equals(shared.RefreshToken, _tokenState.RefreshToken, StringComparison.Ordinal) &&
-						shared.ExpiresAtUtc >= _tokenState.ExpiresAtUtc)
+						ContinuesHeldChain(shared))
 					{
 						_tokenState = CopyTokenState(shared);
 						_accessTokenIssuedAtUtc = DateTimeOffset.MinValue;
@@ -411,6 +424,9 @@ namespace Resgrid.Providers.ApiClient.V4
 					_tokenState.RefreshToken = String.IsNullOrWhiteSpace(tokenResponse.RefreshToken)
 						? ResolveRefreshToken()
 						: tokenResponse.RefreshToken;
+
+					// Orders this state after the one redeemed, for the other clients of the chain (see ContinuesHeldChain).
+					_tokenState.Rotation++;
 				}
 				else
 				{
@@ -420,6 +436,7 @@ namespace Resgrid.Providers.ApiClient.V4
 
 				_tokenState.ExpiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(tokenResponse.ExpiresIn > 0 ? tokenResponse.ExpiresIn : 300);
 				_accessTokenIssuedAtUtc = DateTimeOffset.UtcNow;
+				_redemptionRequired = false;
 
 				// Only readable when Resgrid issues plain JWTs; its access tokens are normally encrypted, so this is usually null and
 				// nothing may depend on it (Resgrid takes the author of a token caller's upload from the token itself).
@@ -459,6 +476,23 @@ namespace Resgrid.Providers.ApiClient.V4
 		}
 
 		/// <summary>
+		/// Whether <paramref name="other"/>, a state of this client's chain another client wrote, comes after the one held here (so
+		/// the refresh token held here is spent): by the rotation count each redemption raises, never by access-token expiry, since
+		/// a later redemption may well be issued a shorter-lived token. A state without a count (written before it existed) is
+		/// ordered by expiry, as before; a client holding no refresh token yet takes any.
+		/// </summary>
+		private bool ContinuesHeldChain(ResgridApiTokenState other)
+		{
+			if (String.IsNullOrWhiteSpace(_tokenState.RefreshToken))
+				return true;
+
+			if (other.Rotation == 0)
+				return other.ExpiresAtUtc >= _tokenState.ExpiresAtUtc;
+
+			return other.Rotation > _tokenState.Rotation;
+		}
+
+		/// <summary>
 		/// Under which key this client's chain is shared with the other clients of it on the same cache file in this process, or
 		/// null: without a cache file nothing is shared, and a configured refresh token names the credential, so the file is never
 		/// left alone and carries every rotation itself.
@@ -492,7 +526,8 @@ namespace Resgrid.Providers.ApiClient.V4
 			ExpiresAtUtc = state.ExpiresAtUtc,
 			UserId = state.UserId,
 			ConfiguredRefreshTokenHash = state.ConfiguredRefreshTokenHash,
-			CredentialId = state.CredentialId
+			CredentialId = state.CredentialId,
+			Rotation = state.Rotation
 		};
 
 		private void OnWarning(string message)

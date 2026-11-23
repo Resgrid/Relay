@@ -76,6 +76,16 @@ namespace Resgrid.Providers.ApiClient.V4
 		public bool ServiceAccount { get; set; }
 
 		/// <summary>
+		/// When true, the client's first sign-in always goes to the token endpoint with <see cref="ClientId"/> and
+		/// <see cref="ClientSecret"/>: it sends no access token it did not get itself (one in the token cache, or one another client
+		/// on the same cache in this process was issued), and adopts no rotation another client made, but redeems the refresh token
+		/// it loaded (the cache's, or the configured one). The rotated chain is still written to the cache. For a connection test
+		/// of edited credentials, which must not pass on a token issued to other ones. Default: false: a running relay reuses its
+		/// live access token and follows the rotations of the other clients on its cache.
+		/// </summary>
+		public bool RequireTokenRedemption { get; set; }
+
+		/// <summary>
 		/// True when Resgrid treats this caller as a system caller: the <see cref="ResgridAuthGrantType.SystemApiKey"/> grant, or a
 		/// client_credentials <see cref="ServiceAccount"/>. A method rather than a property so it never lands in saved settings.
 		/// </summary>
@@ -122,7 +132,8 @@ namespace Resgrid.Providers.ApiClient.V4
 				GrantType = GrantType,
 				SystemApiKey = SystemApiKey,
 				DepartmentId = DepartmentId,
-				ServiceAccount = ServiceAccount
+				ServiceAccount = ServiceAccount,
+				RequireTokenRedemption = RequireTokenRedemption
 			};
 		}
 

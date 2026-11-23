@@ -271,7 +271,12 @@ namespace Resgrid.Audio.Core
 				return status == 408 || status == 409 || status == 429 || status >= 500;
 			}
 
-			return exception is TaskCanceledException || exception is ResgridAuthenticationException;
+			// Only a sign-in the token endpoint failed for the moment (5xx, 429, 408) may pass on a retry: a missing refresh token or
+			// rejected credentials (400 invalid_grant, 401) need an operator, and retrying them held the audio dispatch for seconds.
+			if (exception is ResgridAuthenticationException authentication)
+				return authentication.IsTransient;
+
+			return exception is TaskCanceledException;
 		}
 
 		private (List<DispatchCode> DispatchCodes, List<string> WatcherNames) BuildDispatchContext(Watcher watcher)

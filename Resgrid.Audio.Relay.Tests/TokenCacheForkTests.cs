@@ -135,10 +135,95 @@ namespace Resgrid.Audio.Relay.Tests
 			ReadState(_relayCache).RefreshToken.Should().Be("rotated-1");
 		}
 
+		[Test]
+		public async Task Without_A_Relay_Cache_The_Relay_Continues_From_The_Rotation_Of_Its_Configured_Token()
+		{
+			// The relay has not signed in yet. The test redeems the configured refresh token, which the relay would otherwise
+			// present, spent, at its next start: the "no cache" the fork started from matches a relay cache that still has none.
+			TokenCacheFork.Fork(_relayCache, _fork).Should().BeNull();
+
+			var handler = new TokenEndpointStub();
+			var relayOptions = new ResgridApiClientOptions
+			{
+				BaseUrl = BaseUrl,
+				ClientId = "relay-app",
+				ClientSecret = "relay-secret",
+				RefreshToken = "configured",
+				TokenCachePath = _relayCache
+			};
+			var testOptions = new ResgridApiClientOptions
+			{
+				BaseUrl = BaseUrl,
+				ClientId = "relay-app",
+				ClientSecret = "edited-secret",
+				RefreshToken = "configured",
+				TokenCachePath = _fork,
+				RequireTokenRedemption = true
+			};
+			using (var test = new ResgridV4ApiClient(testOptions, handler))
+				(await test.IsHealthyAsync()).Should().BeTrue();
+
+			TokenCacheFork.HandBack(_fork, _relayCache, null).Should().BeTrue();
+			File.Exists(_fork).Should().BeFalse();
+
+			using (var relay = new ResgridV4ApiClient(relayOptions, handler))
+				(await relay.IsHealthyAsync()).Should().BeTrue();
+
+			handler.TokenRequests.Select(x => x["refresh_token"]).Should().Equal(new[] { "configured" }, "the relay does not redeem the spent configured token");
+			handler.Bearers.Should().Equal("opaque-1", "opaque-1");
+			ReadState(_relayCache).RefreshToken.Should().Be("rotated-1");
+		}
+
+		[Test]
+		public async Task A_Later_Test_Sends_Its_Own_Secret_After_An_Earlier_Test_Of_The_Relay_Chain()
+		{
+			// A relay without a configured refresh token (its cache names the chain). The first test's rotation stayed in the API
+			// client's memory for the fork's path; once the relay had rotated on, the next test took it and passed on the first
+			// test's access token without sending its own secret.
+			WriteRelayCache("relay-refresh-1");
+			var handler = new TokenEndpointStub();
+			var options = new ResgridApiClientOptions
+			{
+				BaseUrl = BaseUrl,
+				ClientId = "relay-app",
+				ClientSecret = "first-secret",
+				TokenCachePath = _fork,
+				RequireTokenRedemption = true
+			};
+
+			var forked = TokenCacheFork.Fork(_relayCache, _fork);
+			using (var first = new ResgridV4ApiClient(options, handler))
+				(await first.IsHealthyAsync()).Should().BeTrue();
+			TokenCacheFork.HandBack(_fork, _relayCache, forked).Should().BeTrue();
+
+			// The relay rotates on, twice.
+			var relayState = ReadState(_relayCache);
+			relayState.RefreshToken = "relay-refresh-3";
+			relayState.AccessToken = "relay-live-access-token";
+			relayState.Rotation += 2;
+			File.WriteAllText(_relayCache, JsonSerializer.Serialize(relayState));
+
+			options.ClientSecret = "second-secret";
+			forked = TokenCacheFork.Fork(_relayCache, _fork);
+			using (var second = new ResgridV4ApiClient(options, handler))
+				(await second.IsHealthyAsync()).Should().BeTrue();
+
+			handler.TokenRequests.Select(x => x["client_secret"]).Should().Equal("first-secret", "second-secret");
+			handler.TokenRequests.Select(x => x["refresh_token"]).Should().Equal("relay-refresh-1", "relay-refresh-3");
+			handler.Bearers.Should().Equal("opaque-1", "opaque-2");
+
+			TokenCacheFork.HandBack(_fork, _relayCache, forked).Should().BeTrue();
+			ReadState(_relayCache).RefreshToken.Should().Be("rotated-2");
+			ReadState(_relayCache).CredentialId.Should().Be("relay-chain");
+		}
+
 		/// <summary>Answers OIDC discovery, the token endpoint (rotating the refresh token) and every API call with 200.</summary>
 		private sealed class TokenEndpointStub : HttpMessageHandler
 		{
 			public List<Dictionary<string, string>> TokenRequests { get; } = new List<Dictionary<string, string>>();
+
+			/// <summary>The bearer token each API request was sent with.</summary>
+			public List<string> Bearers { get; } = new List<string>();
 
 			protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
 			{
@@ -156,6 +241,7 @@ namespace Resgrid.Audio.Relay.Tests
 					return Json($"{{\"access_token\":\"opaque-{TokenRequests.Count}\",\"refresh_token\":\"rotated-{TokenRequests.Count}\",\"expires_in\":3600,\"token_type\":\"Bearer\"}}");
 				}
 
+				Bearers.Add(request.Headers.Authorization?.Parameter);
 				return Json("{}");
 			}
 
