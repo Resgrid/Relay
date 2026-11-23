@@ -20,16 +20,35 @@ namespace Resgrid.Audio.Relay.Services
 	///
 	/// All <see cref="RunningServices"/> mutations are marshalled onto the WPF UI thread via
 	/// <see cref="Application.Current"/>'s dispatcher so the collection can be bound directly.
+	///
+	/// A stop leaves the tracked set at once but keeps its teardown (recording flush, LiveKit leave) in a pending set until
+	/// disposal completes, so <see cref="StopAllAsync"/> — and with it quit and session end — waits for stops already in
+	/// progress, not just for the services still running. <see cref="BeginShutdown"/> refuses every later start.
 	/// </summary>
 	public sealed class RelayController
 	{
 		private readonly ILogger _logger;
+		private readonly Func<RelayHostOptions, ILogger, IRelayService> _factory;
 		private readonly object _gate = new object();
 		private readonly Dictionary<IRelayService, RunningEntry> _entries = new Dictionary<IRelayService, RunningEntry>();
+		private readonly Dictionary<IRelayService, Task> _stopping = new Dictionary<IRelayService, Task>();
+		private readonly Dictionary<string, string> _lastErrors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		private bool _shuttingDown;
+		private long _stopAllRequests;
 
 		public RelayController(ILogger logger)
+			: this(logger, RelayServiceFactory.Create)
+		{
+		}
+
+		/// <summary>
+		/// Builds services with <paramref name="factory"/> — the delegate <c>AddRelayEngine</c> registers, which the container
+		/// picks, or a fake in tests.
+		/// </summary>
+		public RelayController(ILogger logger, Func<RelayHostOptions, ILogger, IRelayService> factory)
 		{
 			_logger = logger ?? Log.Logger;
+			_factory = factory ?? throw new ArgumentNullException(nameof(factory));
 		}
 
 		/// <summary>The currently running relay services. Bind UI lists against this.</summary>
@@ -77,6 +96,53 @@ namespace Resgrid.Audio.Relay.Services
 			}
 		}
 
+		/// <summary>True while a stopped service is still being torn down (recordings flushing, rooms closing).</summary>
+		public bool HasPendingStops
+		{
+			get
+			{
+				lock (_gate)
+				{
+					return _stopping.Count > 0;
+				}
+			}
+		}
+
+		/// <summary>True once <see cref="BeginShutdown"/> was called: the app is quitting and no mode may start.</summary>
+		public bool IsShuttingDown
+		{
+			get
+			{
+				lock (_gate)
+				{
+					return _shuttingDown;
+				}
+			}
+		}
+
+		/// <summary>
+		/// How many times <see cref="StopAllAsync"/> has been requested. A start captures it when requested and passes it to
+		/// <see cref="Start"/>, so a "stop all" issued meanwhile (while a restart tore down, or a start waited its turn) is not
+		/// reversed by that start.
+		/// </summary>
+		public long StopAllRequests => Interlocked.Read(ref _stopAllRequests);
+
+		/// <summary>
+		/// Marks the app as quitting: every later <see cref="Start"/> is refused, so a start racing the quit/session-end
+		/// stop pass can't publish a mode that is never stopped. Call before <see cref="StopAllAsync"/>. Idempotent.
+		/// </summary>
+		public void BeginShutdown()
+		{
+			lock (_gate)
+			{
+				if (_shuttingDown)
+					return;
+				_shuttingDown = true;
+			}
+
+			RaiseOverallStateChanged();
+		}
+
 		/// <summary>
 		/// True when a service for <paramref name="mode"/> is currently tracked. Reads the
 		/// authoritative <c>_entries</c> set under <c>_gate</c> — not the UI-marshalled
@@ -98,15 +164,55 @@ namespace Resgrid.Audio.Relay.Services
 		}
 
 		/// <summary>
+		/// True while a stopped service for <paramref name="mode"/> is still being torn down: it has left the tracked set
+		/// (<see cref="Find"/> no longer returns it) but may still hold its audio devices, PTT line or port.
+		/// </summary>
+		public bool IsModeStopping(string mode)
+		{
+			lock (_gate)
+			{
+				return _stopping.Keys.Any(s => string.Equals(s.Mode, mode, StringComparison.OrdinalIgnoreCase));
+			}
+		}
+
+		/// <summary>
+		/// Completes when every stopped service for <paramref name="mode"/> has finished its teardown (already complete when
+		/// none is pending), so a replacement does not start on hardware the old instance is still releasing.
+		/// </summary>
+		public Task WhenModeStopped(string mode)
+		{
+			lock (_gate)
+			{
+				var pending = _stopping
+					.Where(p => string.Equals(p.Key.Mode, mode, StringComparison.OrdinalIgnoreCase))
+					.Select(p => p.Value)
+					.ToArray();
+				return pending.Length == 0 ? Task.CompletedTask : Task.WhenAll(pending);
+			}
+		}
+
+		/// <summary>
 		/// Creates the configured mode via <see cref="RelayServiceFactory"/>, adds it to the
 		/// running set and launches its background run loop. Returns the created service.
+		/// Throws <see cref="InvalidOperationException"/> once <see cref="BeginShutdown"/> was called, and when
+		/// <paramref name="stopAllRequests"/> (the <see cref="StopAllRequests"/> value captured when the start was requested)
+		/// no longer matches: a stop-all came after the request. That check runs under the lock <see cref="StopAllAsync"/>
+		/// counts and snapshots under, so the start is either in that stop-all's snapshot or refused.
 		/// </summary>
-		public IRelayService Start(RelayHostOptions options)
+		public IRelayService Start(RelayHostOptions options, long? stopAllRequests = null)
 		{
 			if (options == null)
 				throw new ArgumentNullException(nameof(options));
+			if (IsShuttingDown)
+				throw ShuttingDownException();
+			if (stopAllRequests.HasValue && StopAllRequests != stopAllRequests.Value)
+				throw StopAllRequestedException();
 
-			var service = RelayServiceFactory.Create(options, _logger);
+			var service = _factory(options, _logger);
+			lock (_gate)
+			{
+				_lastErrors.Remove(service.Mode);
+			}
 			var cts = new CancellationTokenSource();
 			var entry = new RunningEntry(service, cts);
 
@@ -114,7 +220,9 @@ namespace Resgrid.Audio.Relay.Services
 
 			// Fully initialise the entry (including RunTask) BEFORE publishing it to _entries, so a
 			// concurrent StopAsync/StopAllAsync never observes a partially-built entry (RunTask == null).
-			entry.RunTask = Task.Run(async () =>
+			// The run is created cold and only launched once published: a shutdown that began meanwhile
+			// refuses it before anything runs, instead of leaving a mode the quit's stop pass never saw.
+			var run = new Task<Task>(async () =>
 			{
 				try
 				{
@@ -129,32 +237,77 @@ namespace Resgrid.Audio.Relay.Services
 					_logger?.Error(ex, "Relay mode '{Mode}' terminated unexpectedly.", service.Mode);
 				}
 			});
+			entry.RunTask = run.Unwrap();
 
+			InvalidOperationException refused = null;
 			lock (_gate)
 			{
-				_entries[service] = entry;
+				if (_shuttingDown)
+					refused = ShuttingDownException();
+				else if (stopAllRequests.HasValue && Interlocked.Read(ref _stopAllRequests) != stopAllRequests.Value)
+					refused = StopAllRequestedException();
+				else
+					_entries[service] = entry;
 			}
 
+			if (refused != null)
+			{
+				service.StateChanged -= OnServiceStateChanged;
+				cts.Dispose();
+				_ = DisposeUnstartedAsync(service);
+				throw refused;
+			}
+
+			run.Start(TaskScheduler.Default);
 			Post(() => RunningServices.Add(service));
 
 			RaiseOverallStateChanged();
 			return service;
 		}
 
-		/// <summary>Stops, disposes and removes a single running service.</summary>
-		public async Task StopAsync(IRelayService service)
+		private static InvalidOperationException ShuttingDownException() =>
+			new InvalidOperationException("Resgrid Relay is shutting down; no relay mode can be started.");
+
+		private static InvalidOperationException StopAllRequestedException() =>
+			new InvalidOperationException("Stop all was requested after this start.");
+
+		private async Task DisposeUnstartedAsync(IRelayService service)
+		{
+			try { await service.DisposeAsync().ConfigureAwait(false); }
+			catch (Exception ex) { _logger?.Warning(ex, "Error disposing relay mode '{Mode}'.", service.Mode); }
+		}
+
+		/// <summary>
+		/// Stops, disposes and removes a single running service. A service whose stop is already under way is not
+		/// stopped twice; the returned task then completes when that earlier teardown does.
+		/// </summary>
+		public Task StopAsync(IRelayService service)
 		{
 			if (service == null)
-				return;
+				return Task.CompletedTask;
 
 			RunningEntry entry;
+			TaskCompletionSource<bool> stopped;
 			lock (_gate)
 			{
+				if (_stopping.TryGetValue(service, out var pending))
+					return pending;
 				if (!_entries.TryGetValue(service, out entry))
-					return;
+					return Task.CompletedTask;
+
+				// Leave the tracked set at once (so the mode reads as stopped and can be started again) but stay in the pending
+				// set until disposal completes, so StopAllAsync still waits for this teardown.
 				_entries.Remove(service);
+				stopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+				_stopping[service] = stopped.Task;
 			}
 
+			return StopEntryAsync(entry, stopped);
+		}
+
+		private async Task StopEntryAsync(RunningEntry entry, TaskCompletionSource<bool> stopped)
+		{
+			var service = entry.Service;
 			service.StateChanged -= OnServiceStateChanged;
 
 			try
@@ -175,26 +328,67 @@ namespace Resgrid.Audio.Relay.Services
 				catch (Exception ex) { _logger?.Warning(ex, "Error disposing relay mode '{Mode}'.", service.Mode); }
 
 				entry.Cts.Dispose();
+				lock (_gate)
+				{
+					_stopping.Remove(service);
+				}
+				stopped.TrySetResult(true);
 				Post(() => RunningServices.Remove(service));
 				RaiseOverallStateChanged();
 			}
 		}
 
-		/// <summary>Stops every running service. Safe to call on shutdown.</summary>
-		public async Task StopAllAsync()
+		/// <summary>
+		/// Stops every running service and waits for stops already in progress. Safe to call on shutdown. The modes stop in
+		/// parallel: each teardown can take the recorder's whole upload grace, and one at a time multiplied that by the number
+		/// of modes.
+		/// </summary>
+		public Task StopAllAsync()
 		{
 			IRelayService[] running;
+			Task[] pending;
 			lock (_gate)
 			{
+				// Counted under the lock Start publishes under: a start requested before this call (it passes the count it
+				// captured) is either in the snapshot below or refused, never left running after the stop-all completes.
+				Interlocked.Increment(ref _stopAllRequests);
 				running = _entries.Keys.ToArray();
+				pending = _stopping.Values.ToArray();
 			}
 
-			foreach (var service in running)
-				await StopAsync(service).ConfigureAwait(false);
+			if (running.Length == 0 && pending.Length == 0)
+				return Task.CompletedTask;
+
+			return Task.WhenAll(running.Select(StopAsync).Concat(pending).ToArray());
 		}
+
+		/// <summary>The fault message from the last time <paramref name="mode"/> faulted, or null.</summary>
+		public string GetLastError(string mode)
+		{
+			if (string.IsNullOrEmpty(mode))
+				return null;
+
+			lock (_gate)
+			{
+				return _lastErrors.TryGetValue(mode, out var error) ? error : null;
+			}
+		}
+
+		/// <summary>Raised (on the UI thread) when a running service faults, with its mode and fault message.</summary>
+		public event EventHandler<RelayFaultEventArgs> ServiceFaulted;
 
 		private void OnServiceStateChanged(object sender, RelayStateChangedEventArgs e)
 		{
+			if (e.NewState == RelayServiceState.Faulted && sender is IRelayService service)
+			{
+				var message = string.IsNullOrWhiteSpace(e.Error) ? "The service faulted." : e.Error;
+				lock (_gate)
+				{
+					_lastErrors[service.Mode] = message;
+				}
+				Post(() => ServiceFaulted?.Invoke(this, new RelayFaultEventArgs(service.Mode, message)));
+			}
+
 			RaiseOverallStateChanged();
 		}
 
@@ -214,6 +408,29 @@ namespace Resgrid.Audio.Relay.Services
 				dispatcher.BeginInvoke(action);
 		}
 
+		/// <summary>The current tracked service for <paramref name="mode"/>, or null.</summary>
+		public IRelayService Find(string mode)
+		{
+			lock (_gate)
+			{
+				return _entries.Keys.FirstOrDefault(s => string.Equals(s.Mode, mode, StringComparison.OrdinalIgnoreCase));
+			}
+		}
+
+		/// <summary>When the tracked service for <paramref name="mode"/> was started (UTC), or null.</summary>
+		public DateTime? StartedAtUtc(string mode)
+		{
+			lock (_gate)
+			{
+				foreach (var pair in _entries)
+				{
+					if (string.Equals(pair.Key.Mode, mode, StringComparison.OrdinalIgnoreCase))
+						return pair.Value.StartedAtUtc;
+				}
+				return null;
+			}
+		}
+
 		private sealed class RunningEntry
 		{
 			public RunningEntry(IRelayService service, CancellationTokenSource cts)
@@ -225,6 +442,20 @@ namespace Resgrid.Audio.Relay.Services
 			public IRelayService Service { get; }
 			public CancellationTokenSource Cts { get; }
 			public Task RunTask { get; set; }
+			public DateTime StartedAtUtc { get; } = DateTime.UtcNow;
 		}
+	}
+
+	/// <summary>A relay mode fault, raised by <see cref="RelayController.ServiceFaulted"/>.</summary>
+	public sealed class RelayFaultEventArgs : EventArgs
+	{
+		public RelayFaultEventArgs(string mode, string error)
+		{
+			Mode = mode;
+			Error = error;
+		}
+
+		public string Mode { get; }
+		public string Error { get; }
 	}
 }

@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using HidSharp;
 using NAudio.Wave;
+using Resgrid.Audio.Core.Radio;
 using SerialPort = System.IO.Ports.SerialPort;
 
 namespace Resgrid.Audio.Relay.Services
@@ -24,23 +24,46 @@ namespace Resgrid.Audio.Relay.Services
 		public string PortName { get; set; }
 	}
 
-	/// <summary>Simple DTO describing a CM108-class USB HID device usable for PTT GPIO.</summary>
+	/// <summary>Simple DTO describing a CM108-compatible USB HID device usable for PTT GPIO.</summary>
 	public sealed class HidDeviceInfo
 	{
 		public int VendorId { get; set; }
 		public int ProductId { get; set; }
 		public string Name { get; set; }
 
-		public string Display => $"VID=0x{VendorId:X4} PID=0x{ProductId:X4} {Name}";
+		/// <summary>The CM108-compatible family ("C-Media CM108/CM119", "AIOC"), or null.</summary>
+		public string InterfaceName => Cm108Compatibility.FindInterface(VendorId, ProductId)?.Name;
+
+		/// <summary>
+		/// How many listed interfaces have these same ids (itself included). Picking one of several identical interfaces (two
+		/// AIOCs) cannot say which one: PTT refuses to key any of them, and the list says so.
+		/// </summary>
+		public int SameIdsCount { get; set; } = 1;
+
+		public string Display => Cm108Compatibility.Describe(new UsbHidDevice { VendorId = VendorId, ProductId = ProductId, Name = Name }) +
+			Cm108Compatibility.SameIdsNote(SameIdsCount);
 	}
 
 	/// <summary>
-	/// Enumerates audio devices, serial ports and CM108-class HID devices for the Devices
+	/// Enumerates audio devices, serial ports and CM108-compatible HID devices for the Devices
 	/// screen and the radio configuration UI. Mirrors the console's <c>devices</c> command.
 	/// All methods are defensive — a failing backend yields an empty list rather than throwing.
 	/// </summary>
 	public sealed class DeviceEnumerationService
 	{
+		private readonly Func<IEnumerable<UsbHidDevice>> _hidDevices;
+
+		public DeviceEnumerationService()
+			: this(Cm108Compatibility.EnumerateHidDevices)
+		{
+		}
+
+		/// <summary>Enumerates HID devices from <paramref name="hidDevices"/> (every USB HID device; tests pass a fixed list).</summary>
+		public DeviceEnumerationService(Func<IEnumerable<UsbHidDevice>> hidDevices)
+		{
+			_hidDevices = hidDevices ?? throw new ArgumentNullException(nameof(hidDevices));
+		}
+
 		/// <summary>NAudio input (radio receive) devices.</summary>
 		public IReadOnlyList<AudioDeviceInfo> GetInputDevices()
 		{
@@ -112,17 +135,22 @@ namespace Resgrid.Audio.Relay.Services
 			}
 		}
 
-		/// <summary>CM108-class USB HID devices (VID 0x0D8C) usable for PTT GPIO.</summary>
+		/// <summary>
+		/// CM108-compatible USB HID devices usable for PTT GPIO: C-Media fobs (VID 0x0D8C) and the AIOC (0x1209:0x7388), per
+		/// <see cref="Cm108Compatibility.KnownInterfaces"/>.
+		/// </summary>
 		public IReadOnlyList<HidDeviceInfo> GetCm108Devices()
 		{
 			try
 			{
-				return DeviceList.Local.GetHidDevices(0x0D8C, null)
+				var compatible = Cm108Compatibility.SelectCompatible(_hidDevices());
+				return compatible
 					.Select(d => new HidDeviceInfo
 					{
-						VendorId = d.VendorID,
-						ProductId = d.ProductID,
-						Name = SafeName(d)
+						VendorId = d.VendorId,
+						ProductId = d.ProductId,
+						Name = d.Name,
+						SameIdsCount = Cm108Compatibility.CountWithSameIds(compatible, d)
 					})
 					.ToList();
 			}
@@ -130,12 +158,6 @@ namespace Resgrid.Audio.Relay.Services
 			{
 				return Array.Empty<HidDeviceInfo>();
 			}
-		}
-
-		private static string SafeName(HidDevice device)
-		{
-			try { return device.GetFriendlyName(); }
-			catch { return "(unnamed)"; }
 		}
 	}
 }

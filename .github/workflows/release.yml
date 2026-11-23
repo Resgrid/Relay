@@ -1,0 +1,403 @@
+# Release pipeline for Resgrid Relay, modelled on the Omni app's release.yml. NEVER rename this file: its run number is
+# the patch number of every version (2.1.<run>), so a rename would restart the numbering.
+#
+#   push to master/main   → full release: every binary below, the Docker image (<version> + latest) and a GitHub Release
+#   push tag v*           → the same, versioned from the tag (v2.3.0 → 2.3.0)
+#   workflow_dispatch     → chosen targets; a pre-release (no Docker `latest`, not marked latest) unless "production"
+#
+# Stage 0  plan          version, tag, pre-release flag, which targets run
+# Stage 1  test          build the solution and run every test on Windows; nothing is published if this fails
+# Stage 2  desktop       Windows app (WPF, ResgridRelay.exe), self-contained single file: win-x64, win-arm64
+#          console       headless host, self-contained single file:
+#                          win-x64, win-arm64           every mode (smtp, audio, radio, record, dispatch)
+#                          linux-x64, linux-arm64       smtp, record, dispatch (systemd unit and env example included)
+#                          osx-x64, osx-arm64           smtp, record, dispatch
+#          docker        the console as a container image on Docker Hub (linux/amd64; add linux/arm64 from the dispatch form)
+# Stage 3  release       GitHub Release: every archive, SHA256SUMS, docker-image.txt, notes from the merged PR
+#
+# Every archive carries the LiveKit native library for its platform (build/fetch-livekit-ffi.ps1) so the voice modes run,
+# plus README and LICENSE. No .NET runtime is needed on the target machine.
+#
+# Secrets (on the BuildEnv environment): DOCKERHUB_USERNAME, DOCKERHUB_TOKEN. Approval: branch protection on master/main
+# (reviewed pull requests only) and, optionally, required reviewers on BuildEnv.
+name: Release
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.claude/**'
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Targets: all, or comma-separated (desktop,console,docker)'
+        type: string
+        default: all
+      production:
+        description: 'Publish as a full release (Docker latest, marked latest) instead of a pre-release'
+        type: boolean
+        default: false
+      docker_platforms:
+        description: 'Docker platforms'
+        type: choice
+        options: ['linux/amd64', 'linux/amd64,linux/arm64']
+        default: 'linux/amd64'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  VERSION_MAJOR_MINOR: '2.1'
+  DOCKER_IMAGE: 'resgridllc/resgridrelay'
+  DOTNET_NOLOGO: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+jobs:
+  # ── Stage 0 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      desktop: ${{ steps.plan.outputs.desktop }}
+      console: ${{ steps.plan.outputs.console }}
+      docker: ${{ steps.plan.outputs.docker }}
+      docker_platforms: ${{ steps.plan.outputs.docker_platforms }}
+    steps:
+      - name: Resolve version and targets
+        id: plan
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN: ${{ github.run_number }}
+          IN_TARGETS: ${{ inputs.targets }}
+          IN_PRODUCTION: ${{ inputs.production }}
+          IN_PLATFORMS: ${{ inputs.docker_platforms }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" = tag ]; then
+            version="${REF_NAME#v}"; tag="$REF_NAME"
+          else
+            version="${VERSION_MAJOR_MINOR}.${RUN}"; tag="$version"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$version' is not a semantic version (expected e.g. 2.1.7 or v2.2.0 as a tag)"; exit 1
+          fi
+
+          prerelease=false
+          if [ "$EVENT" = workflow_dispatch ] && [ "$IN_PRODUCTION" != true ]; then prerelease=true; fi
+          if [[ "$version" == *-* ]]; then prerelease=true; fi
+
+          targets="${IN_TARGETS:-all}"; targets="${targets// /}"
+          has() { [ "$targets" = all ] || [[ ",$targets," == *",$1,"* ]]; }
+          desktop=false; console=false; docker=false
+          has desktop && desktop=true
+          has console && console=true
+          has docker && docker=true
+
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+            echo "desktop=$desktop"
+            echo "console=$console"
+            echo "docker=$docker"
+            echo "docker_platforms=${IN_PLATFORMS:-linux/amd64}"
+          } >> "$GITHUB_OUTPUT"
+          echo "### Resgrid Relay $version" >> "$GITHUB_STEP_SUMMARY"
+          echo "tag \`$tag\` · pre-release: $prerelease · desktop: $desktop · console: $console · docker: $docker" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Stage 1 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+  test:
+    name: test
+    needs: plan
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - run: dotnet restore "Resgrid Audio.sln"
+      - run: dotnet build "Resgrid Audio.sln" --configuration Release --no-restore -p:Version=${{ needs.plan.outputs.version }}
+      - run: dotnet test "Resgrid Audio.sln" --configuration Release --no-build
+
+  # ── Stage 2 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+  desktop:
+    name: desktop (${{ matrix.rid }})
+    needs: [plan, test]
+    if: needs.plan.outputs.desktop == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, win-arm64]
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Publish ResgridRelay.exe
+        run: |
+          dotnet publish Resgrid.Audio.Relay/Resgrid.Audio.Relay.csproj `
+            --configuration Release --runtime ${{ matrix.rid }} --self-contained true `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
+            -p:DebugType=none -p:Version=$env:VERSION `
+            --output out/app
+
+      - name: Add the LiveKit native library
+        run: ./build/fetch-livekit-ffi.ps1 -Rid ${{ matrix.rid }} -Destination out/app
+
+      - name: Package
+        run: |
+          Copy-Item README.md, LICENSE.txt out/app/
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path out/app/* -DestinationPath "dist/ResgridRelay-Desktop-$env:VERSION-${{ matrix.rid }}.zip"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-desktop-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+
+  console:
+    name: console (${{ matrix.rid }})
+    needs: [plan, test]
+    if: needs.plan.outputs.console == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: win-x64,     framework: net10.0-windows, os: windows-latest, archive: zip }
+          - { rid: win-arm64,   framework: net10.0-windows, os: windows-latest, archive: zip }
+          - { rid: linux-x64,   framework: net10.0,         os: ubuntu-latest,  archive: tar.gz }
+          - { rid: linux-arm64, framework: net10.0,         os: ubuntu-latest,  archive: tar.gz }
+          # Built on macOS so the SDK ad-hoc signs the executable (Apple Silicon refuses unsigned binaries).
+          - { rid: osx-x64,     framework: net10.0,         os: macos-latest,   archive: tar.gz }
+          - { rid: osx-arm64,   framework: net10.0,         os: macos-latest,   archive: tar.gz }
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # EnableWindowsTargeting lets restore resolve the multi-targeted projects' Windows side on Linux/macOS; only the
+      # selected framework is built.
+      - name: Publish the console host
+        run: |
+          dotnet publish Resgrid.Audio.Relay.Console/Resgrid.Audio.Relay.Console.csproj `
+            --configuration Release --framework ${{ matrix.framework }} --runtime ${{ matrix.rid }} --self-contained true `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
+            -p:DebugType=none -p:EnableWindowsTargeting=true -p:Version=$env:VERSION `
+            --output out/console
+
+      - name: Add the LiveKit native library
+        run: ./build/fetch-livekit-ffi.ps1 -Rid ${{ matrix.rid }} -Destination out/console
+
+      - name: Package
+        run: |
+          Copy-Item README.md, LICENSE.txt out/console/
+          if ('${{ matrix.rid }}'.StartsWith('linux')) {
+            New-Item -ItemType Directory -Force out/console/systemd | Out-Null
+            Copy-Item deploy/systemd/* out/console/systemd/ -Recurse
+          }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $name = "ResgridRelay-Console-$env:VERSION-${{ matrix.rid }}"
+          if ('${{ matrix.archive }}' -eq 'zip') {
+            Compress-Archive -Path out/console/* -DestinationPath "dist/$name.zip"
+          } else {
+            # tar keeps the executable bit that zip would lose.
+            tar -czf "dist/$name.tar.gz" -C out/console .
+          }
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-console-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+
+  docker:
+    name: docker
+    needs: [plan, test]
+    if: needs.plan.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: BuildEnv
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Docker Hub configuration
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ]; then echo "::error::The DOCKERHUB_USERNAME secret is required."; exit 1; fi
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=raw,value=${{ needs.plan.outputs.version }}
+            type=raw,value=latest,enable=${{ needs.plan.outputs.prerelease != 'true' }}
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ needs.plan.outputs.docker_platforms }}
+          push: true
+          build-args: |
+            BUILD_VERSION=${{ needs.plan.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Record the image tags
+        shell: bash
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          PLATFORMS: ${{ needs.plan.outputs.docker_platforms }}
+        run: |
+          mkdir -p dist
+          { echo "Docker image: $DOCKER_IMAGE"; echo "Platforms: $PLATFORMS"; echo; echo "Tags:"; printf '%s\n' "$TAGS"; } > dist/docker-image.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-docker
+          path: dist/docker-image.txt
+          if-no-files-found: error
+
+  # ── Stage 3 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+  release:
+    name: release
+    needs: [plan, desktop, console, docker]
+    # Runs when every selected target succeeded (skipped targets are fine, failed ones are not).
+    if: ${{ always() && !cancelled() && !contains(needs.*.result, 'failure') && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: BuildEnv
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: relay-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ls -la
+          # A Docker-only release has no ResgridRelay-* archives, a desktop/console-only one no docker-image.txt: hash
+          # whatever was produced, and fail only on nothing. (nullglob drops an unmatched pattern, not a literal name.)
+          shopt -s nullglob
+          files=(ResgridRelay-*)
+          if [ -f docker-image.txt ]; then files+=(docker-image.txt); fi
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No release files to checksum"
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Release notes
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          DOCKER_ENABLED: ${{ needs.plan.outputs.docker }}
+          PRERELEASE: ${{ needs.plan.outputs.prerelease }}
+        with:
+          script: |
+            const fs = require('fs');
+            const version = process.env.VERSION;
+            // The push of a merge commit carries no PR payload: find the PR from the commit and use its description.
+            let body = '';
+            try {
+              const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner: context.repo.owner, repo: context.repo.repo, commit_sha: context.sha });
+              const pr = prs.find(p => p.merged_at) || prs[0];
+              if (pr) body = (pr.body || '').replace(/#{1,6}\s*Summary by CodeRabbit[\s\S]*/i, '').trim();
+            } catch (e) { core.warning(`Could not read the pull request: ${e.message}`); }
+            const files = fs.readdirSync('dist').filter(f => f.startsWith('ResgridRelay-')).sort();
+            const row = f => {
+              const m = f.match(/^ResgridRelay-(Desktop|Console)-.+?-((?:win|linux|osx)-(?:x64|arm64))\./);
+              return m ? `| ${m[1]} | \`${m[2]}\` | \`${f}\` |` : `| | | \`${f}\` |`;
+            };
+            const lines = [
+              body || 'No release notes provided.',
+              '',
+              '## Downloads',
+              '',
+              '| App | Platform | File |',
+              '| --- | --- | --- |',
+              ...files.map(row),
+              '',
+              'The **Desktop** app (`ResgridRelay.exe`) is the Windows app to set up, run and monitor Relay. The **Console** host runs headless (Windows service-style, Linux systemd, macOS); its Windows build runs every mode, the Linux and macOS builds run `smtp`, `record` and `dispatch`. All builds are self-contained: no .NET install needed. Verify downloads with `SHA256SUMS`.',
+            ];
+            if (process.env.DOCKER_ENABLED === 'true') {
+              lines.push('', '## Docker image', '', `- \`${{ env.DOCKER_IMAGE }}:${version}\``);
+              if (process.env.PRERELEASE !== 'true') lines.push(`- \`${{ env.DOCKER_IMAGE }}:latest\``);
+            }
+            fs.writeFileSync('release_notes.md', lines.join('\n'));
+
+      - name: Create the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.plan.outputs.tag }}
+          name: Resgrid Relay ${{ needs.plan.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          body_path: release_notes.md
+          files: |
+            dist/ResgridRelay-*
+            dist/SHA256SUMS
+            dist/docker-image.txt
+          draft: false
+          prerelease: ${{ needs.plan.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.plan.outputs.prerelease != 'true' }}
+          fail_on_unmatched_files: false

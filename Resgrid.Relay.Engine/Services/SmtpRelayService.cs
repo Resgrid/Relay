@@ -20,9 +20,12 @@ namespace Resgrid.Relay.Engine.Services
 		{
 		}
 
+		protected override void ValidateConfiguration() => ValidateApiOptions(Options.Resgrid);
+
 		protected override async Task ExecuteAsync(CancellationToken token)
 		{
 			using var apiClient = new ResgridV4ApiClient(Options.Resgrid);
+			apiClient.Warning += message => Logger?.Warning("Resgrid API client: {Warning}", message);
 
 			MutableStatus.ResgridApi = ConnectionState.Connecting;
 			try
@@ -30,8 +33,10 @@ namespace Resgrid.Relay.Engine.Services
 				var healthy = await apiClient.IsHealthyAsync(token).ConfigureAwait(false);
 				MutableStatus.ResgridApi = healthy ? ConnectionState.Connected : ConnectionState.Disconnected;
 			}
-			catch (OperationCanceledException)
+			catch (OperationCanceledException) when (token.IsCancellationRequested)
 			{
+				// Only a stop request ends the service here. HttpClient reports its own timeout (an unreachable API at startup,
+				// or a slow token endpoint) as a TaskCanceledException too; that is just a failed probe, handled below.
 				throw;
 			}
 			catch (Exception ex)
@@ -52,7 +57,57 @@ namespace Resgrid.Relay.Engine.Services
 			var inner = SmtpTelemetry.Create(Options, Logger);
 			await using var telemetry = new StatusReportingSmtpTelemetry(inner, MutableStatus);
 
-			await SmtpRelayRunner.RunAsync(Options.Smtp, telemetry, apiClient, token).ConfigureAwait(false);
+			using var keepAliveCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+			var keepAlive = KeepSignedInAsync(apiClient, keepAliveCts.Token);
+			try
+			{
+				await SmtpRelayRunner.RunAsync(Options.Smtp, telemetry, apiClient, token).ConfigureAwait(false);
+			}
+			finally
+			{
+				keepAliveCts.Cancel();
+				try { await keepAlive.ConfigureAwait(false); }
+				catch { /* the keep-alive never faults the relay */ }
+			}
+		}
+
+		/// <summary>
+		/// The relay only signs in when mail arrives, and Resgrid refresh tokens expire after about two days unused, so a quiet
+		/// relay (a weekend without pages) lost its sign-in and the next real page failed. Touch the API every few hours so
+		/// the token is refreshed (and rotated into the token cache) while the relay is idle; this also keeps the API pill
+		/// current. The system API key never expires, so it needs none of this.
+		/// </summary>
+		private async Task KeepSignedInAsync(ResgridV4ApiClient apiClient, CancellationToken token)
+		{
+			if (Options.Resgrid?.GrantType == ResgridAuthGrantType.SystemApiKey)
+				return;
+
+			var interval = TimeSpan.FromHours(6);
+			try
+			{
+				while (true)
+				{
+					await Task.Delay(interval, token).ConfigureAwait(false);
+					try
+					{
+						var healthy = await apiClient.IsHealthyAsync(token).ConfigureAwait(false);
+						MutableStatus.ResgridApi = healthy ? ConnectionState.Connected : ConnectionState.Degraded;
+					}
+					catch (OperationCanceledException) when (token.IsCancellationRequested)
+					{
+						return;
+					}
+					catch (Exception ex)
+					{
+						MutableStatus.ResgridApi = ConnectionState.Disconnected;
+						Logger?.Warning(ex, "Keeping the Resgrid sign-in fresh failed; trying again in {Hours} hours", interval.TotalHours);
+					}
+				}
+			}
+			catch (OperationCanceledException)
+			{
+				// Stopping.
+			}
 		}
 	}
 }

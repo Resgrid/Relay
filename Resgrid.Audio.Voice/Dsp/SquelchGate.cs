@@ -6,7 +6,11 @@ namespace Resgrid.Audio.Voice.Dsp
 	/// <summary>How a radio receive path decides that real traffic (not static) is present.</summary>
 	public enum SquelchMode
 	{
-		/// <summary>Always open — relay everything (use only with a radio that has hardware squelch).</summary>
+		/// <summary>
+		/// For a radio with its own (hardware) squelch, whose audio is silent when closed: relays any audio at or above
+		/// <see cref="SquelchSettings.OpenDbfs"/>, held through pauses for <see cref="SquelchSettings.HangMs"/>; silence is not
+		/// relayed and does not count as receiving.
+		/// </summary>
 		Off = 0,
 
 		/// <summary>Audio-level (VOX) gate with hysteresis — the default anti-static gate.</summary>
@@ -27,7 +31,10 @@ namespace Resgrid.Audio.Voice.Dsp
 		/// <summary>dBFS at/above which the gate opens. Set just above the static floor.</summary>
 		public double OpenDbfs { get; set; } = -38;
 
-		/// <summary>dBFS below which the gate begins to close (must be ≤ OpenDbfs for hysteresis).</summary>
+		/// <summary>
+		/// dBFS below which the hang runs down at full speed (must be ≤ OpenDbfs). Between this and OpenDbfs it runs down at half
+		/// speed: only audio at or above OpenDbfs keeps the gate open indefinitely.
+		/// </summary>
 		public double CloseDbfs { get; set; } = -45;
 
 		/// <summary>Keep the gate open this long after audio drops, to avoid chopping speech.</summary>
@@ -76,16 +83,14 @@ namespace Resgrid.Audio.Voice.Dsp
 				_open = true;
 				_hangRemainingMs = _settings.HangMs;
 			}
-			else if (_open && db < _settings.CloseDbfs)
-			{
-				_hangRemainingMs -= frameMs;
-				if (_hangRemainingMs <= 0)
-					_open = false;
-			}
 			else if (_open)
 			{
-				// Between close and open thresholds: hold open, refresh hang a little.
-				_hangRemainingMs = Math.Max(_hangRemainingMs, frameMs);
+				// Only real traffic (at/above OpenDbfs) re-arms the hang. Holding the gate open for anything between the two
+				// thresholds kept it open forever once a transmission ended, because the documented tuning puts OpenDbfs just
+				// above the static floor, which leaves the static itself inside that band.
+				_hangRemainingMs -= db < _settings.CloseDbfs ? frameMs : frameMs / 2;
+				if (_hangRemainingMs <= 0)
+					_open = false;
 			}
 
 			return _open;

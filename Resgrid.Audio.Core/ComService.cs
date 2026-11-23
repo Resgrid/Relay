@@ -20,18 +20,23 @@ namespace Resgrid.Audio.Core
 		private readonly IResgridApiClient _apiClient;
 		private readonly IResgridHealthApi _healthApi;
 		private readonly IResgridCallsApi _callsApi;
+		private readonly IResgridLookupsApi _lookupsApi;
+		private readonly string _departmentId;
 
 		private Config _config;
 
 		public event EventHandler<CallCreatedEventArgs> CallCreatedEvent;
 
-		public ComService(ILogger logger, AudioProcessor audioProcessor, IResgridApiClient apiClient, IResgridHealthApi healthApi, IResgridCallsApi callsApi)
+		public ComService(ILogger logger, AudioProcessor audioProcessor, IResgridApiClient apiClient, IResgridHealthApi healthApi, IResgridCallsApi callsApi,
+			IResgridLookupsApi lookupsApi = null, string departmentId = null)
 		{
 			_logger = logger;
 			_audioProcessor = audioProcessor;
 			_apiClient = apiClient;
 			_healthApi = healthApi;
 			_callsApi = callsApi;
+			_lookupsApi = lookupsApi ?? (apiClient != null ? new LookupsApi(apiClient) : null);
+			_departmentId = String.IsNullOrWhiteSpace(departmentId) ? null : departmentId.Trim();
 		}
 
 		public void Init(Config config)
@@ -61,70 +66,217 @@ namespace Resgrid.Audio.Core
 
 		private void _audioProcessor_TriggerProcessingFinished(object sender, Events.TriggerProcessedEventArgs e)
 		{
-			if (e.Mp3Audio != null && e.Mp3Audio.Length > 0)
+			if (e.Mp3Audio == null || e.Mp3Audio.Length == 0)
 			{
-				try
-				{
-					var dispatchContext = BuildDispatchContext(e.Watcher);
-					var watchersToned = String.Join(", ", dispatchContext.WatcherNames);
-					var isDepartmentDispatch = dispatchContext.DispatchCodes.Any(x => x.Type == DispatchCodeType.Department);
-					var dispatchList = DispatchListBuilder.Build(dispatchContext.DispatchCodes, _config?.DispatchMapping?.DepartmentDispatchPrefix);
-					if (String.IsNullOrWhiteSpace(dispatchList))
-						throw new InvalidOperationException($"No valid Resgrid dispatch targets were found for watcher '{e.Watcher.Name}'.");
+				_logger.Warning($"No Dispatch Audio detected, unable to save call for {e.Watcher.Name}");
+				return;
+			}
 
-					var callName = isDepartmentDispatch
-						? $"ALLCALL Audio Import {DateTime.Now:g}"
-						: $"Audio Import {DateTime.Now:g}";
+			try
+			{
+				CreateCallAsync(e).GetAwaiter().GetResult();
+			}
+			catch (Exception ex)
+			{
+				// Runs on the audio processor's timer: nothing may escape, or the pipeline stops creating calls.
+				_logger.Error(ex, "Failed to create the Resgrid call for watcher {Watcher}; this dispatch was not sent to Resgrid", e.Watcher?.Name);
+			}
+		}
 
-					var callInput = new NewCallInput
-					{
-						Priority = 1,
-						Name = callName,
-						Nature = $"Relay import, listen to audio for call info. Toned: {watchersToned}",
-						Note = $"Audio imported call from a radio dispatch using the Resgrid Relay app. Listen to the attached audio for call information. Call was created on {DateTime.Now:F}. Department dispatch: {isDepartmentDispatch}. Watchers toned: {watchersToned}",
-						DispatchList = dispatchList,
-						ExternalId = e.Watcher.Id.ToString(),
-						ReferenceId = e.Watcher.TriggerFiredTimestamp.ToString("O"),
-						Type = "Relay Audio"
-					};
+		/// <summary>
+		/// Creates the call and uploads the captured audio. Both requests carry an idempotency key derived from the trigger, so a
+		/// retry after a timeout or a 5xx returns the call/file Resgrid already saved instead of paging twice.
+		/// </summary>
+		private async Task CreateCallAsync(Events.TriggerProcessedEventArgs e)
+		{
+			var dispatchContext = BuildDispatchContext(e.Watcher);
+			var watchersToned = String.Join(", ", dispatchContext.WatcherNames);
+			// A department watcher pages everyone ("0") whatever its code, so decide from the watcher type (primary or riders):
+			// keyed off a non-empty Code, a department watcher saved with no code (setup's default) built no targets and every
+			// page failed with "no valid dispatch targets".
+			var isDepartmentDispatch = e.Watcher.Type == (int)DispatchCodeType.Department
+				|| (e.Watcher.GetAdditionalWatchers()?.Any(w => w.Type == (int)DispatchCodeType.Department) ?? false)
+				|| dispatchContext.DispatchCodes.Any(x => x.Type == DispatchCodeType.Department);
 
-					var savedCallId = _callsApi.SaveCallAsync(callInput).GetAwaiter().GetResult();
-					var userId = _apiClient.CurrentUserId;
-					if (String.IsNullOrWhiteSpace(userId))
-						throw new InvalidOperationException("The Resgrid access token did not contain a user id required to upload the dispatch audio.");
-
-					_callsApi.SaveCallFileAsync(new SaveCallFileInput
-					{
-						CallId = savedCallId,
-						UserId = userId,
-						Type = (int)CallFileType.Audio,
-						Name = $"Relay_{e.Watcher.TriggerFiredTimestamp:s}".Replace(":", "_") + ".mp3",
-						Data = Convert.ToBase64String(e.Mp3Audio),
-						Note = $"Captured dispatch audio for watcher {e.Watcher.Name}"
-					}).GetAwaiter().GetResult();
-
-					var savedCall = _callsApi.GetCallAsync(savedCallId).GetAwaiter().GetResult();
-					CallCreatedEvent?.Invoke(
-						this,
-						new CallCreatedEventArgs(e.Watcher.Name, savedCallId, savedCall?.Data?.Number, DateTime.Now));
-				}
-				catch (HttpRequestException ex)
-				{
-					_logger.Error(ex.ToString());
-				}
-				catch (InvalidOperationException ex)
-				{
-					_logger.Error(ex.ToString());
-				}
-				catch (TaskCanceledException ex)
-				{
-					_logger.Error(ex.ToString());
-				}
+			string dispatchList;
+			bool? isPending = null;
+			if (isDepartmentDispatch)
+			{
+				// A department (ALLCALL) watcher pages everyone: "0". DispatchListBuilder leaves department codes out, so this
+				// used to end in "no valid dispatch targets" and the ALLCALL was never created. The system API key is never
+				// allowed to page a whole department by itself, so with it the call is saved pending for a dispatcher to send.
+				dispatchList = "0";
+				if (_apiClient?.IsSystemCaller == true)
+					isPending = true;
 			}
 			else
 			{
-				_logger.Warning($"No Dispatch Audio detected, unable to save call for {e.Watcher.Name}");
+				await ResolveGroupCodesAsync(dispatchContext.DispatchCodes, e.Watcher.Name).ConfigureAwait(false);
+				dispatchList = DispatchListBuilder.Build(dispatchContext.DispatchCodes, _config?.DispatchMapping?.DepartmentDispatchPrefix);
+				if (String.IsNullOrWhiteSpace(dispatchList))
+					throw new InvalidOperationException($"No valid Resgrid dispatch targets were found for watcher '{e.Watcher.Name}'.");
 			}
+
+			var callName = isDepartmentDispatch
+				? $"ALLCALL Audio Import {DateTime.Now:g}"
+				: $"Audio Import {DateTime.Now:g}";
+
+			var callInput = new NewCallInput
+			{
+				Priority = 1,
+				Name = callName,
+				Nature = $"Relay import, listen to audio for call info. Toned: {watchersToned}",
+				Note = $"Audio imported call from a radio dispatch using the Resgrid Relay app. Listen to the attached audio for call information. Call was created on {DateTime.Now:F}. Department dispatch: {isDepartmentDispatch}. Watchers toned: {watchersToned}",
+				DispatchList = dispatchList,
+				IsPending = isPending,
+				ExternalId = e.Watcher.Id.ToString(),
+				ReferenceId = e.Watcher.TriggerFiredTimestamp.ToString("O"),
+				Type = "Relay Audio",
+				DepartmentId = _departmentId
+			};
+
+			var idempotencyKey = $"relay-audio:{e.Watcher.Id:N}:{e.Watcher.TriggerFiredTimestamp.ToUniversalTime():yyyyMMddTHHmmssfff}";
+			var savedCallId = await WithRetriesAsync(() => _callsApi.SaveCallAsync(callInput, idempotencyKey)).ConfigureAwait(false);
+
+			// Resgrid requires SaveCallFile's UserId but uses it only for system callers; a token caller's file is attributed to
+			// the token's own user. Its access tokens are encrypted, so with a token grant CurrentUserId is usually null, and
+			// requiring it threw after the call was already paged, losing the audio. Token callers send a placeholder (as the
+			// SMTP relay does); system callers fall back to the department id.
+			var userId = _apiClient.CurrentUserId;
+			if (String.IsNullOrWhiteSpace(userId))
+			{
+				if (_apiClient.IsSystemCaller)
+				{
+					userId = _departmentId;
+					if (String.IsNullOrWhiteSpace(userId))
+						_logger.Warning("Uploading audio for call {CallId} without a user id; set Resgrid:DepartmentId for system-key relays", savedCallId);
+				}
+				else
+				{
+					userId = "resgrid-relay";
+				}
+			}
+
+			var file = new SaveCallFileInput
+			{
+				CallId = savedCallId,
+				UserId = userId,
+				Type = (int)CallFileType.Audio,
+				Name = $"Relay_{e.Watcher.TriggerFiredTimestamp:s}".Replace(":", "_") + ".mp3",
+				Data = Convert.ToBase64String(e.Mp3Audio),
+				Note = $"Captured dispatch audio for watcher {e.Watcher.Name}",
+				DepartmentId = _departmentId
+			};
+
+			try
+			{
+				await WithRetriesAsync(() => _callsApi.SaveCallFileAsync(file, idempotencyKey + "#audio")).ConfigureAwait(false);
+			}
+			catch (Exception ex)
+			{
+				// The call is already out; report the missing audio instead of losing the CallCreated notification.
+				_logger.Error(ex, "Call {CallId} was created but its dispatch audio could not be uploaded", savedCallId);
+			}
+
+			string callNumber = null;
+			try
+			{
+				var savedCall = await _callsApi.GetCallAsync(savedCallId, _departmentId).ConfigureAwait(false);
+				callNumber = savedCall?.Data?.Number;
+			}
+			catch (Exception ex)
+			{
+				_logger.Warning(ex, "Could not read back call {CallId} for its number", savedCallId);
+			}
+
+			CallCreatedEvent?.Invoke(this, new CallCreatedEventArgs(e.Watcher.Name, savedCallId, callNumber, DateTime.Now));
+		}
+
+		/// <summary>
+		/// Group watchers carry the group's dispatch email code (the local part of its groups-domain address), but the DispatchList
+		/// needs the numeric group id. A code Resgrid answers as unknown (null) is sent as-is, which Resgrid still matches to a
+		/// group id or name, so configurations that used the id or name directly keep working. A lookup that fails is not such an
+		/// answer: it is retried, and if it still fails the dispatch is reported as failed rather than sent as G:&lt;code&gt;, which
+		/// pages nobody when the code is a dispatch code.
+		/// </summary>
+		private async Task ResolveGroupCodesAsync(List<DispatchCode> dispatchCodes, string watcherName)
+		{
+			if (_lookupsApi == null)
+				return;
+
+			foreach (var code in dispatchCodes.Where(x => x.Type == DispatchCodeType.Group && !x.IsResolved && !Int32.TryParse(x.Code, out _)))
+			{
+				GroupLookupResult group;
+				try
+				{
+					// Same bounded retry as the save: one 503 from the token endpoint threw an authentication error out of here
+					// before the save's retries ever ran, and the page was dropped.
+					group = await WithRetriesAsync(() => _lookupsApi.LookupGroupByDispatchCodeAsync(code.Code, _departmentId), IsRetryableLookupFailure)
+						.ConfigureAwait(false);
+				}
+				catch (Exception ex)
+				{
+					throw new InvalidOperationException(
+						$"The Resgrid lookup of group dispatch code '{code.Code}' for watcher '{watcherName}' failed after its retries; the call " +
+						"was not created, because sending the unresolved code would not page that group.", ex);
+				}
+
+				if (group != null)
+					code.ResolvedId = group.GroupId;
+			}
+		}
+
+		private Task<T> WithRetriesAsync<T>(Func<Task<T>> action) => WithRetriesAsync(action, IsTransient);
+
+		private async Task<T> WithRetriesAsync<T>(Func<Task<T>> action, Func<Exception, bool> isRetryable)
+		{
+			for (var attempt = 1; ; attempt++)
+			{
+				try
+				{
+					return await action().ConfigureAwait(false);
+				}
+				catch (Exception ex) when (attempt < 3 && isRetryable(ex))
+				{
+					_logger.Warning(ex, "Resgrid request failed (attempt {Attempt} of 3); retrying", attempt);
+					await Task.Delay(TimeSpan.FromSeconds(2 * attempt)).ConfigureAwait(false);
+				}
+			}
+		}
+
+		/// <summary>
+		/// A lookup is a read, so beyond the usual transient failures it is also worth retrying the answers LookupsApi raises
+		/// instead of "unknown code": a 404 (every lookup endpoint exists, so the request never reached it), a 403 (a gateway or
+		/// permission problem) and a system-key 401.
+		/// </summary>
+		private static bool IsRetryableLookupFailure(Exception exception)
+		{
+			if (IsTransient(exception))
+				return true;
+
+			return exception is HttpRequestException http &&
+				   (http.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+					http.StatusCode == System.Net.HttpStatusCode.Forbidden ||
+					http.StatusCode == System.Net.HttpStatusCode.NotFound);
+		}
+
+		private static bool IsTransient(Exception exception)
+		{
+			if (exception is HttpRequestException http)
+			{
+				if (http.StatusCode == null)
+					return true;
+
+				var status = (int)http.StatusCode.Value;
+				return status == 408 || status == 409 || status == 429 || status >= 500;
+			}
+
+			// Only a sign-in the token endpoint failed for the moment (5xx, 429, 408) may pass on a retry: a missing refresh token or
+			// rejected credentials (400 invalid_grant, 401) need an operator, and retrying them held the audio dispatch for seconds.
+			if (exception is ResgridAuthenticationException authentication)
+				return authentication.IsTransient;
+
+			return exception is TaskCanceledException;
 		}
 
 		private (List<DispatchCode> DispatchCodes, List<string> WatcherNames) BuildDispatchContext(Watcher watcher)

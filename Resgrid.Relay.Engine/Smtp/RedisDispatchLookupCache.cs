@@ -12,10 +12,19 @@ namespace Resgrid.Relay.Engine.Smtp
 	/// Redis-backed implementation of <see cref="IDispatchLookupCache"/>.
 	/// Stores lookup results as JSON with a configurable TTL.
 	/// 
-	/// Cache key format:  relay:lookup:{entityType}:{lookupType}:{departmentId}:{code}
-	/// 
-	/// Example:  relay:lookup:group:dispatch:dept123:station5
+	/// Cache key format:  relay:lookup:{scope}:{entityType}:{lookupType}:{departmentId}:{code}
+	///
+	/// Example:  relay:lookup:3f2a9c0d11e4b7a8:group:dispatch:dept123:station5
 	///           → {"GroupId":"42","Name":"Station 5","DepartmentId":"123","Type":0}
+	///
+	/// The scope names the credential the lookup was made with (<see cref="Resgrid.Providers.ApiClient.V4.IResgridApiClient.CredentialScope"/>):
+	/// a department token resolves codes only within its own department and sends no department id, so without it two
+	/// single-department relays sharing one Redis would read each other's group ids.
+	///
+	/// Redis is only an optimisation. While it is unreachable the cache is skipped (every call is a miss / no-op) instead of
+	/// holding up a dispatch: the connection is opened in the background (lookups skip the cache until it is up), commands fail
+	/// fast rather than queueing, and after a connect that fails outright the cache is not tried again for
+	/// <see cref="ReconnectBackoff"/>.
 	/// </summary>
 	internal sealed class RedisDispatchLookupCache : IDispatchLookupCache
 	{
@@ -25,55 +34,143 @@ namespace Resgrid.Relay.Engine.Smtp
 			PropertyNamingPolicy = JsonNamingPolicy.CamelCase
 		};
 
+		internal static readonly TimeSpan ReconnectBackoff = TimeSpan.FromSeconds(30);
+
 		private readonly RedisCacheOptions _options;
-		private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
+		private readonly string _keyPrefix;
+
+		// Guards _redis/_db/_connecting/_retryConnectAfterTicks changes and _disposed's effect on them; never held across an await.
+		private readonly object _gate = new object();
 		private ConnectionMultiplexer _redis;
 		private IDatabase _db;
+		private Task _connecting;
+		private long _retryConnectAfterTicks = DateTimeOffset.MinValue.UtcTicks;
+		private volatile bool _disposed;
 
-		public RedisDispatchLookupCache(RedisCacheOptions options)
+		public RedisDispatchLookupCache(RedisCacheOptions options, string credentialScope = null)
 		{
 			_options = options ?? throw new ArgumentNullException(nameof(options));
+			_keyPrefix = String.IsNullOrWhiteSpace(credentialScope) ? "relay:lookup:" : $"relay:lookup:{credentialScope.Trim()}:";
 		}
 
-		private async Task<IDatabase> GetDatabaseAsync()
-		{
-			if (_db != null)
-				return _db;
+		private bool InReconnectBackoff => DateTimeOffset.UtcNow.UtcTicks < Interlocked.Read(ref _retryConnectAfterTicks);
 
-			await _lock.WaitAsync().ConfigureAwait(false);
+		/// <summary>
+		/// The database, or null when Redis cannot be used right now (the caller then skips the cache). Never waits: the first
+		/// lookup starts the connect in the background and every lookup skips the cache until it is up, since StackExchange.Redis
+		/// waits out its whole connect timeout before ConnectAsync returns (whatever the backlog policy), and an unreachable Redis
+		/// must not hold up a dispatch.
+		/// </summary>
+		private IDatabase GetDatabase()
+		{
+			if (_disposed)
+				return null;
+
+			var redis = Volatile.Read(ref _redis);
+			if (redis != null)
+				// The multiplexer keeps reconnecting in the background (abortConnect=false); until it is back, skip the cache.
+				return redis.IsConnected ? Volatile.Read(ref _db) : null;
+
+			if (InReconnectBackoff)
+				return null;
+
+			lock (_gate)
+			{
+				// Checked again here: DisposeAsync may have run, or a connect may have failed and started the backoff, since the
+				// checks above. One connect at a time.
+				if (_disposed || _redis != null || _connecting != null || InReconnectBackoff)
+					return null;
+
+				_connecting = Task.Run(ConnectAsync);
+			}
+
+			return null;
+		}
+
+		/// <summary>Never throws: a connect that fails starts the backoff, one that finishes after disposal closes itself.</summary>
+		private async Task ConnectAsync()
+		{
+			ConnectionMultiplexer redis = null;
+			IDatabase db = null;
 			try
 			{
-				if (_db != null)
-					return _db;
+				var configuration = ConfigurationOptions.Parse(_options.ConnectionString);
+				configuration.AbortOnConnectFail = false;
+				configuration.BacklogPolicy = BacklogPolicy.FailFast;
 
-				_redis = await ConnectionMultiplexer.ConnectAsync(_options.ConnectionString).ConfigureAwait(false);
-				_db = _redis.GetDatabase();
-				return _db;
+				redis = await ConnectionMultiplexer.ConnectAsync(configuration).ConfigureAwait(false);
+				// Part of the setup: GetDatabase can throw for a connection string the parser accepted (defaultDatabase=-2),
+				// and a multiplexer that is never published must be closed here, not leaked on every retry.
+				db = redis.GetDatabase();
 			}
-			finally
+			catch (Exception)
 			{
-				_lock.Release();
+				if (redis != null)
+					await CloseAsync(redis).ConfigureAwait(false);
+				redis = null;
 			}
+
+			lock (_gate)
+			{
+				_connecting = null;
+
+				if (redis == null)
+				{
+					Interlocked.Exchange(ref _retryConnectAfterTicks, DateTimeOffset.UtcNow.Add(ReconnectBackoff).UtcTicks);
+					return;
+				}
+
+				if (!_disposed)
+				{
+					// Kept even when this first attempt did not get through: the multiplexer retries on its own, and the cache is
+					// skipped until it is connected.
+					Volatile.Write(ref _db, db);
+					Volatile.Write(ref _redis, redis);
+					return;
+				}
+			}
+
+			// Disposed while connecting: DisposeAsync did not see this connection, so it is closed here.
+			await CloseAsync(redis).ConfigureAwait(false);
 		}
 
 		public async ValueTask DisposeAsync()
 		{
-			if (_redis != null)
+			ConnectionMultiplexer redis;
+			lock (_gate)
 			{
-				await _redis.CloseAsync().ConfigureAwait(false);
-				_redis.Dispose();
-				_redis = null;
-				_db = null;
+				// A connect still running sees this once it finishes and closes its own connection.
+				_disposed = true;
+				redis = _redis;
+				Volatile.Write(ref _redis, null);
+				Volatile.Write(ref _db, null);
 			}
-			_lock.Dispose();
+
+			if (redis != null)
+				await CloseAsync(redis).ConfigureAwait(false);
+		}
+
+		private static async Task CloseAsync(ConnectionMultiplexer redis)
+		{
+			try
+			{
+				await redis.CloseAsync().ConfigureAwait(false);
+			}
+			catch (Exception)
+			{
+				// Closing a connection that never came up must not fail the relay's shutdown.
+			}
+
+			try { redis.Dispose(); }
+			catch (Exception) { /* same: ConnectAsync relies on this never throwing */ }
 		}
 
 		private TimeSpan Ttl => TimeSpan.FromMinutes(_options.TtlMinutes > 0 ? _options.TtlMinutes : 60);
 
 		// ─── Key helpers ───────────────────────────────────────────────────
 
-		private static string Key(string entityType, string lookupType, string departmentId, string code) =>
-			$"relay:lookup:{entityType}:{lookupType}:{departmentId ?? "__"}:{code}";
+		internal string Key(string entityType, string lookupType, string departmentId, string code) =>
+			$"{_keyPrefix}{entityType}:{lookupType}:{departmentId ?? "__"}:{code}";
 
 		// ─── Generic read/write ────────────────────────────────────────────
 
@@ -81,7 +178,10 @@ namespace Resgrid.Relay.Engine.Smtp
 		{
 			try
 			{
-				var db = await GetDatabaseAsync().ConfigureAwait(false);
+				var db = GetDatabase();
+				if (db == null)
+					return null;
+
 				var json = await db.StringGetAsync(key).ConfigureAwait(false);
 				if (json.IsNullOrEmpty)
 					return null;
@@ -99,7 +199,10 @@ namespace Resgrid.Relay.Engine.Smtp
 		{
 			try
 			{
-				var db = await GetDatabaseAsync().ConfigureAwait(false);
+				var db = GetDatabase();
+				if (db == null)
+					return;
+
 				var json = JsonSerializer.Serialize(value, SerializerOptions);
 				await db.StringSetAsync(key, json, Ttl).ConfigureAwait(false);
 			}
@@ -109,6 +212,14 @@ namespace Resgrid.Relay.Engine.Smtp
 				// the live API; we just won't have it cached for next time.
 			}
 		}
+
+		// ─── Department dispatch code ─────────────────────────────────────
+
+		public Task<DepartmentLookupResult> GetDepartmentByDispatchCodeAsync(string code) =>
+			GetAsync<DepartmentLookupResult>(Key("department", "dispatch", null, code));
+
+		public Task SetDepartmentByDispatchCodeAsync(string code, DepartmentLookupResult result) =>
+			SetAsync(Key("department", "dispatch", null, code), result);
 
 		// ─── Group dispatch code ──────────────────────────────────────────
 

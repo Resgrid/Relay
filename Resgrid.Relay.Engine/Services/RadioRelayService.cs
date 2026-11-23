@@ -20,6 +20,8 @@ namespace Resgrid.Relay.Engine.Services
 
 		protected override bool IsLiveKitMode => true;
 
+		protected override void ValidateConfiguration() => ValidateApiOptions(Options.Resgrid);
+
 		protected override async Task ExecuteAsync(CancellationToken token)
 		{
 			MutableStatus.LiveKit = ConnectionState.Connecting;

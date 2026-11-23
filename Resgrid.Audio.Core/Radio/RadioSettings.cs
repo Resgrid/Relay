@@ -45,10 +45,10 @@ namespace Resgrid.Audio.Core.Radio
 		/// <summary>Serial port name (COM3, /dev/ttyUSB0) for serial PTT and/or carrier detect.</summary>
 		public string SerialPort { get; set; } = "";
 
-		/// <summary>CM108 USB device VID (default C-Media 0x0D8C).</summary>
-		public int Cm108VendorId { get; set; } = 0x0D8C;
+		/// <summary>CM108 USB device VID (default C-Media 0x0D8C; the AIOC is 0x1209). See <see cref="Cm108Compatibility"/>.</summary>
+		public int Cm108VendorId { get; set; } = Cm108Compatibility.CMediaVendorId;
 
-		/// <summary>CM108 USB device PID (0 = match any C-Media device).</summary>
+		/// <summary>CM108 USB device PID (0 = any product of the vendor; for VID 0x1209 only the AIOC, 0x7388).</summary>
 		public int Cm108ProductId { get; set; } = 0;
 
 		/// <summary>CM108 GPIO pin used for PTT (1–4; URI/RIM commonly use GPIO3).</summary>
@@ -62,11 +62,27 @@ namespace Resgrid.Audio.Core.Radio
 		/// <summary>Play a short courtesy beep on the channel when the radio unkeys.</summary>
 		public bool CourtesyTone { get; set; } = true;
 
+		/// <summary>
+		/// Delay between keying PTT and playing the first channel audio to the radio (0 = none, max 3000). Radios that need
+		/// time after keying before they pass mic audio — push-to-talk-over-cellular (PoC/LTE) radios waiting for the server
+		/// to grant the floor, or slow-keying transmitters — otherwise cut off the first words. Channel audio is delayed by
+		/// this much for the whole transmission, and the unkey tail is extended to match. Ignored with Vox keying (silence
+		/// cannot key a VOX interface, so it would only add delay).
+		/// </summary>
+		public int TxLeadMs { get; set; } = 0;
+
 		/// <summary>Keep PTT keyed this long after channel audio stops (avoids choppy tails).</summary>
 		public int TxHangMs { get; set; } = 300;
 
 		/// <summary>Extra dead-carrier time after audio before dropping PTT.</summary>
 		public int TxTailMs { get; set; } = 150;
+
+		/// <summary>
+		/// Transmit time-out (seconds; 0 = no limit). A channel talker who holds the radio keyed longer than this — a stuck
+		/// mic, an open hot mic — is cut off: PTT drops and their audio is ignored until they go quiet, so the relay cannot sit
+		/// on the frequency indefinitely.
+		/// </summary>
+		public int MaxTransmitSeconds { get; set; } = 180;
 
 		/// <summary>Prevent relaying audio back to the side it came from (half-duplex arbitration).</summary>
 		public bool AntiLoop { get; set; } = true;

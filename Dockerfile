@@ -27,7 +27,7 @@ ARG DOTNET_RUNTIME_IMAGE=dhi.io/dotnet:10.0-debian13@sha256:baed1f48538246b0c115
 ARG LIVEKIT_FFI_VERSION=livekit-ffi/v0.12.65
 
 # ─── Build ──────────────────────────────────────────────────────────────────
-FROM ${DOTNET_SDK_IMAGE} AS build
+FROM --platform=$BUILDPLATFORM ${DOTNET_SDK_IMAGE} AS build
 ARG BUILD_VERSION
 WORKDIR /src
 COPY . .
@@ -57,7 +57,7 @@ RUN mkdir -p /app/publish/data /app/publish/recordings \
 # LocalXpose distributes only a rolling "latest" build from S3 — there are no
 # versioned release URLs. SHA256 values are from the AUR PKGBUILD and must be
 # refreshed whenever loclx publishes a new binary.
-FROM debian:bookworm-slim AS loclx-download
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS loclx-download
 ARG TARGETARCH=amd64
 ARG LOCLX_SHA256_AMD64=03c6d1d35dfd0acb673473314c1384156ed2bfcb96e581b3e0bb398fef45fb88
 ARG LOCLX_SHA256_ARM64=a423e0ce90fcab7044b4f0244fb8483fe12acf30361fff0e37d5abc2dae2da91
@@ -82,7 +82,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget zstd ca-ce
     && rm -rf /tmp/loclx.pkg.tar.zst /tmp/loclx-extract /var/lib/apt/lists/*
 
 # ─── LiveKit FFI native library download ────────────────────────────────────
-FROM debian:bookworm-slim AS ffi-download
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS ffi-download
 ARG LIVEKIT_FFI_VERSION
 ARG TARGETARCH=amd64
 # Pin each release asset's SHA-256 per arch (as loclx-download does) so the native
@@ -112,7 +112,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-c
 # (waits for WAIT_HOSTS, then execs WAIT_COMMAND). The release ships per-arch
 # binaries; pick the one matching TARGETARCH and normalize it to "wait" so the
 # ENTRYPOINT stays arch-independent. Mirrors the ffi-download / loclx-download stages.
-FROM debian:bookworm-slim AS wait-download
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS wait-download
 ARG TARGETARCH=amd64
 ARG WAIT_VERSION=2.12.1
 # amd64 asset sha256 is pinned; set WAIT_SHA256_ARM64 to verify arm64 builds too
@@ -155,7 +155,7 @@ ENV LD_LIBRARY_PATH=/app
 ENV RESGRID__RELAY__Mode=smtp
 
 # Resgrid API (v4)
-ENV RESGRID__RELAY__Resgrid__BaseUrl=""
+ENV RESGRID__RELAY__Resgrid__BaseUrl="https://api.resgrid.com"
 ENV RESGRID__RELAY__Resgrid__ApiVersion=4
 ENV RESGRID__RELAY__Resgrid__ClientId=""
 ENV RESGRID__RELAY__Resgrid__ClientSecret=""

@@ -31,7 +31,8 @@ namespace Resgrid.Relay.Engine
 		private ConnectionState _tts = ConnectionState.NotApplicable;
 		public ConnectionState Tts { get => _tts; set => SetField(ref _tts, value); }
 
-		private double _inputDbfs;
+		// Silence until the first level arrives: 0 dBFS (the old default) drew a full-scale meter before any audio.
+		private double _inputDbfs = -80;
 		public double InputDbfs { get => _inputDbfs; set => SetField(ref _inputDbfs, value); }
 
 		private bool _squelchOpen;

@@ -11,6 +11,12 @@ namespace Resgrid.Relay.Engine.Smtp
 	{
 		public ValueTask DisposeAsync() => default;
 
+		public Task<DepartmentLookupResult> GetDepartmentByDispatchCodeAsync(string code) =>
+			Task.FromResult<DepartmentLookupResult>(null);
+
+		public Task SetDepartmentByDispatchCodeAsync(string code, DepartmentLookupResult result) =>
+			Task.CompletedTask;
+
 		public Task<GroupLookupResult> GetGroupByDispatchCodeAsync(string code, string departmentId) =>
 			Task.FromResult<GroupLookupResult>(null);
 

@@ -25,10 +25,34 @@ namespace Resgrid.Relay.Engine.Logging
 			var record = new LogRecord(
 				logEvent.Timestamp,
 				logEvent.Level,
-				logEvent.RenderMessage(),
+				RenderLiteral(logEvent),
 				logEvent.Exception?.ToString());
 
 			_bus.Publish(record);
+		}
+
+		/// <summary>
+		/// Renders the message with string values as-is (Serilog's default quotes them, so "Relay mode '{Mode}'" showed as
+		/// '"radio"'), matching the {Message:lj} rendering of the log files.
+		/// </summary>
+		private static string RenderLiteral(LogEvent logEvent)
+		{
+			var builder = new System.Text.StringBuilder();
+			foreach (var token in logEvent.MessageTemplate.Tokens)
+			{
+				if (token is Serilog.Parsing.PropertyToken property
+					&& logEvent.Properties.TryGetValue(property.PropertyName, out var value)
+					&& value is ScalarValue { Value: string text })
+				{
+					builder.Append(text);
+					continue;
+				}
+
+				using var writer = new System.IO.StringWriter();
+				token.Render(logEvent.Properties, writer);
+				builder.Append(writer.ToString());
+			}
+			return builder.ToString();
 		}
 	}
 }

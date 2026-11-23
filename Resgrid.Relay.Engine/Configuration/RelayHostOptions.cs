@@ -35,6 +35,13 @@ namespace Resgrid.Relay.Engine.Configuration
 		public double InitialBackoffSeconds { get; set; } = 2;
 		public double MaxBackoffSeconds { get; set; } = 60;
 		public double HealthyRunSeconds { get; set; } = 30;     // a run lasting >= this resets the consecutive-failure counter
+
+		/// <summary>
+		/// Once the breaker opens, keep retrying every <see cref="MaxBackoffSeconds"/> (reporting LiveKit Disconnected) instead
+		/// of faulting the service, so an ISP or LiveKit outage longer than the breaker's ~30 s does not leave the radio bridge,
+		/// recorder or tone-out down until someone restarts it. Configuration errors still fault immediately.
+		/// </summary>
+		public bool KeepRetrying { get; set; } = true;
 	}
 
 	public sealed class RelayTelemetryOptions
@@ -48,7 +55,7 @@ namespace Resgrid.Relay.Engine.Configuration
 	{
 		public string Dsn { get; set; } = "";
 		public string Release { get; set; } = "";
-		public bool SendDefaultPii { get; set; } = true;
+		public bool SendDefaultPii { get; set; } = false;
 	}
 
 	public sealed class CountlyTelemetryOptions
@@ -83,9 +90,9 @@ namespace Resgrid.Relay.Engine.Configuration
 		//   GroupMessageAddressDomains Group message         GroupMessageDomain
 		//   ListAddressDomains        Distribution list      ListsDomain
 		//
-		// In hosted mode, the department ID is extracted from the subdomain
-		// prefix:  {code}.{departmentId}.{baseDomain}
-		//   → station5.dept123.dispatch.resgrid.com
+		// In hosted mode, the department ID is the first label of the recipient's
+		// domain:  {code}@{departmentId}{separator}{baseDomain}
+		//   → station5@dept123.dispatch.resgrid.com
 
 		/// <summary>
 		/// Domains for department-wide dispatch calls (Type 1 in Postmark pipeline).
@@ -128,14 +135,14 @@ namespace Resgrid.Relay.Engine.Configuration
 		public bool HostedMode { get; set; }
 
 		/// <summary>
-		/// In hosted mode, email domains are expected to follow the pattern
-		/// {code}.{departmentId}.{baseDomain}. This separator is used to
-		/// split the domain into department and base parts.
-		/// Defaults to "." (dot).
-		/// 
-		/// Example: For "station5.dept123.dispatch.resgrid.com" with
-		/// DepartmentAddressDomains containing "dispatch.resgrid.com",
-		/// the department ID extracted is "dept123".
+		/// In hosted mode, recipient addresses follow the pattern
+		/// {code}@{departmentId}{separator}{baseDomain}. The domain is split at the
+		/// first occurrence of this separator into the department id and the base
+		/// domain. Defaults to "." (dot).
+		///
+		/// Example: for "station5@dept123.dispatch.resgrid.com" with
+		/// DepartmentAddressDomains containing "dispatch.resgrid.com", the code is
+		/// "station5" and the department ID is "dept123".
 		/// </summary>
 		public string DepartmentDomainSeparator { get; set; } = ".";
 
@@ -159,6 +166,20 @@ namespace Resgrid.Relay.Engine.Configuration
 		/// names).
 		/// </summary>
 		public bool ResolveDispatchCodes { get; set; } = true;
+
+		/// <summary>
+		/// When true (the default), the local part of a department address (code@dispatch-domain) must be the department's
+		/// dispatch email code, checked through GET Departments/GetDepartmentByDispatchCode, before anything is paged. The code
+		/// is the only thing stopping anyone who can reach the relay from paging a whole department, so only turn this off for
+		/// a self-hosted Resgrid that predates the endpoint.
+		/// </summary>
+		public bool ValidateDepartmentCodes { get; set; } = true;
+
+		/// <summary>
+		/// Optional call type for imported calls. Resgrid only keeps it when it exactly matches one of the department's call
+		/// types (case-sensitive); anything else is dropped.
+		/// </summary>
+		public string DefaultCallType { get; set; } = "";
 
 		// ─── Redis Lookup Cache ───
 

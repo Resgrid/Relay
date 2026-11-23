@@ -7,10 +7,12 @@
              xmlns:vm="clr-namespace:Resgrid.Audio.Relay.ViewModels"
              xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
              mc:Ignorable="d"
+             Foreground="{DynamicResource TextFillColorPrimaryBrush}"
              d:DataContext="{d:DesignInstance Type=vm:LogsViewModel}"
              d:DesignHeight="450" d:DesignWidth="800">
     <Grid Margin="24">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -30,6 +32,9 @@
                           IsChecked="{Binding AutoScroll, Mode=TwoWay}" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <ui:Button Content="Open log folder" Icon="{ui:SymbolIcon FolderOpen24}" Appearance="Secondary" Margin="0,0,8,0"
+                           ToolTip="Log files: a new one each day or at 50 MB; the newest 14 files are kept"
+                           Command="{Binding OpenLogFolderCommand}" />
                 <ui:Button Content="Copy" Appearance="Secondary" Margin="0,0,8,0"
                            Command="{Binding CopyCommand}" />
                 <ui:Button Content="Clear" Appearance="Secondary"
@@ -37,7 +42,12 @@
             </StackPanel>
         </Grid>
 
-        <Border Grid.Row="2" BorderThickness="1" BorderBrush="#33FFFFFF" CornerRadius="4">
+        <Border Grid.Row="2" Margin="0,0,0,8" Padding="10,8" CornerRadius="4" Background="#33C42B1C"
+                Visibility="{Binding HasLogFolderError, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}">
+            <TextBlock Text="{Binding LogFolderError}" TextWrapping="Wrap" />
+        </Border>
+
+        <Border Grid.Row="3" BorderThickness="1" BorderBrush="#33FFFFFF" CornerRadius="4">
             <ListBox x:Name="LogList"
                      ItemsSource="{Binding Entries}"
                      Background="Transparent"
@@ -49,9 +59,9 @@
                     <DataTemplate>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="{Binding Timestamp, StringFormat=HH:mm:ss.fff}"
-                                       FontFamily="Consolas" Opacity="0.6" Width="92" />
+                                       FontFamily="Consolas" Opacity="0.6" Width="110" Margin="0,0,8,0" />
                             <TextBlock Text="{Binding Level}"
-                                       FontFamily="Consolas" Width="80"
+                                       FontFamily="Consolas" Width="110" Margin="0,0,8,0"
                                        Foreground="{Binding Level, Converter={x:Static conv:LogLevelToBrushConverter.Instance}}" />
                             <TextBlock Text="{Binding Message}"
                                        FontFamily="Consolas" TextWrapping="Wrap"

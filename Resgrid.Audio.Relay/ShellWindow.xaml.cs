@@ -1,7 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Windows;
-using System.Windows.Media.Imaging;
+using H.NotifyIcon.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Resgrid.Audio.Relay.Services;
 using Resgrid.Audio.Relay.ViewModels;
@@ -12,118 +12,210 @@ using Wpf.Ui.Controls;
 namespace Resgrid.Audio.Relay
 {
 	/// <summary>
-	/// Main shell: a Fluent window hosting the left navigation rail, the six screens, a footer
-	/// status bar and the system-tray integration. Closing the window hides it to the tray
-	/// while the relay keeps running; a real quit only happens via the tray menu (or explicit
-	/// shutdown), at which point <see cref="App.OnExit"/> stops the controller.
+	/// Main shell: a Fluent window hosting the left navigation rail, the screens, a footer status bar and the system-tray
+	/// integration (tooltip with live state, start/stop menu, fault notifications). Closing the window hides it to the tray
+	/// while the relay keeps running (unless that preference is off); a real quit stops every mode first.
 	/// </summary>
 	public partial class ShellWindow : FluentWindow
 	{
 		private readonly IServiceProvider _services;
+		private readonly ShellViewModel _viewModel;
+		private readonly DesktopSettingsService _desktop;
 		private bool _isExiting;
+		private bool _trayHintShown;
 
 		public ShellWindow(ShellViewModel viewModel, IServiceProvider services)
 		{
 			_services = services;
+			_viewModel = viewModel;
+			_desktop = services.GetRequiredService<DesktopSettingsService>();
 			InitializeComponent();
 			DataContext = viewModel;
 
 			// Resolve navigated pages from the DI container so each view gets its view-model.
 			RootNavigation.SetPageProviderService(new DiPageProvider(services));
+			services.GetRequiredService<NavigationService>().Register(page => RootNavigation.Navigate(page));
+			services.GetRequiredService<RelayController>().ServiceFaulted += OnServiceFaulted;
+			viewModel.PropertyChanged += OnViewModelPropertyChanged;
 
 			Loaded += OnLoaded;
 			Closing += OnClosing;
 		}
 
+		/// <summary>Screen to open first (from <c>--page dashboard|operations|configuration|logs|devices|about</c>).</summary>
+		public string StartPage { get; set; }
+
 		private void OnLoaded(object sender, RoutedEventArgs e)
 		{
 			TrySetTrayIcon();
+			RootNavigation.Navigate(PageFor(StartPage));
+		}
 
-			// Navigate to the first screen.
-			RootNavigation.Navigate(typeof(DashboardView));
+		private static Type PageFor(string name)
+		{
+			switch ((name ?? "").Trim().ToLowerInvariant())
+			{
+				case "operations": return typeof(OperationsView);
+				case "configuration":
+				case "config":
+				case "settings": return typeof(ConfigurationView);
+				case "logs": return typeof(LogsView);
+				case "devices": return typeof(DevicesView);
+				case "about": return typeof(AboutView);
+				default: return typeof(DashboardView);
+			}
 		}
 
 		/// <summary>Called by <see cref="App"/> when launched with --minimized: stay hidden to tray.</summary>
 		public void StartHiddenToTray()
 		{
-			// Ensure the tray icon is realized even though the window is never shown.
 			Visibility = Visibility.Hidden;
 			ShowInTaskbar = false;
 			TrySetTrayIcon();
+
+			// The tray icon lives in this window's visual tree, which is never loaded while the window stays hidden, so it
+			// must be created explicitly or the app would run with no window and no tray icon. Efficiency mode stays off:
+			// Windows throttles "efficient" processes, which would starve the radio bridge's audio.
+			try { TrayIcon.ForceCreate(enablesEfficiencyMode: false); }
+			catch { /* already created */ }
 		}
 
 		private void TrySetTrayIcon()
 		{
 			try
 			{
-				// Use the bundled logo as the tray icon source.
-				// TODO: health-colored tray icon + balloon notifications (runtime-only; can't verify on Linux).
-				var uri = new Uri("pack://application:,,,/Resources/ResgridLogo.png", UriKind.Absolute);
-				TrayIcon.IconSource = new BitmapImage(uri);
+				// Rendered from the PNG with a health dot; IconSource can't take a PNG (H.NotifyIcon needs ICO data).
+				TrayIcon.Icon = TrayIconFactory.Create(_viewModel.OverallState, _viewModel.IsRunning);
 			}
-			catch
+			catch (Exception ex)
 			{
-				// Asset missing or running headless — leave the default icon.
+				Serilog.Log.Warning(ex, "Could not render the tray icon");
 			}
 		}
 
-		private void OnClosing(object sender, CancelEventArgs e)
+		private void OnViewModelPropertyChanged(object sender, PropertyChangedEventArgs e)
 		{
-			if (_isExiting)
+			if (e.PropertyName == nameof(ShellViewModel.OverallState) || e.PropertyName == nameof(ShellViewModel.IsRunning))
+				TrySetTrayIcon();
+		}
+
+		private void OnServiceFaulted(object sender, RelayFaultEventArgs e)
+		{
+			if (!_desktop.Current.NotifyOnFault)
 				return;
 
-			// Intercept close → hide to tray, keep the controller running.
+			ShowTrayNotification($"{RelayModeLauncher.FriendlyName(e.Mode)} faulted", e.Error, NotificationIcon.Error);
+		}
+
+		private void ShowTrayNotification(string title, string message, NotificationIcon icon)
+		{
+			try
+			{
+				// Balloon text is capped by Windows (~255 chars).
+				message ??= "";
+				if (message.Length > 240)
+					message = message.Substring(0, 240) + "…";
+				TrayIcon.ShowNotification(title, message, icon);
+			}
+			catch
+			{
+				// Notifications unavailable (no shell / focus assist) — the Operations screen still shows the fault.
+			}
+		}
+
+		private async void OnClosing(object sender, CancelEventArgs e)
+		{
+			// Quitting, or Windows is ending the session (App stopped the modes and WPF is shutting down): just close.
+			if (_isExiting || _services.GetRequiredService<RelayController>().IsShuttingDown)
+				return;
+
 			e.Cancel = true;
-			Hide();
-			ShowInTaskbar = false;
+
+			if (_desktop.Current.CloseToTray)
+			{
+				// Hide to tray, keep the relay running.
+				Hide();
+				ShowInTaskbar = false;
+				if (!_trayHintShown)
+				{
+					_trayHintShown = true;
+					ShowTrayNotification("Resgrid Relay is still running", "Relay keeps running in the tray. Right-click the tray icon to quit.", NotificationIcon.Info);
+				}
+				return;
+			}
+
+			await QuitAsync(confirm: true);
 		}
 
 		private void RestoreFromTray()
 		{
 			Show();
 			ShowInTaskbar = true;
-			WindowState = WindowState.Normal;
+			if (WindowState == WindowState.Minimized)
+				WindowState = WindowState.Normal;
 			Activate();
 			Topmost = true;
 			Topmost = false;
 		}
 
-		private void TrayIcon_OnTrayLeftMouseUp(object sender, RoutedEventArgs e)
+		private void TrayIcon_OnTrayLeftMouseUp(object sender, RoutedEventArgs e) => RestoreFromTray();
+
+		private void TrayOpen_OnClick(object sender, RoutedEventArgs e) => RestoreFromTray();
+
+		private void TrayStart_OnClick(object sender, RoutedEventArgs e)
 		{
-			RestoreFromTray();
+			if (_viewModel.StartCommand.CanExecute(null))
+				_viewModel.StartCommand.Execute(null);
 		}
 
-		private void TrayOpen_OnClick(object sender, RoutedEventArgs e)
+		private void TrayStop_OnClick(object sender, RoutedEventArgs e)
 		{
-			RestoreFromTray();
+			if (_viewModel.StopCommand.CanExecute(null))
+				_viewModel.StopCommand.Execute(null);
 		}
 
-		private async void TrayQuit_OnClick(object sender, RoutedEventArgs e)
-		{
-			var result = System.Windows.MessageBox.Show(
-				"Quit Resgrid Relay? Any running relay modes will be stopped.",
-				"Resgrid Relay",
-				System.Windows.MessageBoxButton.YesNo,
-				System.Windows.MessageBoxImage.Question);
+		private async void TrayQuit_OnClick(object sender, RoutedEventArgs e) => await QuitAsync(confirm: true);
 
-			if (result != System.Windows.MessageBoxResult.Yes)
+		private async System.Threading.Tasks.Task QuitAsync(bool confirm)
+		{
+			if (_isExiting)
 				return;
 
-			_isExiting = true;
-			TrayIcon?.Dispose();
+			var controller = _services.GetRequiredService<RelayController>();
+			if (confirm && controller.IsRunning)
+			{
+				var result = System.Windows.MessageBox.Show(
+					"Quit Resgrid Relay? Running relay modes will be stopped.",
+					"Resgrid Relay",
+					System.Windows.MessageBoxButton.YesNo,
+					System.Windows.MessageBoxImage.Question);
 
-			// Stop all running relay modes before shutting down — done here (not in App.OnExit,
-			// which is now synchronous) so the async teardown actually completes. Best-effort;
-			// the default await resumes on the UI thread so Shutdown() is called there.
+				if (result != System.Windows.MessageBoxResult.Yes)
+					return;
+			}
+
+			_isExiting = true;
+			controller.ServiceFaulted -= OnServiceFaulted;
+
+			// Refuse new starts from here on (footer, tray, Dashboard, Operations, auto-start): a mode started while the stop
+			// below is awaited would miss it and outlive the quit with its rooms open, radio keyed or recording unflushed.
+			controller.BeginShutdown();
+			TrayStartItem.IsEnabled = false;
+
+			// Stop all running relay modes (and wait for stops already in progress) before shutting down — done here (not in
+			// App.OnExit, which is synchronous) so the async teardown completes. The await resumes on the UI thread so
+			// Shutdown() runs there.
 			try
 			{
-				await _services.GetRequiredService<RelayController>().StopAllAsync();
+				await controller.StopAllAsync();
 			}
-			catch
+			catch (Exception ex)
 			{
 				// Proceed to shutdown regardless.
+				Serilog.Log.Warning(ex, "Stopping relay modes before quitting failed");
 			}
 
+			TrayIcon?.Dispose();
 			Application.Current.Shutdown();
 		}
 

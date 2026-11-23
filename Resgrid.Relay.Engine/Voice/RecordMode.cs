@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,7 +25,9 @@ namespace Resgrid.Relay.Engine.Voice
 	{
 		public static async Task<int> RunAsync(RelayHostOptions options, ILogger logger, CancellationToken cancellationToken, RelayStatus status = null)
 		{
+			VoiceModeRuntime.EnsureUserTokenAuth(options, "record");
 			using var apiClient = new ResgridV4ApiClient(options.Resgrid);
+			apiClient.Warning += message => logger?.Warning("Resgrid API client: {Warning}", message);
 			var voiceApi = new VoiceApi(apiClient);
 
 			var deptId = FirstNonEmpty(options.Recorder.DepartmentId, options.Voice.DepartmentId);
@@ -39,7 +42,18 @@ namespace Resgrid.Relay.Engine.Voice
 				channels = new[] { await provider.GetChannelAsync(options.Recorder.Channel, deptId, cancellationToken).ConfigureAwait(false) };
 
 			var (stores, disposableStores) = BuildStores(options.Recorder, logger);
-			var log = BuildLog(options.Recorder, logger);
+			ITransmissionLog log;
+			try
+			{
+				log = BuildLog(options.Recorder, logger);
+			}
+			catch
+			{
+				// The resilience layer retries this run; don't leak an S3 client per attempt.
+				foreach (var disposable in disposableStores)
+					disposable.Dispose();
+				throw;
+			}
 			var recorders = new List<TransmissionRecorder>();
 
 			// Signals a hard LiveKit disconnect (not a transient SDK reconnect) so the run
@@ -55,8 +69,22 @@ namespace Resgrid.Relay.Engine.Voice
 
 			try
 			{
+				var fallbackDirectory = ResolveFallbackDirectory(options.Recorder);
 				foreach (var channel in channels)
 				{
+					// Each recorded channel takes a voice seat. The first one not getting one fails the run (as the other modes
+					// do); past that, record what we could join rather than drop every channel over the last one.
+					if (!await VoiceModeRuntime.HasVoiceSeatAsync(options, provider, deptId, cancellationToken).ConfigureAwait(false))
+					{
+						if (recorders.Count == 0)
+						{
+							logger.Error("Voice seat limit reached for this department; not connecting.");
+							return 1;
+						}
+						logger.Error("Voice seat limit reached for this department; channel '{Channel}' and any after it are NOT being recorded.", channel.Name);
+						break;
+					}
+
 					var session = await manager.JoinAsync(channel, cancellationToken).ConfigureAwait(false);
 					EventHandler<VoiceConnectionStateChange> handler = (_, change) =>
 					{
@@ -91,7 +119,7 @@ namespace Resgrid.Relay.Engine.Voice
 					session.ConnectionChanged += handler;
 					sessionHandlers.Add((session, handler));
 
-					var recorder = new TransmissionRecorder(session, options.Recorder.Segmentation, stores, log, logger);
+					var recorder = new TransmissionRecorder(session, options.Recorder.Segmentation, stores, log, logger, fallbackDirectory);
 					if (status != null)
 						recorder.TransmissionRecorded += (_, __) => status.IncrementTransmissionsRecorded();
 					recorder.Start();
@@ -106,7 +134,7 @@ namespace Resgrid.Relay.Engine.Voice
 							? ConnectionState.Connected
 							: ConnectionState.Degraded;
 
-				logger.Information($"Recording {channels.Count} channel(s) to {options.Recorder.Store}. Press Ctrl+C to stop.");
+				logger.Information($"Recording {recorders.Count} of {channels.Count} channel(s) to {options.Recorder.Store}. Press Ctrl+C to stop.");
 				var completed = await Task.WhenAny(VoiceModeRuntime.WaitForCancellationAsync(cancellationToken), disconnect.Task).ConfigureAwait(false);
 				// Only fault on a real disconnect, not when a Ctrl+C/SIGTERM shutdown raced the
 				// teardown's own disconnect event — a requested shutdown must complete cleanly.
@@ -144,7 +172,7 @@ namespace Resgrid.Relay.Engine.Voice
 			{
 				var s3 = options.S3;
 				if (string.IsNullOrWhiteSpace(s3.Bucket))
-					throw new InvalidOperationException("Recorder S3 store selected but RESGRID__RELAY__Recorder__S3__Bucket is not set.");
+					throw new RelayConfigurationException("Recorder S3 store selected but RESGRID__RELAY__Recorder__S3__Bucket is not set.");
 
 				var store = S3TransmissionStore.Create(
 					s3.Endpoint, s3.AccessKey, s3.SecretKey, s3.Region, s3.Bucket, s3.Prefix, s3.ForcePathStyle, s3.UseSsl);
@@ -161,14 +189,43 @@ namespace Resgrid.Relay.Engine.Voice
 
 		internal static ITransmissionLog BuildLog(RecorderModeOptions options, ILogger logger)
 		{
-			switch ((options.Log ?? "jsonl").ToLowerInvariant())
-			{
-				case "none": return null;
-				case "sqlite": return new SqliteTransmissionLog(options.LogPath);
-				case "jsonl":
-				default: return new JsonlTransmissionLog(options.LogPath);
-			}
+			var kind = (options.Log ?? "jsonl").ToLowerInvariant();
+			if (kind == "none")
+				return null;
+
+			var path = ResolveLogPath(options);
+			logger?.Information("Recorder metadata log: {Kind} at {Path}", kind == "sqlite" ? "sqlite" : "jsonl", path);
+			return kind == "sqlite"
+				? new SqliteTransmissionLog(path)
+				: new JsonlTransmissionLog(path);
 		}
+
+		/// <summary>Where local recordings go: <see cref="RecorderModeOptions.LocalPath"/>, else ./recordings next to the app.</summary>
+		internal static string ResolveRecordingsRoot(RecorderModeOptions options) =>
+			string.IsNullOrWhiteSpace(options?.LocalPath)
+				? Path.Combine(AppContext.BaseDirectory, "recordings")
+				: options.LocalPath;
+
+		/// <summary>
+		/// The metadata log file: <see cref="RecorderModeOptions.LogPath"/>, else transmissions.jsonl / transmissions.db inside
+		/// the recordings folder. It used to default next to the app binaries even when LocalPath pointed elsewhere, which is
+		/// read-only under the shipped systemd unit (ProtectSystem=strict), so record mode faulted on every start.
+		/// </summary>
+		internal static string ResolveLogPath(RecorderModeOptions options)
+		{
+			if (!string.IsNullOrWhiteSpace(options?.LogPath))
+				return options.LogPath;
+
+			var fileName = string.Equals(options?.Log, "sqlite", StringComparison.OrdinalIgnoreCase) ? "transmissions.db" : "transmissions.jsonl";
+			return Path.Combine(ResolveRecordingsRoot(options), fileName);
+		}
+
+		/// <summary>
+		/// Where a recording is written when its store (S3, or the local folder itself) cannot take it: failed-uploads inside
+		/// the recordings folder, so an outage costs an upload, not the audio.
+		/// </summary>
+		internal static string ResolveFallbackDirectory(RecorderModeOptions options) =>
+			Path.Combine(ResolveRecordingsRoot(options), "failed-uploads");
 
 		private static string FirstNonEmpty(params string[] values) =>
 			values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "";

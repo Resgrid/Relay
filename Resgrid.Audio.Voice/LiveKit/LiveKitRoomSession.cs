@@ -85,12 +85,43 @@ namespace Resgrid.Audio.Voice.LiveKit
 				e.Participant?.Kind.ToString());
 
 			var sid = e.Track.Sid ?? e.Publication?.Sid ?? Guid.NewGuid().ToString();
-			var loop = new TrackReadLoop(e.Track, sid, participant, OnFrame, _logger);
-			if (_readLoops.TryAdd(sid, loop))
+			var loop = new TrackReadLoop(e.Track, sid, participant, OnFrame, OnReadLoopEnded, _logger);
+			while (true)
 			{
-				_logger?.Debug("Subscribed audio track {Sid} from {Participant}", sid, participant);
-				loop.Start();
+				if (_readLoops.TryAdd(sid, loop))
+				{
+					_logger?.Debug("Subscribed audio track {Sid} from {Participant}", sid, participant);
+					loop.Start();
+					return;
+				}
+
+				if (!_readLoops.TryGetValue(sid, out var existing))
+					continue; // removed in the meantime: add ours
+
+				if (!existing.IsCompleted)
+				{
+					// Already being read; this subscription is a duplicate.
+					loop.Discard();
+					return;
+				}
+
+				// The previous loop for this SID ended on its own but was still registered, which used to drop the re-subscribe
+				// and leave that participant silent for the rest of the session. Replace it.
+				if (_readLoops.TryUpdate(sid, loop, existing))
+				{
+					_logger?.Information("Re-subscribed audio track {Sid} from {Participant} (its previous reader had ended)", sid, participant);
+					loop.Start();
+					return;
+				}
 			}
+		}
+
+		private void OnReadLoopEnded(TrackReadLoop loop, bool stopped)
+		{
+			// Only remove the entry if it is still this loop, not a newer one registered under the same SID.
+			if (_readLoops.TryRemove(new System.Collections.Generic.KeyValuePair<string, TrackReadLoop>(loop.Sid, loop)) && !stopped)
+				_logger?.Warning("Audio from track {Sid} ({Participant}) stopped: its read loop ended on its own; it will resume if the track is re-subscribed",
+					loop.Sid, loop.Participant);
 		}
 
 		private void OnTrackUnsubscribed(object sender, TrackSubscribedEventArgs e)
@@ -143,20 +174,50 @@ namespace Resgrid.Audio.Voice.LiveKit
 			private readonly string _sid;
 			private readonly VoiceParticipant _participant;
 			private readonly Action<VoiceAudioFrame> _onFrame;
+			private readonly Action<TrackReadLoop, bool> _onEnded;
 			private readonly ILogger _logger;
 			private readonly CancellationTokenSource _cts = new CancellationTokenSource();
 			private Task _task;
+			private volatile bool _completed;
 
-			public TrackReadLoop(Track track, string sid, VoiceParticipant participant, Action<VoiceAudioFrame> onFrame, ILogger logger)
+			public TrackReadLoop(Track track, string sid, VoiceParticipant participant, Action<VoiceAudioFrame> onFrame,
+				Action<TrackReadLoop, bool> onEnded, ILogger logger)
 			{
 				_track = track;
 				_sid = sid;
 				_participant = participant;
 				_onFrame = onFrame;
+				_onEnded = onEnded;
 				_logger = logger;
 			}
 
-			public void Start() => _task = Task.Run(PumpAsync);
+			public string Sid => _sid;
+			public VoiceParticipant Participant => _participant;
+
+			/// <summary>True once the pump has exited (stopped, or ended on its own).</summary>
+			public bool IsCompleted => _completed;
+
+			public void Start() => _task = Task.Run(PumpWithNotifyAsync);
+
+			/// <summary>Releases a loop that was never started.</summary>
+			public void Discard()
+			{
+				try { _cts.Dispose(); } catch { /* ignore */ }
+			}
+
+			private async Task PumpWithNotifyAsync()
+			{
+				try
+				{
+					await PumpAsync().ConfigureAwait(false);
+				}
+				finally
+				{
+					_completed = true;
+					try { _onEnded?.Invoke(this, _cts.IsCancellationRequested); }
+					catch (Exception ex) { _logger?.Debug(ex, "Read loop end handler failed for track {Sid}", _sid); }
+				}
+			}
 
 			private async Task PumpAsync()
 			{
@@ -183,7 +244,16 @@ namespace Resgrid.Audio.Voice.LiveKit
 							continue;
 
 						var pcm = (short[])data.Clone();
-						_onFrame(new VoiceAudioFrame(_participant, _sid, pcm, DateTime.UtcNow));
+						try
+						{
+							_onFrame(new VoiceAudioFrame(_participant, _sid, pcm, DateTime.UtcNow));
+						}
+						catch (Exception ex)
+						{
+							// A subscriber that throws (a PTT serial write during a USB glitch, say) must cost one frame, not
+							// end this participant's audio for the rest of the session with nothing but a Debug line.
+							_logger?.Warning(ex, "Audio frame handler failed for track {Sid}", _sid);
+						}
 					}
 				}
 				catch (OperationCanceledException)
@@ -192,7 +262,10 @@ namespace Resgrid.Audio.Voice.LiveKit
 				}
 				catch (Exception ex)
 				{
-					_logger?.Debug(ex, "Audio read loop for track {Sid} ended", _sid);
+					if (_cts.IsCancellationRequested)
+						_logger?.Debug(ex, "Audio read loop for track {Sid} ended", _sid);
+					else
+						_logger?.Warning(ex, "Audio read loop for track {Sid} failed", _sid);
 				}
 				finally
 				{

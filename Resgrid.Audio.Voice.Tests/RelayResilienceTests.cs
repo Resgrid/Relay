@@ -28,13 +28,14 @@ namespace Resgrid.Audio.Voice.Tests
 			};
 		}
 
-		private static ResilienceOptions FastResilience(int maxFailures, double healthySeconds = 1000) => new ResilienceOptions
+		private static ResilienceOptions FastResilience(int maxFailures, double healthySeconds = 1000, bool keepRetrying = false) => new ResilienceOptions
 		{
 			Enabled = true,
 			MaxConsecutiveFailures = maxFailures,
 			InitialBackoffSeconds = 0.01,
 			MaxBackoffSeconds = 0.05,
-			HealthyRunSeconds = healthySeconds
+			HealthyRunSeconds = healthySeconds,
+			KeepRetrying = keepRetrying
 		};
 
 		[Test]
@@ -57,9 +58,15 @@ namespace Resgrid.Audio.Voice.Tests
 		}
 
 		[Test]
-		public async Task AlwaysFailing_LiveKitMode_TripsBreaker_AndFaults()
+		public void KeepRetrying_IsOnByDefault()
 		{
-			var svc = new ScriptedRelayService(OptionsWith(FastResilience(maxFailures: 3)));
+			new ResilienceOptions().KeepRetrying.Should().BeTrue();
+		}
+
+		[Test]
+		public async Task AlwaysFailing_LiveKitMode_TripsBreaker_AndFaults_WhenKeepRetryingIsOff()
+		{
+			var svc = new ScriptedRelayService(OptionsWith(FastResilience(maxFailures: 3, keepRetrying: false)));
 
 			// ExecuteAsync throws immediately every time; the breaker opens on the 3rd failure.
 			svc.ExecuteBehavior = (_, __) => throw new InvalidOperationException("boom");
@@ -111,6 +118,122 @@ namespace Resgrid.Audio.Voice.Tests
 
 			svc.State.Should().Be(RelayServiceState.Faulted);
 			svc.Attempts.Should().Be(1, "with resilience disabled ExecuteAsync runs exactly once");
+		}
+
+		[Test]
+		public async Task KeepRetrying_BreakerOpen_StaysRunning_ReportsDisconnected_AndKeepsTrying()
+		{
+			var svc = new ScriptedRelayService(OptionsWith(FastResilience(maxFailures: 2, keepRetrying: true)));
+			svc.ExecuteBehavior = (_, __) => throw new InvalidOperationException("LiveKit unreachable");
+
+			var run = svc.StartAsync(CancellationToken.None);
+
+			// The breaker opens on the 2nd failure; with KeepRetrying it goes on retrying (every MaxBackoffSeconds, floored at
+			// 0.5 s) instead of faulting.
+			var retried = SpinWait.SpinUntil(() => svc.Attempts >= 4, TimeSpan.FromSeconds(10));
+			retried.Should().BeTrue("an open breaker keeps retrying while KeepRetrying is on");
+			svc.State.Should().Be(RelayServiceState.Running);
+			svc.Status.LiveKit.Should().BeOneOf(ConnectionState.Disconnected, ConnectionState.Degraded);
+			SpinWait.SpinUntil(() => svc.Status.LiveKit == ConnectionState.Disconnected, TimeSpan.FromSeconds(2)).Should().BeTrue();
+
+			await svc.StopAsync();
+			await run;
+			svc.State.Should().Be(RelayServiceState.Stopped);
+		}
+
+		[Test]
+		public async Task KeepRetrying_RecoversWhenTheServiceComesBack()
+		{
+			var svc = new ScriptedRelayService(OptionsWith(FastResilience(maxFailures: 2, keepRetrying: true)));
+			svc.ExecuteBehavior = async (s, token) =>
+			{
+				if (s.Attempts < 4)
+					throw new InvalidOperationException("outage");
+				await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false);
+			};
+
+			var run = svc.StartAsync(CancellationToken.None);
+
+			SpinWait.SpinUntil(() => svc.Attempts >= 4, TimeSpan.FromSeconds(10)).Should().BeTrue("the outage ends and the next attempt runs");
+			svc.State.Should().Be(RelayServiceState.Running);
+
+			await svc.StopAsync();
+			await run;
+			svc.State.Should().Be(RelayServiceState.Stopped);
+			svc.Attempts.Should().Be(4);
+		}
+
+		[Test]
+		public async Task ConfigurationError_FaultsImmediately_EvenWithKeepRetrying()
+		{
+			var svc = new ScriptedRelayService(OptionsWith(FastResilience(maxFailures: 3, keepRetrying: true)));
+			svc.ExecuteBehavior = (_, __) => throw new RelayConfigurationException("Tts:ServiceBaseUrl is not set");
+
+			await svc.StartAsync(CancellationToken.None);
+
+			svc.State.Should().Be(RelayServiceState.Faulted);
+			svc.Attempts.Should().Be(1, "retrying cannot fix a configuration error");
+			svc.Fault.Should().BeOfType<RelayConfigurationException>("the console maps it to the configuration-error exit code");
+		}
+
+		[Test]
+		public async Task RuntimeFault_IsNotReportedAsAConfigurationError()
+		{
+			var svc = new ScriptedRelayService(OptionsWith(FastResilience(maxFailures: 1, keepRetrying: false)));
+			svc.ExecuteBehavior = (_, __) => throw new InvalidOperationException("LiveKit unreachable");
+
+			await svc.StartAsync(CancellationToken.None);
+
+			svc.State.Should().Be(RelayServiceState.Faulted);
+			svc.Fault.Should().NotBeOfType<RelayConfigurationException>();
+		}
+
+		[Test]
+		public async Task InvalidApiOptions_FaultAsAConfigurationError_BeforeTheFirstAttempt()
+		{
+			// Valid credentials but no API version: the API client's own validation throws a plain InvalidOperationException,
+			// which the resilience loop used to retry forever (KeepRetrying is on).
+			var options = OptionsWith(FastResilience(maxFailures: 3, keepRetrying: true));
+			options.Resgrid.ApiVersion = "";
+			options.Resgrid.ClientId = "client";
+			options.Resgrid.ClientSecret = "secret";
+			options.Resgrid.RefreshToken = "token";
+			await using var svc = new RecordRelayService(options, null);
+
+			await svc.StartAsync(CancellationToken.None);
+
+			svc.State.Should().Be(RelayServiceState.Faulted);
+			svc.Fault.Should().BeOfType<RelayConfigurationException>().Which.Message.Should().Contain("API version");
+		}
+
+		[Test]
+		public async Task VoiceModeWithAClientCredentialsGrant_FaultsAsAConfigurationError()
+		{
+			var options = OptionsWith(FastResilience(maxFailures: 3, keepRetrying: true));
+			options.Resgrid.GrantType = Resgrid.Providers.ApiClient.V4.ResgridAuthGrantType.ClientCredentials;
+			options.Resgrid.ClientId = "client";
+			options.Resgrid.ClientSecret = "secret";
+			await using var svc = new RecordRelayService(options, null);
+
+			await svc.StartAsync(CancellationToken.None);
+
+			svc.State.Should().Be(RelayServiceState.Faulted);
+			svc.Fault.Should().BeOfType<RelayConfigurationException>().Which.Message.Should().Contain("RefreshToken");
+		}
+
+		[Test]
+		public async Task Restart_ClearsThePreviousFault()
+		{
+			var svc = new ScriptedRelayService(OptionsWith(FastResilience(maxFailures: 1, keepRetrying: false)));
+			svc.ExecuteBehavior = (_, __) => throw new RelayConfigurationException("bad setting");
+			await svc.StartAsync(CancellationToken.None);
+			svc.Fault.Should().NotBeNull();
+
+			svc.ExecuteBehavior = (_, __) => Task.CompletedTask;
+			await svc.StartAsync(CancellationToken.None);
+
+			svc.State.Should().Be(RelayServiceState.Stopped);
+			svc.Fault.Should().BeNull();
 		}
 
 		/// <summary>Minimal LiveKit-mode service whose run is scripted by the test.</summary>

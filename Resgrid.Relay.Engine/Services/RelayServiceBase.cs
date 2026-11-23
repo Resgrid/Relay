@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Resgrid.Relay.Engine.Configuration;
 using Resgrid.Relay.Engine.Telemetry;
+using Resgrid.Providers.ApiClient.V4;
 using Serilog;
 
 namespace Resgrid.Relay.Engine.Services
@@ -43,6 +44,13 @@ namespace Resgrid.Relay.Engine.Services
 
 		public IRelayStatus Status => MutableStatus;
 
+		/// <summary>
+		/// What faulted the last run; null unless <see cref="State"/> is <see cref="RelayServiceState.Faulted"/>. A
+		/// <see cref="RelayConfigurationException"/> means the settings must change before the mode can run (the console exits
+		/// with its configuration-error code for it, so a service manager stops restarting the relay).
+		/// </summary>
+		public Exception Fault { get; private set; }
+
 		/// <summary>The concrete, writable status a subclass mutates while running.</summary>
 		protected RelayStatus MutableStatus { get; } = new RelayStatus();
 
@@ -54,6 +62,34 @@ namespace Resgrid.Relay.Engine.Services
 		/// cancelled; throw to fault the service.
 		/// </summary>
 		protected abstract Task ExecuteAsync(CancellationToken token);
+
+		/// <summary>
+		/// Checks, once before the first attempt, settings the mode can never run without. Throw
+		/// <see cref="RelayConfigurationException"/> so the service faults at once instead of retrying a run that cannot succeed.
+		/// </summary>
+		protected virtual void ValidateConfiguration()
+		{
+		}
+
+		/// <summary>
+		/// Runs the Resgrid API client's own option validation, which throws a plain <see cref="InvalidOperationException"/> that
+		/// the resilience loop would retry as if it were an outage, and reports a failure as a
+		/// <see cref="RelayConfigurationException"/>.
+		/// </summary>
+		protected static void ValidateApiOptions(ResgridApiClientOptions apiOptions)
+		{
+			if (apiOptions == null)
+				throw new RelayConfigurationException("The Resgrid API settings are missing.");
+
+			try
+			{
+				apiOptions.Validate();
+			}
+			catch (InvalidOperationException ex)
+			{
+				throw new RelayConfigurationException($"Invalid Resgrid API settings: {ex.Message}");
+			}
+		}
 
 		/// <summary>
 		/// Faults the service when a mode runner returns a non-zero exit code (a pre-flight
@@ -78,6 +114,7 @@ namespace Resgrid.Relay.Engine.Services
 					throw new InvalidOperationException($"The '{Mode}' relay service is already active (state: {_state}).");
 				previous = _state;
 				_state = RelayServiceState.Starting;
+				Fault = null;
 				// Publish the CTS inside the same lock as the state change so a StopAsync arriving
 				// during the startup window cancels THIS source — no stop can slip through.
 				_cts = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -108,6 +145,7 @@ namespace Resgrid.Relay.Engine.Services
 				// State/StateChanged rather than throwing back to the caller.
 				Logger?.Error(ex, "Relay mode '{Mode}' faulted", Mode);
 				_telemetry.ModeFaulted(Mode, ex);
+				Fault = ex;
 				TransitionTo(RelayServiceState.Faulted, ex.Message);
 			}
 		}
@@ -146,13 +184,17 @@ namespace Resgrid.Relay.Engine.Services
 		/// <summary>
 		/// Runs <see cref="ExecuteAsync"/>, wrapping the LiveKit voice modes in a
 		/// retry-with-back-off loop guarded by a simple circuit breaker. A run that faults
-		/// is restarted after an exponential, jittered delay; the breaker opens (rethrowing
-		/// so <see cref="StartAsync"/> faults the service) once <see cref="ResilienceOptions.MaxConsecutiveFailures"/>
-		/// failures occur without a healthy run resetting the counter. Non-LiveKit modes,
-		/// and any mode with resilience disabled, run <see cref="ExecuteAsync"/> once directly.
+		/// is restarted after an exponential, jittered delay; the breaker opens once
+		/// <see cref="ResilienceOptions.MaxConsecutiveFailures"/> failures occur without a healthy run resetting the counter.
+		/// An open breaker then retries every <see cref="ResilienceOptions.MaxBackoffSeconds"/> while the service stays
+		/// Running (<see cref="ResilienceOptions.KeepRetrying"/>, the default), or rethrows so <see cref="StartAsync"/> faults
+		/// the service. A <see cref="RelayConfigurationException"/>, including one from <see cref="ValidateConfiguration"/>,
+		/// always faults at once. Non-LiveKit modes, and any mode with resilience disabled, run <see cref="ExecuteAsync"/> once directly.
 		/// </summary>
 		private async Task RunWithResilienceAsync(CancellationToken token)
 		{
+			ValidateConfiguration();
+
 			var r = Options.Resilience ?? new ResilienceOptions();
 			if (!IsLiveKitMode || !r.Enabled)
 			{
@@ -162,6 +204,7 @@ namespace Resgrid.Relay.Engine.Services
 
 			_telemetry.ModeStarting(Mode);
 			var consecutiveFailures = 0;
+			var breakerOpen = false;
 			while (true)
 			{
 				token.ThrowIfCancellationRequested();
@@ -175,18 +218,53 @@ namespace Resgrid.Relay.Engine.Services
 				{
 					throw;
 				}
+				catch (RelayConfigurationException)
+				{
+					// Retrying cannot fix a configuration error; fault now with its message.
+					throw;
+				}
 				catch (Exception ex)
 				{
 					var ran = System.Diagnostics.Stopwatch.GetElapsedTime(startTs).TotalSeconds;
 					if (ran >= r.HealthyRunSeconds)
+					{
 						consecutiveFailures = 0;   // it had been healthy ⇒ fresh transient failure
+						if (breakerOpen)
+						{
+							breakerOpen = false;
+							Logger?.Information("Relay mode '{Mode}' recovered (ran {Seconds:n0}s) after its circuit breaker had opened", Mode, ran);
+						}
+					}
 					consecutiveFailures++;
 					MutableStatus.LiveKit = ConnectionState.Degraded;
 					if (consecutiveFailures >= r.MaxConsecutiveFailures)
 					{
-						// Circuit open ⇒ stop retrying and let the outer catch fault the service.
-						Logger?.Warning(ex, "Relay mode '{Mode}' circuit breaker open after {N} consecutive failures; faulting", Mode, consecutiveFailures);
-						throw;
+						if (!r.KeepRetrying)
+						{
+							// Circuit open ⇒ stop retrying and let the outer catch fault the service.
+							Logger?.Warning(ex, "Relay mode '{Mode}' circuit breaker open after {N} consecutive failures; faulting", Mode, consecutiveFailures);
+							throw;
+						}
+
+						// Circuit open, but an outage (ISP, LiveKit, the Resgrid API) outlasting the breaker must not take the mode
+						// down until someone restarts it: stay Running, report LiveKit Disconnected, and keep trying at the slowest
+						// back-off rate. Reported once per outage; each later attempt is a Warning.
+						var openDelay = TimeSpan.FromSeconds(Math.Max(0.5, r.MaxBackoffSeconds));
+						MutableStatus.LiveKit = ConnectionState.Disconnected;
+						if (!breakerOpen)
+						{
+							breakerOpen = true;
+							Logger?.Error(ex, "Relay mode '{Mode}' circuit breaker open after {N} consecutive failures; still retrying every {Delay:n0}s",
+								Mode, consecutiveFailures, openDelay.TotalSeconds);
+							_telemetry.ModeFaulted(Mode, ex);
+						}
+						else
+						{
+							Logger?.Warning(ex, "Relay mode '{Mode}' still failing (failure {N}); retrying in {Delay:n0}s", Mode, consecutiveFailures, openDelay.TotalSeconds);
+							_telemetry.ModeRetrying(Mode, ex, consecutiveFailures, openDelay);
+						}
+						await Task.Delay(openDelay, token).ConfigureAwait(false);
+						continue;
 					}
 					var delay = ComputeBackoff(r, consecutiveFailures);
 					_telemetry.ModeRetrying(Mode, ex, consecutiveFailures, delay);

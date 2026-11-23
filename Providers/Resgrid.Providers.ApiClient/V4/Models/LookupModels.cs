@@ -15,6 +15,23 @@ namespace Resgrid.Providers.ApiClient.V4.Models
 	}
 
 	/// <summary>
+	/// Result of looking up a department by its dispatch email code, the department's InternalDispatchEmail setting
+	/// (GET /api/v4/Departments/GetDepartmentByDispatchCode). A token caller only ever resolves its own department (Resgrid
+	/// answers 401 for another one); the system API key resolves any department.
+	/// </summary>
+	public sealed class DepartmentLookupResult
+	{
+		[JsonPropertyName("DepartmentId")]
+		public string DepartmentId { get; set; }
+
+		[JsonPropertyName("Name")]
+		public string Name { get; set; }
+
+		[JsonPropertyName("Code")]
+		public string Code { get; set; }
+	}
+
+	/// <summary>
 	/// Result of looking up a group by its dispatch email code
 	/// (GET /api/v4/Groups/GetGroupByDispatchCode).
 	/// </summary>
@@ -29,11 +46,16 @@ namespace Resgrid.Providers.ApiClient.V4.Models
 		[JsonPropertyName("Name")]
 		public string Name { get; set; }
 
+		/// <summary>
+		/// Not returned by Resgrid's GroupResultData: the group's department is only known from the lookup's departmentId
+		/// argument (which Resgrid validates in system-key mode).
+		/// </summary>
 		[JsonPropertyName("DepartmentId")]
 		public string DepartmentId { get; set; }
 
-		[JsonPropertyName("Type")]
-		public int Type { get; set; }
+		/// <summary>Station or organizational group type id.</summary>
+		[JsonPropertyName("TypeId")]
+		public string TypeId { get; set; }
 	}
 
 	/// <summary>

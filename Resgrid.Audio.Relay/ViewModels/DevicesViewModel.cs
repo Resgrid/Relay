@@ -8,7 +8,7 @@ namespace Resgrid.Audio.Relay.ViewModels
 {
 	/// <summary>
 	/// View-model for the Devices screen. Enumerates audio input/output devices, serial ports
-	/// and CM108-class HID devices via <see cref="DeviceEnumerationService"/> for the operator
+	/// and CM108-compatible HID interfaces (C-Media, AIOC) via <see cref="DeviceEnumerationService"/> for the operator
 	/// to reference when configuring the radio mode. The device data is Windows-only; on other
 	/// hosts the service returns empty lists, so the screen simply shows the "none found" hint.
 	/// </summary>

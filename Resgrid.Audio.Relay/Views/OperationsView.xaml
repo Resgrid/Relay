@@ -7,8 +7,9 @@
              xmlns:vm="clr-namespace:Resgrid.Audio.Relay.ViewModels"
              xmlns:conv="clr-namespace:Resgrid.Audio.Relay.Converters"
              mc:Ignorable="d"
+             Foreground="{DynamicResource TextFillColorPrimaryBrush}"
              d:DataContext="{d:DesignInstance Type=vm:OperationsViewModel}"
-             d:DesignHeight="450" d:DesignWidth="800">
+             d:DesignHeight="600" d:DesignWidth="900">
     <UserControl.Resources>
         <conv:RelayServiceStateToBrushConverter x:Key="StateBrush" />
     </UserControl.Resources>
@@ -16,68 +17,108 @@
     <Grid Margin="24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Text="{Binding Title}" FontSize="24" FontWeight="SemiBold" />
+        <Grid Grid.Row="0">
+            <StackPanel>
+                <TextBlock Text="{Binding Title}" FontSize="24" FontWeight="SemiBold" />
+                <TextBlock Text="Start, stop and schedule what this Relay runs. Turn on Auto-start for the modes this machine should always run."
+                           Opacity="0.65" Margin="0,4,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                <ui:Button Content="Start default modes" Icon="{ui:SymbolIcon Play24}" Appearance="Primary" Margin="0,0,8,0"
+                           Command="{Binding StartAllCommand}"
+                           ToolTip="Starts the Auto-start modes (or the configured mode when none are chosen)" />
+                <ui:Button Content="Stop all" Icon="{ui:SymbolIcon Stop24}" Command="{Binding StopAllCommand}" />
+            </StackPanel>
+        </Grid>
 
-        <ScrollViewer Grid.Row="1" Margin="0,16,0,0" VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding Modes}">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <WrapPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <ui:Card Width="420" Margin="0,0,12,12" Padding="16" VerticalAlignment="Top">
-                            <StackPanel>
-                                <!-- Header: mode + state -->
-                                <Grid>
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <Ellipse Width="10" Height="10" Margin="0,0,8,0"
-                                                 Fill="{Binding State, Converter={StaticResource StateBrush}}" />
-                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="15" />
-                                    </StackPanel>
-                                    <TextBlock Text="{Binding StateText}" HorizontalAlignment="Right"
-                                               Opacity="0.7" VerticalAlignment="Center" />
-                                </Grid>
+        <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Margin="0,10,0,0" Opacity="0.8" TextWrapping="Wrap" />
 
-                                <TextBlock Text="{Binding Description}" Opacity="0.6" FontSize="12"
-                                           TextWrapping="Wrap" Margin="0,6,0,0" />
+        <ScrollViewer Grid.Row="2" Margin="0,12,0,0" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <ItemsControl ItemsSource="{Binding Modes}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <ui:Card Width="420" Margin="0,0,12,12" Padding="16" VerticalAlignment="Top">
+                                <StackPanel>
+                                    <Grid>
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Ellipse Width="10" Height="10" Margin="0,0,8,0"
+                                                     Fill="{Binding State, Converter={StaticResource StateBrush}}" />
+                                            <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="15" />
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding StateText}" HorizontalAlignment="Right"
+                                                   Opacity="0.7" VerticalAlignment="Center" />
+                                    </Grid>
 
-                                <!-- Pre-flight validation -->
-                                <Border Margin="0,12,0,0" Padding="10,8" CornerRadius="4"
-                                        Background="#22000000">
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding ValidationSummary}"
-                                                   FontSize="12" FontWeight="SemiBold" />
-                                        <ItemsControl ItemsSource="{Binding ValidationErrors}"
-                                                      Margin="0,4,0,0"
-                                                      Visibility="{Binding HasValidationErrors, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <TextBlock Text="{Binding}" FontSize="11"
-                                                               Foreground="{x:Static conv:StatusBrushes.Connecting}"
-                                                               TextWrapping="Wrap" Margin="0,1" />
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </StackPanel>
-                                </Border>
+                                    <TextBlock Text="{Binding Description}" Opacity="0.65" FontSize="12"
+                                               TextWrapping="Wrap" Margin="0,6,0,0" />
 
-                                <!-- Start/Stop -->
-                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                    <ui:Button Content="Start" Appearance="Primary" Margin="0,0,8,0"
-                                               Command="{Binding StartCommand}" />
-                                    <ui:Button Content="Stop" Appearance="Secondary"
-                                               Command="{Binding StopCommand}" />
+                                    <!-- Last fault -->
+                                    <Border Margin="0,10,0,0" Padding="10,8" CornerRadius="4" Background="#33C42B1C"
+                                            Visibility="{Binding HasLastError, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}">
+                                        <StackPanel>
+                                            <TextBlock Text="Faulted" FontSize="12" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding LastError}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Pre-flight -->
+                                    <Border Margin="0,10,0,0" Padding="10,8" CornerRadius="4" Background="#22000000">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding ValidationSummary}" FontSize="12" FontWeight="SemiBold" />
+                                            <ItemsControl ItemsSource="{Binding ValidationErrors}" Margin="0,4,0,0"
+                                                          Visibility="{Binding HasValidationErrors, Converter={x:Static conv:BoolToVisibilityConverter.Instance}}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding StringFormat=• {0}}" FontSize="11"
+                                                                   Foreground="{x:Static conv:StatusBrushes.Connecting}"
+                                                                   TextWrapping="Wrap" Margin="0,1" />
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Grid Margin="0,12,0,0">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:Button Content="Start" Appearance="Primary" Margin="0,0,8,0" Command="{Binding StartCommand}" />
+                                            <ui:Button Content="Stop" Margin="0,0,8,0" Command="{Binding StopCommand}" />
+                                            <ui:Button Content="Restart" Command="{Binding RestartCommand}" />
+                                        </StackPanel>
+                                        <ui:ToggleSwitch HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                         Content="Auto-start" IsChecked="{Binding AutoStart, Mode=TwoWay}"
+                                                         ToolTip="Start this mode automatically whenever Relay launches" />
+                                    </Grid>
                                 </StackPanel>
-                            </StackPanel>
-                        </ui:Card>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                            </ui:Card>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Startup preferences -->
+                <ui:Card Padding="16" Margin="0,0,12,12" MaxWidth="852" HorizontalAlignment="Left">
+                    <StackPanel>
+                        <TextBlock Text="Startup and notifications" FontWeight="SemiBold" FontSize="15" />
+                        <ui:ToggleSwitch Margin="0,12,0,0" IsChecked="{Binding LaunchAtSignIn, Mode=TwoWay}"
+                                         Content="Start Relay minimized to the tray when I sign in to Windows" />
+                        <ui:ToggleSwitch Margin="0,10,0,0" IsChecked="{Binding CloseToTray, Mode=TwoWay}"
+                                         Content="Closing the window keeps Relay running in the tray" />
+                        <ui:ToggleSwitch Margin="0,10,0,0" IsChecked="{Binding NotifyOnFault, Mode=TwoWay}"
+                                         Content="Show a Windows notification when a mode faults" />
+                        <TextBlock Margin="0,10,0,0" Opacity="0.6" FontSize="11" TextWrapping="Wrap"
+                                   Text="For a headless server, or Linux, run the console host instead (Resgrid.Audio.Relay.Console run); it reads the same settings file." />
+                    </StackPanel>
+                </ui:Card>
+            </StackPanel>
         </ScrollViewer>
     </Grid>
 </UserControl>

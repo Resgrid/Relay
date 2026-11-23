@@ -12,10 +12,22 @@ User=resgrid
 Group=resgrid
 
 # Where you published the app. This assumes a framework-dependent publish run via the
-# dotnet host; for a self-contained publish, point ExecStart at the binary directly:
+# dotnet host; for a self-contained publish (the GitHub release linux-x64 / linux-arm64
+# archives), point ExecStart at the binary directly:
 #   ExecStart=/opt/resgrid-relay/Resgrid.Audio.Relay.Console run
 WorkingDirectory=/opt/resgrid-relay
 ExecStart=/usr/bin/dotnet /opt/resgrid-relay/Resgrid.Audio.Relay.Console.dll run
+
+# Writable defaults. ProtectSystem=strict makes /opt read-only, and the app's own defaults ("./data",
+# "recordings") resolve under it: SMTP mode could not create its data directory and the rotated Resgrid
+# refresh token could never be saved. relay.env (read after these) can still override any of them.
+Environment=RESGRID__RELAY__Smtp__DataDirectory=/var/lib/resgrid-relay/smtp
+Environment=RESGRID__RELAY__Resgrid__TokenCachePath=/var/lib/resgrid-relay/resgrid-token.json
+Environment=RESGRID__RELAY__Recorder__LocalPath=/var/lib/resgrid-relay/recordings
+# The release archives are single-file binaries that extract bundled native libraries at startup, by default under
+# $HOME/.net. The service account has no home directory and ProtectHome=true hides /home anyway, so extract into the
+# writable state directory instead. Harmless for a framework-dependent publish (nothing is extracted).
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/var/lib/resgrid-relay/bundle-cache
 
 # All configuration is via RESGRID__RELAY__* env vars; keep secrets here (chmod 600).
 EnvironmentFile=/etc/resgrid-relay/relay.env
@@ -27,6 +39,9 @@ TimeoutStopSec=30
 
 Restart=on-failure
 RestartSec=5
+# Exit code 78 (EX_CONFIG) means the settings are wrong (a missing credential, a value that can't be read): restarting
+# can't fix that, so don't loop — fix relay.env and `systemctl restart resgrid-relay`. The reason is in the journal.
+RestartPreventExitStatus=78
 
 # Writable state (recorder LocalPath, Resgrid token cache, etc.) → /var/lib/resgrid-relay
 StateDirectory=resgrid-relay
@@ -39,6 +54,17 @@ PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
+ProtectKernelModules=true
+LockPersonality=true
+# Linux runs smtp / record / dispatch only: no sound cards or serial ports needed.
+PrivateDevices=true
+# Files the relay writes (token cache, raw .eml, recordings) hold credentials and dispatch content.
+UMask=0077
+# AF_NETLINK: WebRTC (LiveKit) enumerates network interfaces through it.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# No capabilities are needed for the default SMTP port 2525. To listen on 25, add CAP_NET_BIND_SERVICE here
+# and in AmbientCapabilities=.
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target

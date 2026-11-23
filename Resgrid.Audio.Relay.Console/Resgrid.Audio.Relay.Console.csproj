@@ -4,9 +4,15 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>Resgrid.Audio.Relay.Console</RootNamespace>
     <AssemblyName>Resgrid.Audio.Relay.Console</AssemblyName>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AssemblyTitle>Resgrid Relay Console</AssemblyTitle>
+    <Description>Headless host for Resgrid Relay (SMTP dispatch, radio bridge, recorder, tone-out, tone-detect).</Description>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <!-- Same icon as the desktop app, on the Windows build's exe. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
+    <ApplicationIcon>..\Resgrid.Audio.Relay\Resources\ResgridRelay.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -37,11 +43,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Shipped next to the executable (also in single-file releases) so operators can edit them. -->
     <Content Include="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
     <Content Include="settings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
   </ItemGroup>
 </Project>

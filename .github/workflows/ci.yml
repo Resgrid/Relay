@@ -1,0 +1,77 @@
+# Continuous integration for Resgrid Relay: build and test every pull request and every push to develop.
+# Releases (binaries for every platform, the Docker image and the GitHub Release) are built by release.yml.
+#
+#   windows  build the whole solution (desktop app, Windows console, Windows-only radio/audio code) and run every test
+#   linux    build the cross-platform console (net10.0) and run the cross-platform tests, as Docker/systemd hosts use it
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'deploy/**/*.md'
+      - '.claude/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+jobs:
+  windows:
+    name: Build and test (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore "Resgrid Audio.sln"
+
+      - name: Build
+        run: dotnet build "Resgrid Audio.sln" --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test "Resgrid Audio.sln" --configuration Release --no-build --logger "trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-windows
+          path: TestResults
+          if-no-files-found: ignore
+
+  linux:
+    name: Build and test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # EnableWindowsTargeting lets restore resolve the multi-targeted projects' net10.0-windows side on Linux; only the
+      # net10.0 side is built.
+      - name: Build the cross-platform console
+        run: dotnet build Resgrid.Audio.Relay.Console/Resgrid.Audio.Relay.Console.csproj --configuration Release --framework net10.0 -p:EnableWindowsTargeting=true
+
+      - name: Test the cross-platform libraries
+        run: dotnet test Resgrid.Audio.Voice.Tests/Resgrid.Audio.Voice.Tests.csproj --configuration Release -p:EnableWindowsTargeting=true

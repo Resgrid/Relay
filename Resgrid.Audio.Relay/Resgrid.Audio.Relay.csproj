@@ -5,10 +5,12 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>Resgrid.Audio.Relay</RootNamespace>
     <AssemblyName>ResgridRelay</AssemblyName>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AssemblyTitle>Resgrid Relay</AssemblyTitle>
+    <Description>Connects dispatch email, radios, PTT channel recording and tone-out to Resgrid.</Description>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ApplicationIcon>Resources\ResgridRelay.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,12 +25,16 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
     <PackageReference Include="NAudio" Version="1.10.0" />
     <PackageReference Include="Serilog" Version="4.3.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
     <PackageReference Include="WPF-UI" Version="4.0.3" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- Embed the logo so the pack:// URI resolves for the tray icon and About screen. -->
     <Resource Include="Resources\ResgridLogo.png" />
+    <!-- App icon: the exe (ApplicationIcon), the window/taskbar and the tray icon. -->
+    <Resource Include="Resources\ResgridRelay.ico" />
+    <Resource Include="Resources\ResgridRelay.png" />
   </ItemGroup>
 
   <ItemGroup>

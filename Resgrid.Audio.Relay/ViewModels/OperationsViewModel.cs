@@ -1,42 +1,41 @@
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using Resgrid.Audio.Relay.Services;
-using Resgrid.Providers.ApiClient.V4;
 using Resgrid.Relay.Engine;
-using Resgrid.Relay.Engine.Configuration;
 
 namespace Resgrid.Audio.Relay.ViewModels
 {
 	/// <summary>
-	/// Operations: a Start/Stop card per relay mode. A card's live state is derived from whether
-	/// <see cref="RelayController.RunningServices"/> currently holds a service with that mode.
-	/// Start clones the loaded <see cref="RelayHostOptions"/> (so the shared instance is never
-	/// mutated), forces the card's <c>Mode</c>, and hands it to <see cref="RelayController.Start"/>;
-	/// Stop calls <see cref="RelayController.StopAsync"/> on the matching running service. Each
-	/// card also shows a short pre-flight validation summary mirroring the console's
-	/// <c>ValidateOptions</c> (plus a couple of voice-mode checks).
+	/// Operations: a card per relay mode (state, last fault, pre-flight check, Start/Stop/Restart and auto-start toggle) plus
+	/// the app's startup preferences (launch at Windows sign-in, close to tray, fault notifications). All starting and
+	/// stopping goes through <see cref="RelayModeLauncher"/>.
 	/// </summary>
 	public partial class OperationsViewModel : ObservableObject, IDisposable
 	{
-		private static readonly string[] AllModes = { "smtp", "audio", "radio", "record", "dispatch" };
-
 		private readonly RelayController _controller;
-		private readonly ConfigurationService _configuration;
+		private readonly RelayModeLauncher _launcher;
+		private readonly DesktopSettingsService _desktop;
 		private bool _disposed;
+		private bool _loading;
 
-		public OperationsViewModel(RelayController controller, ConfigurationService configuration)
+		public OperationsViewModel(RelayController controller, RelayModeLauncher launcher, DesktopSettingsService desktop)
 		{
 			_controller = controller;
-			_configuration = configuration;
+			_launcher = launcher;
+			_desktop = desktop;
 
-			foreach (var mode in AllModes)
-				Modes.Add(new ModeCardViewModel(mode, this));
+			_loading = true;
+			LaunchAtSignIn = desktop.LaunchAtSignIn;
+			CloseToTray = desktop.Current.CloseToTray;
+			NotifyOnFault = desktop.Current.NotifyOnFault;
+			_loading = false;
+
+			foreach (var mode in RelayModeLauncher.AllModes)
+				Modes.Add(new ModeCardViewModel(mode, launcher, desktop, this));
 
 			_controller.RunningServices.CollectionChanged += OnRunningServicesChanged;
 			_controller.OverallStateChanged += OnOverallStateChanged;
@@ -47,10 +46,61 @@ namespace Resgrid.Audio.Relay.ViewModels
 		[ObservableProperty]
 		private string _title = "Operations";
 
+		[ObservableProperty]
+		private string _statusMessage = "";
+
+		[ObservableProperty]
+		private bool _launchAtSignIn;
+
+		[ObservableProperty]
+		private bool _closeToTray = true;
+
+		[ObservableProperty]
+		private bool _notifyOnFault = true;
+
 		public ObservableCollection<ModeCardViewModel> Modes { get; } = new ObservableCollection<ModeCardViewModel>();
 
-		public RelayController Controller => _controller;
-		public ConfigurationService Configuration => _configuration;
+		partial void OnLaunchAtSignInChanged(bool value)
+		{
+			if (_loading)
+				return;
+			_desktop.LaunchAtSignIn = value;
+			StatusMessage = value
+				? "Relay will start minimized to the tray when you sign in to Windows."
+				: "Relay will no longer start at sign-in.";
+		}
+
+		partial void OnCloseToTrayChanged(bool value)
+		{
+			if (_loading)
+				return;
+			_desktop.Current.CloseToTray = value;
+			_desktop.Save();
+		}
+
+		partial void OnNotifyOnFaultChanged(bool value)
+		{
+			if (_loading)
+				return;
+			_desktop.Current.NotifyOnFault = value;
+			_desktop.Save();
+		}
+
+		[RelayCommand]
+		private async Task StartAll()
+		{
+			var problems = await _launcher.StartDefaultModesAsync().ConfigureAwait(true);
+			StatusMessage = problems.Count == 0 ? "Started." : string.Join(Environment.NewLine, problems);
+		}
+
+		[RelayCommand]
+		private async Task StopAll()
+		{
+			await _controller.StopAllAsync().ConfigureAwait(true);
+			StatusMessage = "All modes stopped.";
+		}
+
+		internal void ReportStatus(string message) => StatusMessage = message ?? "";
 
 		private void OnRunningServicesChanged(object sender, NotifyCollectionChangedEventArgs e) => RefreshCards();
 		private void OnOverallStateChanged(object sender, EventArgs e) => RefreshCards();
@@ -59,116 +109,6 @@ namespace Resgrid.Audio.Relay.ViewModels
 		{
 			foreach (var card in Modes)
 				card.Refresh();
-		}
-
-		private IRelayService FindRunning(string mode)
-		{
-			return _controller.RunningServices.FirstOrDefault(s =>
-				string.Equals(s.Mode, mode, StringComparison.OrdinalIgnoreCase));
-		}
-
-		/// <summary>Current lifecycle state for a mode, or Stopped when not running.</summary>
-		internal RelayServiceState StateFor(string mode)
-		{
-			var service = FindRunning(mode);
-			return service?.State ?? RelayServiceState.Stopped;
-		}
-
-		internal bool IsRunning(string mode) => FindRunning(mode) != null;
-
-		/// <summary>Builds the options for a mode by deep-cloning the current config and forcing Mode.</summary>
-		internal RelayHostOptions BuildOptions(string mode)
-		{
-			var clone = CloneOptions(_configuration.Current);
-			clone.Mode = mode;
-			return clone;
-		}
-
-		internal void StartMode(string mode)
-		{
-			// Duplicate-start check uses the controller's authoritative tracked-services state (not the
-			// UI-marshalled RunningServices collection, which lags Start by a dispatcher hop); pre-flight
-			// failures stay in the card's validation summary rather than starting a doomed service.
-			if (_controller.IsModeRunning(mode) || Validate(mode).Count > 0)
-				return;
-
-			_controller.Start(BuildOptions(mode));
-		}
-
-		internal async Task StopModeAsync(string mode)
-		{
-			var service = FindRunning(mode);
-			if (service != null)
-				await _controller.StopAsync(service).ConfigureAwait(true);
-		}
-
-		/// <summary>
-		/// Pre-flight validation for a mode. Replicates the key checks from the console's
-		/// <c>ValidateOptions</c> (Resgrid creds + grant-type requirements, SMTP dispatch
-		/// domains/Redis) and adds a couple of voice-mode checks (dispatch needs a TTS URL,
-		/// record-to-S3 needs a bucket). Returns the list of problems; empty means ready.
-		/// </summary>
-		internal IReadOnlyList<string> Validate(string mode)
-		{
-			var o = _configuration.Current;
-			var errors = new List<string>();
-
-			if (string.IsNullOrWhiteSpace(o.Resgrid?.BaseUrl))
-				errors.Add("Resgrid API base URL is required.");
-			if (string.IsNullOrWhiteSpace(o.Resgrid?.ClientId))
-				errors.Add("Resgrid API client id is required.");
-			if (string.IsNullOrWhiteSpace(o.Resgrid?.ClientSecret))
-				errors.Add("Resgrid API client secret is required.");
-
-			if (o.Resgrid != null)
-			{
-				switch (o.Resgrid.GrantType)
-				{
-					case ResgridAuthGrantType.RefreshToken:
-						if (string.IsNullOrWhiteSpace(o.Resgrid.RefreshToken) && string.IsNullOrWhiteSpace(o.Resgrid.TokenCachePath))
-							errors.Add("A refresh token (or token cache path) is required for the RefreshToken grant.");
-						break;
-					case ResgridAuthGrantType.SystemApiKey:
-						if (string.IsNullOrWhiteSpace(o.Resgrid.SystemApiKey))
-							errors.Add("A system API key is required for the SystemApiKey grant.");
-						break;
-				}
-			}
-
-			if (mode == "smtp")
-			{
-				var hasDomains = (o.Smtp?.DepartmentAddressDomains?.Length ?? 0) > 0
-					|| (o.Smtp?.GroupAddressDomains?.Length ?? 0) > 0
-					|| (o.Smtp?.GroupMessageAddressDomains?.Length ?? 0) > 0
-					|| (o.Smtp?.ListAddressDomains?.Length ?? 0) > 0;
-				if (!hasDomains)
-					errors.Add("At least one SMTP dispatch domain must be configured.");
-
-				if (o.Smtp?.RedisCache is { Enabled: true } && string.IsNullOrWhiteSpace(o.Smtp.RedisCache.ConnectionString))
-					errors.Add("Redis cache is enabled but the connection string is empty.");
-			}
-
-			if (mode == "dispatch")
-			{
-				if (string.IsNullOrWhiteSpace(o.Tts?.ServiceBaseUrl))
-					errors.Add("Dispatch tone-out needs a TTS service URL (Tts.ServiceBaseUrl).");
-			}
-
-			if (mode == "record")
-			{
-				var store = o.Recorder?.Store ?? "local";
-				if ((store == "s3" || store == "both") && string.IsNullOrWhiteSpace(o.Recorder?.S3?.Bucket))
-					errors.Add("Recorder S3 storage selected but no S3 bucket is configured.");
-			}
-
-			return errors;
-		}
-
-		private static RelayHostOptions CloneOptions(RelayHostOptions source)
-		{
-			// Deep clone via JSON so per-mode starts never mutate the shared Current instance.
-			var json = JsonSerializer.Serialize(source);
-			return JsonSerializer.Deserialize<RelayHostOptions>(json) ?? new RelayHostOptions();
 		}
 
 		public void Dispose()

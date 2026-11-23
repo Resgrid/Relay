@@ -1,28 +1,37 @@
+using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Resgrid.Audio.Relay.Services;
 using Resgrid.Relay.Engine;
 
 namespace Resgrid.Audio.Relay.ViewModels
 {
 	/// <summary>
-	/// A single mode card on the Operations screen. Holds no state of its own beyond what it
-	/// re-reads from the owning <see cref="OperationsViewModel"/> on <see cref="Refresh"/>:
-	/// the derived lifecycle state, the running flag (drives the Start/Stop button), and a
-	/// pre-flight validation summary.
+	/// A single mode card on the Operations screen: live state, the last fault message, the pre-flight check, the
+	/// auto-start toggle and Start/Stop/Restart. State is re-read from the controller on <see cref="Refresh"/>.
 	/// </summary>
 	public partial class ModeCardViewModel : ObservableObject
 	{
+		private readonly RelayModeLauncher _launcher;
+		private readonly DesktopSettingsService _desktop;
 		private readonly OperationsViewModel _owner;
+		private bool _loading;
 
-		public ModeCardViewModel(string mode, OperationsViewModel owner)
+		public ModeCardViewModel(string mode, RelayModeLauncher launcher, DesktopSettingsService desktop, OperationsViewModel owner)
 		{
 			Mode = mode;
+			_launcher = launcher;
+			_desktop = desktop;
 			_owner = owner;
-			DisplayName = FriendlyName(mode);
+			DisplayName = RelayModeLauncher.FriendlyName(mode);
 			Description = DescriptionFor(mode);
+
+			_loading = true;
+			AutoStart = desktop.IsAutoStart(mode);
+			_loading = false;
+
 			Refresh();
 		}
 
@@ -36,11 +45,24 @@ namespace Resgrid.Audio.Relay.ViewModels
 		[ObservableProperty]
 		private RelayServiceState _state = RelayServiceState.Stopped;
 
+		/// <summary>True while a non-faulted instance is running (drives Start vs Stop).</summary>
 		[ObservableProperty]
 		private bool _isRunning;
 
 		[ObservableProperty]
 		private string _stateText = "Stopped";
+
+		[ObservableProperty]
+		private string _lastError;
+
+		[ObservableProperty]
+		private bool _hasLastError;
+
+		[ObservableProperty]
+		private bool _autoStart;
+
+		[ObservableProperty]
+		private bool _isBusy;
 
 		/// <summary>Pre-flight problems for this mode (empty when ready to start).</summary>
 		public ObservableCollectionLite<string> ValidationErrors { get; } = new ObservableCollectionLite<string>();
@@ -51,51 +73,71 @@ namespace Resgrid.Audio.Relay.ViewModels
 		[ObservableProperty]
 		private string _validationSummary = "Ready";
 
-		/// <summary>Re-reads derived state from the owner. Called when the running set changes.</summary>
+		partial void OnAutoStartChanged(bool value)
+		{
+			if (!_loading)
+				_desktop.SetAutoStart(Mode, value);
+		}
+
+		/// <summary>Re-reads derived state. Called when the running set or a service state changes.</summary>
 		public void Refresh()
 		{
-			IsRunning = _owner.IsRunning(Mode);
-			State = _owner.StateFor(Mode);
-			StateText = IsRunning ? State.ToString() : "Stopped";
+			var service = _launcher.Controller.Find(Mode);
+			State = service?.State ?? RelayServiceState.Stopped;
+			IsRunning = service != null && State != RelayServiceState.Faulted && State != RelayServiceState.Stopped;
 
-			var errors = _owner.Validate(Mode);
+			var startedAt = _launcher.Controller.StartedAtUtc(Mode);
+			StateText = service == null
+				? "Stopped"
+				: IsRunning && startedAt.HasValue
+					? $"{State} since {startedAt.Value.ToLocalTime():HH:mm:ss}"
+					: State.ToString();
+
+			LastError = State == RelayServiceState.Faulted ? _launcher.Controller.GetLastError(Mode) : null;
+			HasLastError = !string.IsNullOrWhiteSpace(LastError);
+
+			IReadOnlyList<string> errors = _launcher.Validate(Mode);
 			ValidationErrors.Reset(errors);
 			HasValidationErrors = errors.Count > 0;
 			ValidationSummary = errors.Count == 0
 				? "Pre-flight OK"
-				: $"{errors.Count} issue(s) — start disabled";
+				: $"{errors.Count} issue(s) to fix before starting";
 
 			StartCommand.NotifyCanExecuteChanged();
 			StopCommand.NotifyCanExecuteChanged();
+			RestartCommand.NotifyCanExecuteChanged();
 		}
 
-		// Mirror OperationsViewModel.StartMode: disallow Start when already running or when
-		// pre-flight validation has failed. Refresh() notifies StartCommand when these change.
-		private bool CanStart() => !IsRunning && !HasValidationErrors;
-		private bool CanStop() => IsRunning;
+		private bool CanStart() => !IsBusy && !IsRunning && !HasValidationErrors;
+		private bool CanStop() => !IsBusy && (IsRunning || State == RelayServiceState.Faulted);
+		private bool CanRestart() => !IsBusy && (IsRunning || State == RelayServiceState.Faulted) && !HasValidationErrors;
 
 		[RelayCommand(CanExecute = nameof(CanStart))]
-		private void Start()
-		{
-			_owner.StartMode(Mode);
-		}
+		private Task Start() => RunAsync(() => _launcher.StartAsync(Mode), "started");
 
 		[RelayCommand(CanExecute = nameof(CanStop))]
-		private async Task Stop()
-		{
-			await _owner.StopModeAsync(Mode).ConfigureAwait(true);
-		}
+		private Task Stop() => RunAsync(async () => { await _launcher.StopAsync(Mode).ConfigureAwait(true); return null; }, "stopped");
 
-		private static string FriendlyName(string mode)
+		[RelayCommand(CanExecute = nameof(CanRestart))]
+		private Task Restart() => RunAsync(() => _launcher.RestartAsync(Mode), "restarted");
+
+		private async Task RunAsync(Func<Task<string>> action, string verb)
 		{
-			switch (mode)
+			IsBusy = true;
+			Refresh();
+			try
 			{
-				case "smtp": return "SMTP Dispatch";
-				case "audio": return "Audio Tone-Detect";
-				case "radio": return "Radio Bridge";
-				case "record": return "Recorder";
-				case "dispatch": return "Dispatch Tone-Out";
-				default: return mode;
+				var error = await action().ConfigureAwait(true);
+				_owner.ReportStatus(error ?? $"{DisplayName} {verb}.");
+			}
+			catch (Exception ex)
+			{
+				_owner.ReportStatus($"{DisplayName}: {ex.Message}");
+			}
+			finally
+			{
+				IsBusy = false;
+				Refresh();
 			}
 		}
 
@@ -103,21 +145,17 @@ namespace Resgrid.Audio.Relay.ViewModels
 		{
 			switch (mode)
 			{
-				case "smtp": return "SMTP dispatch relay (cross-platform).";
-				case "audio": return "Windows tone-detect dispatch importer.";
-				case "radio": return "Bidirectional radio ↔ Resgrid PTT bridge (Windows).";
-				case "record": return "Records PTT channel transmissions to disk/S3 + metadata.";
-				case "dispatch": return "Tones out new calls (tones + TTS) to a PTT channel.";
+				case "smtp": return "Receives dispatch emails from CAD/paging systems and creates Resgrid calls and messages.";
+				case "audio": return "Listens to a sound card for paging tones and creates Resgrid calls (Windows).";
+				case "radio": return "Two-way bridge between a cabled radio (analog or LTE/PoC donor radio) and a Resgrid PTT channel (Windows).";
+				case "record": return "Records every PTT channel transmission to disk and/or S3 with a metadata log.";
+				case "dispatch": return "Tones out new Resgrid calls (alert tones + spoken announcement) on a PTT channel.";
 				default: return "";
 			}
 		}
 	}
 
-	/// <summary>
-	/// A minimal observable list helper used for the per-card validation list. It mirrors the
-	/// small subset of <see cref="System.Collections.ObjectModel.ObservableCollection{T}"/> the
-	/// view needs while supporting an atomic <see cref="Reset"/> from a fresh sequence.
-	/// </summary>
+	/// <summary>An ObservableCollection with an atomic <see cref="Reset"/> from a fresh sequence.</summary>
 	public sealed class ObservableCollectionLite<T> : System.Collections.ObjectModel.ObservableCollection<T>
 	{
 		public void Reset(IEnumerable<T> items)

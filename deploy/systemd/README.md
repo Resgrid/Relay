@@ -16,9 +16,11 @@ LiveKit / backend modes. The **desktop GUI** (`Resgrid.Audio.Relay`, WPF) is
 
 The Windows-only modes resolve to a "not supported on this platform" service on Linux
 (they fault with a clear message rather than crashing). The LiveKit native library
-(`liblivekit_ffi.so`, linux-x64 / linux-arm64) ships inside the `Livekit.Rtc.Dotnet`
-NuGet package and is included automatically in the published output; its only OS
-prerequisite is `libstdc++6`, present on any standard distribution.
+(`liblivekit_ffi.so`) is not in the `Livekit.Rtc.Dotnet` NuGet package: the GitHub release
+archives (`ResgridRelay-Console-<version>-linux-x64.tar.gz` / `-linux-arm64.tar.gz`)
+include it next to the binary, and for your own publish `build/fetch-livekit-ffi.ps1`
+downloads the matching build. Its only OS prerequisite is `libstdc++6`, present on any
+standard distribution.
 
 > One service instance runs **one** mode (set by `RESGRID__RELAY__Mode`). To run several
 > modes (e.g. `record` **and** `dispatch`), install one unit per mode — see *Multiple modes*.
@@ -47,6 +49,18 @@ dotnet publish Resgrid.Audio.Relay.Console/Resgrid.Audio.Relay.Console.csproj \
 `net10.0` (not `net10.0-windows`) is the cross-platform target; it excludes the Windows
 audio stack (NAudio / DtmfDetection) and the WPF GUI.
 
+Then add the LiveKit native library (`liblivekit_ffi.so`) next to the published files —
+`dotnet publish` does not include it, and without it the `record` and `dispatch` modes cannot
+start. The helper script needs PowerShell 7 (`pwsh`) on the build machine; pick the RID of the
+host the relay will run on (`linux-x64` or `linux-arm64`), for either publish style:
+
+```bash
+pwsh -File build/fetch-livekit-ffi.ps1 -Rid linux-x64 -Destination ./publish   # or -Rid linux-arm64
+```
+
+The GitHub release archives already include the library, so skip this step if you install
+from one of those.
+
 ## 3. Install
 
 ```bash
@@ -71,6 +85,30 @@ If you published **self-contained**, change `ExecStart` in the unit to run the b
 directly: `ExecStart=/opt/resgrid-relay/Resgrid.Audio.Relay.Console run`. Otherwise confirm
 the `dotnet` path (`which dotnet`); the unit assumes `/usr/bin/dotnet`.
 
+### From a GitHub release archive (no repository checkout)
+
+The `ResgridRelay-Console-<version>-linux-x64.tar.gz` / `-linux-arm64.tar.gz` archives hold the
+self-contained binary (LiveKit library included) at the top level and these files under
+`systemd/`, not `deploy/systemd/`. Extract it, then install from the extracted folder:
+
+```bash
+mkdir relay && tar -xzf ResgridRelay-Console-<version>-linux-x64.tar.gz -C relay && cd relay
+
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin resgrid
+sudo mkdir -p /opt/resgrid-relay /etc/resgrid-relay
+sudo cp -r ./* /opt/resgrid-relay/ && sudo rm -rf /opt/resgrid-relay/systemd
+sudo chown -R resgrid:resgrid /opt/resgrid-relay
+
+sudo cp systemd/relay.env.example /etc/resgrid-relay/relay.env
+sudo chmod 600 /etc/resgrid-relay/relay.env
+sudo "$EDITOR" /etc/resgrid-relay/relay.env
+
+sudo cp systemd/resgrid-relay.service /etc/systemd/system/
+```
+
+The archive's binary is self-contained, so set `ExecStart` as above
+(`/opt/resgrid-relay/Resgrid.Audio.Relay.Console run`), then continue with step 4.
+
 ## 4. Enable + run
 
 ```bash
@@ -85,11 +123,18 @@ journalctl -u resgrid-relay -f
   cancelling in-flight work so recordings flush and LiveKit disconnects cleanly;
   `TimeoutStopSec=30` bounds the drain before systemd escalates to `SIGKILL`.
 - **Configuration** — everything is `RESGRID__RELAY__*` environment variables. Run
-  `dotnet Resgrid.Audio.Relay.Console.dll help` for the complete, authoritative list.
+  `/opt/resgrid-relay/Resgrid.Audio.Relay.Console help` (self-contained / release archive) or
+  `dotnet /opt/resgrid-relay/Resgrid.Audio.Relay.Console.dll help` (framework-dependent) for the
+  common ones; the repository README's Configuration section shows the full settings tree
+  (`:` becomes `__`).
 - **Writable state** — the unit grants `/var/lib/resgrid-relay` (via `StateDirectory`).
-  Point `Recorder__LocalPath` and/or `Resgrid__TokenCachePath` there. If you write
-  recordings elsewhere, add that path to `ReadWritePaths=` in the unit (it runs under
-  `ProtectSystem=strict`).
+  Point `Recorder__LocalPath` and/or `Resgrid__TokenCachePath` there. The recorder's metadata
+  log (`Recorder__LogPath`) defaults to a file inside `Recorder__LocalPath`, so it is writable
+  too. If you write recordings or the log elsewhere, add that path to `ReadWritePaths=` in the
+  unit (it runs under `ProtectSystem=strict`).
+- **Settings file** — besides the environment, the console reads `appsettings.json` and a
+  per-user `relay.user.json`; under systemd only the environment and `appsettings.json` normally
+  apply.
 - **Multiple modes** — copy the unit per mode with its own env file, e.g.
   `resgrid-relay-record.service` (`EnvironmentFile=/etc/resgrid-relay/record.env`) and
   `resgrid-relay-dispatch.service` (`EnvironmentFile=/etc/resgrid-relay/dispatch.env`),
